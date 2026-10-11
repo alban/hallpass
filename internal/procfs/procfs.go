@@ -208,6 +208,25 @@ func statusField(pid int, name string) int {
 	return -1
 }
 
+// SameView reports whether thread tid sees the filesystem as this process
+// does: same mount namespace and same root directory. Resolve's paths are
+// only meaningful then.
+func SameView(tid uint32) (bool, error) {
+	for _, f := range []string{"ns/mnt", "root"} {
+		var a, b unix.Stat_t
+		if err := unix.Stat("/proc/self/"+f, &a); err != nil {
+			return false, err
+		}
+		if err := unix.Stat(fmt.Sprintf("/proc/%d/%s", tid, f), &b); err != nil {
+			return false, err
+		}
+		if a.Dev != b.Dev || a.Ino != b.Ino {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 // PidFile splits a resolved path of the form /proc/<pid>/<file> or
 // /proc/<pid>/task/<tid>/<file> into the target thread id and the file name.
 // Magic links below /proc/<pid> (cwd, root, fd/<n>, exe) are already resolved

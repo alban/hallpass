@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/alban/hallpass/internal/lsm"
 	"github.com/alban/hallpass/internal/policy"
 	"github.com/alban/hallpass/internal/procfs"
 	"github.com/alban/hallpass/internal/seccomp"
@@ -35,7 +36,18 @@ type Config struct {
 	// TTY, when set, is the pseudo-terminal the command runs on (for
 	// terminal prompts); otherwise it inherits hallpass's stdio.
 	TTY *tty.Term
+	// LSM, when set, is strict mode: the kernel enforces the policy on the
+	// sandbox, and the supervisor keeps its rules in sync with the answers.
+	LSM *lsm.LSM
 }
+
+// onceTTL is how long the kernel allows a path after "allow once": long
+// enough for the syscall being continued to reach the LSM hook.
+const onceTTL = 2 * time.Second
+
+// syncPeriod is how often strict mode rules are re-translated, to follow
+// mounts appearing or disappearing.
+const syncPeriod = 5 * time.Second
 
 // Run starts the command under the seccomp filter, mediates its syscalls until
 // it exits, and returns its exit status (128+signal when killed).
@@ -66,6 +78,14 @@ func Run(cfg Config) (int, error) {
 	)
 	if cfg.AllowUserns {
 		cmd.Env = append(cmd.Env, childEnvUserns+"=1")
+	}
+	if cfg.LSM != nil {
+		cmd.Env = append(cmd.Env, childEnvWait+"=1")
+		if err := cfg.LSM.Protect(os.Getpid()); err != nil {
+			childSock.Close()
+			unix.Close(parentSock)
+			return 0, fmt.Errorf("protect the supervisor: %w", err)
+		}
 	}
 
 	// Ctrl-C and Ctrl-\ are for the sandboxed program, which shares our
@@ -101,8 +121,8 @@ func Run(cfg Config) (int, error) {
 	}
 
 	listenerFD, err := recvFD(parentSock)
-	unix.Close(parentSock)
 	if err != nil {
+		unix.Close(parentSock)
 		// The child printed why it failed before exiting.
 		_ = cmd.Wait()
 		return exitCode(cmd.ProcessState), fmt.Errorf("sandbox setup failed")
@@ -119,6 +139,27 @@ func Run(cfg Config) (int, error) {
 	if cfg.Log != nil {
 		s.logEnc = json.NewEncoder(cfg.Log)
 	}
+
+	if cfg.LSM != nil {
+		err := cfg.LSM.AddMember(cmd.Process.Pid)
+		if err == nil {
+			err = s.syncKernel()
+		}
+		if err == nil {
+			_, err = unix.Write(parentSock, []byte{1})
+		}
+		if err != nil {
+			unix.Close(parentSock)
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			return 1, fmt.Errorf("strict mode: %w", err)
+		}
+		done := make(chan struct{})
+		defer close(done)
+		go s.kernelEvents()
+		go s.periodicSync(done)
+	}
+	unix.Close(parentSock)
 
 	workers := max(4, runtime.NumCPU())
 	for i := 0; i < workers; i++ {
@@ -162,6 +203,88 @@ type session struct {
 	inflightMu sync.Mutex
 	inflight   map[string]*pending
 	waiting    int
+
+	// Strict mode: "allow once" answers, as short-lived exact rules.
+	onceMu   sync.Mutex
+	once     []lsm.Rule
+	onceProc []lsm.ProcRule
+}
+
+// syncKernel pushes the policy's current rules and the pending "allow once"
+// answers to the kernel.
+func (s *session) syncKernel() error {
+	now := time.Now()
+	s.onceMu.Lock()
+	once := s.once[:0]
+	for _, r := range s.once {
+		if r.Expires.After(now) {
+			once = append(once, r)
+		}
+	}
+	s.once = once
+	onceProc := s.onceProc[:0]
+	for _, r := range s.onceProc {
+		if r.Expires.After(now) {
+			onceProc = append(onceProc, r)
+		}
+	}
+	s.onceProc = onceProc
+	rules := append([]lsm.Rule(nil), once...)
+	procs := append([]lsm.ProcRule(nil), onceProc...)
+	s.onceMu.Unlock()
+
+	for _, r := range s.cfg.Policy.Rules() {
+		rules = append(rules, lsm.Rule{Path: r.Path, Tree: r.Tree, Deny: r.Deny, Expires: r.Expires})
+	}
+	for _, r := range s.cfg.Policy.ProcRules() {
+		procs = append(procs, lsm.ProcRule{Name: r.Name, Comm: r.Comm, Deny: r.Deny, Expires: r.Expires})
+	}
+	return s.cfg.LSM.Sync(rules, procs)
+}
+
+func (s *session) syncOrWarn() {
+	if err := s.syncKernel(); err != nil {
+		fmt.Fprintf(os.Stderr, "hallpass: strict mode: updating the kernel's rules: %v\n", err)
+	}
+}
+
+func (s *session) periodicSync(done <-chan struct{}) {
+	t := time.NewTicker(syncPeriod)
+	defer t.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-t.C:
+			s.syncOrWarn()
+		}
+	}
+}
+
+// kernelEvents logs the decisions of the BPF programs: denials (also of
+// operations the seccomp filter does not see, e.g. through io_uring).
+func (s *session) kernelEvents() {
+	s.cfg.LSM.Events(func(e lsm.Event) {
+		d := "deny"
+		if e.Allowed {
+			d = "allow"
+		}
+		s.log(logEntry{PID: e.PID, Exe: e.Comm, Syscall: e.Op, Path: e.Path, Decision: d, Reason: "lsm"})
+	})
+}
+
+// allowOnce lets the kernel allow exactly path for a moment, for the
+// syscall about to be continued.
+func (s *session) allowOnce(path string) {
+	s.onceMu.Lock()
+	s.once = append(s.once, lsm.Rule{Path: path, Expires: time.Now().Add(onceTTL)})
+	s.onceMu.Unlock()
+}
+
+func (s *session) allowProcOnce(k policy.ProcKey) {
+	s.onceMu.Lock()
+	s.onceProc = append(s.onceProc, lsm.ProcRule{Name: k.Name, Comm: k.Comm, Expires: time.Now().Add(onceTTL)})
+	s.onceMu.Unlock()
 }
 
 type pending struct {
@@ -206,6 +329,15 @@ func (s *session) handle(n seccomp.Notif) {
 		// Not ours (the filter and the table disagree): fail closed.
 		s.listener.Deny(n.ID, int32(unix.EPERM))
 		return
+	}
+	if s.cfg.LSM != nil {
+		// Paths of a process in another mount namespace or chroot cannot
+		// be resolved here: let the kernel's rules decide, without asking.
+		if same, err := procfs.SameView(n.PID); err == nil && !same {
+			s.log(logEntry{PID: n.PID, Syscall: rule.Name, Decision: "continue", Reason: "lsm: other mount namespace or root"})
+			_ = s.listener.Continue(n.ID)
+			return
+		}
 	}
 
 	type target struct {
@@ -324,6 +456,7 @@ type subject struct {
 	eval  func() policy.Decision
 	grant func(ttl time.Duration) // covers req.Scope; 0: rest of the session
 	never func()
+	once  func() // strict mode: let the kernel allow it this time
 }
 
 func (s *session) fileSubject(path string) subject {
@@ -335,6 +468,7 @@ func (s *session) fileSubject(path string) subject {
 		eval:  func() policy.Decision { return p.Eval(path) },
 		grant: func(ttl time.Duration) { p.AllowFolderFor(folder, ttl) },
 		never: func() { p.DenyPath(path) },
+		once:  func() { s.allowOnce(path) },
 	}
 }
 
@@ -347,6 +481,7 @@ func (s *session) procSubject(path string, k policy.ProcKey) subject {
 		eval:  func() policy.Decision { return p.EvalProc(k) },
 		grant: func(ttl time.Duration) { p.AllowProcFor(k, ttl) },
 		never: func() { p.DenyProc(k) },
+		once:  func() { s.allowProcOnce(k) },
 	}
 }
 
@@ -385,6 +520,9 @@ func (s *session) ask(sub subject) bool {
 		switch a {
 		case ui.AnswerAllowOnce:
 			p.allowed = true
+			if s.cfg.LSM != nil {
+				sub.once()
+			}
 		case ui.AnswerAllowTemp:
 			sub.grant(ui.TempGrant)
 			p.allowed = true
@@ -393,6 +531,10 @@ func (s *session) ask(sub subject) bool {
 			p.allowed = true
 		case ui.AnswerNever:
 			sub.never()
+		}
+		if s.cfg.LSM != nil {
+			// Before the waiting syscalls are continued.
+			s.syncOrWarn()
 		}
 	}
 	s.promptMu.Unlock()

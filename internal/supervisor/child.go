@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -24,10 +25,21 @@ const (
 	childEnvSentinel = "_HALLPASS_CHILD"
 	childEnvFD       = "_HALLPASS_SOCK_FD"
 	childEnvUserns   = "_HALLPASS_ALLOW_USERNS"
+	childEnvWait     = "_HALLPASS_WAIT"
 )
 
 // IsChild reports whether this process is the re-executed child stub.
 func IsChild() bool { return os.Getenv(childEnvSentinel) != "" }
+
+func init() {
+	// Strict mode marks the child by pid, which is its thread group leader:
+	// exec from the main thread so the task that runs the command is the
+	// one marked (an exec from another thread would take over the leader's
+	// pid with an unmarked task). Package init runs on the main thread.
+	if IsChild() {
+		runtime.LockOSThread()
+	}
+}
 
 // ChildMain is the entry point for the re-executed child. It must run before
 // the Go runtime starts extra work on behalf of the program. It never returns
@@ -63,6 +75,13 @@ func ChildMain() {
 		fatal("child: send listener fd: %v", err)
 	}
 	_ = unix.Close(listenerFD)
+	if os.Getenv(childEnvWait) == "1" {
+		// Strict mode: exec only once the supervisor has made us a member.
+		var b [1]byte
+		if n, err := unix.Read(fd, b[:]); n != 1 || err != nil {
+			fatal("child: the supervisor did not start the sandbox")
+		}
+	}
 	_ = unix.Close(fd)
 
 	// Scrub our bookkeeping from the environment before exec.

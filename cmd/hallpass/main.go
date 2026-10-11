@@ -15,10 +15,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/alban/hallpass/internal/lsm"
 	"github.com/alban/hallpass/internal/policy"
+	"github.com/alban/hallpass/internal/privsep"
 	"github.com/alban/hallpass/internal/supervisor"
 	"github.com/alban/hallpass/internal/tty"
 	"github.com/alban/hallpass/internal/ui"
+	"golang.org/x/sys/unix"
 )
 
 const usageText = `Usage:
@@ -37,6 +40,9 @@ func main() {
 	if supervisor.IsChild() {
 		supervisor.ChildMain()
 		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == privsep.HelperArg {
+		os.Exit(privsep.HelperMain(os.Args[2:]))
 	}
 	if len(os.Args) > 1 && os.Args[1] == "answer" {
 		os.Exit(answerMain(os.Args[2:]))
@@ -57,6 +63,8 @@ func runMain(argv []string) int {
 		timeout     time.Duration
 		allowUserns bool
 		logPath     string
+		mode        string
+		escalate    string
 	)
 	fs.StringVar(&workdir, "C", "", "project `dir`, writable without asking (default: current directory)")
 	fs.StringVar(&workdir, "workdir", "", "same as -C")
@@ -64,13 +72,40 @@ func runMain(argv []string) int {
 	fs.Var(&deny, "deny", "`path` always denied (repeatable, wins over --allow)")
 	fs.StringVar(&ask, "ask", "auto", "how to ask: auto | term | desktop | answer | deny")
 	fs.DurationVar(&timeout, "timeout", 30*time.Second, "deny unanswered prompts after `duration` (0: wait forever)")
-	fs.BoolVar(&allowUserns, "allow-userns", false, "let the sandbox create user/mount namespaces (weakens lite mode)")
+	fs.BoolVar(&allowUserns, "allow-userns", false, "let the sandbox create user/mount namespaces (weakens lite mode; always on in strict mode)")
 	fs.StringVar(&logPath, "log", "", "append one JSON line per mediated syscall to `file`")
+	fs.StringVar(&mode, "mode", "lite", "lite (seccomp only, no root needed) | strict (the kernel enforces the answers with BPF-LSM; root needed to load it)")
+	fs.StringVar(&escalate, "escalate", "auto", "strict mode, when not root: how to run the loader as root: "+strings.Join(privsep.Tools, " | "))
 	if err := fs.Parse(argv); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
 		return 2
+	}
+
+	var strict *lsm.LSM
+	switch mode {
+	case "lite":
+	case "strict":
+		// The supervisor runs as the sandbox's user: forbid it ptrace,
+		// pidfd_getfd, /proc/<pid>/mem and fd access to us, before any
+		// fd worth stealing exists. (Root keeps them, for the loader.)
+		if err := unix.Prctl(unix.PR_SET_DUMPABLE, 0, 0, 0, 0); err != nil {
+			return fail(fmt.Errorf("prctl(PR_SET_DUMPABLE): %w", err))
+		}
+		if err := lsm.Active(); err != nil {
+			return fail(err)
+		}
+		var err error
+		if strict, err = privsep.Load(escalate, false); err != nil {
+			return fail(err)
+		}
+		defer strict.Close()
+		// The kernel enforces the rules, whatever namespaces the
+		// sandbox builds (e.g. an agent working on a container runtime).
+		allowUserns = true
+	default:
+		return fail(fmt.Errorf("unknown --mode %q (want lite or strict)", mode))
 	}
 
 	args := fs.Args()
@@ -136,6 +171,7 @@ func runMain(argv []string) int {
 		AllowUserns: allowUserns,
 		Log:         logw,
 		TTY:         pty,
+		LSM:         strict,
 	})
 	if pty != nil {
 		pty.Close() // restore the terminal before printing anything
