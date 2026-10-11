@@ -14,45 +14,78 @@ const (
 	// dismissed, or prompt could not be shown. The access is denied but
 	// nothing is remembered, so a later retry asks again.
 	AnswerDismissed Answer = iota
-	// AnswerDeny denies the access and remembers the path for the session.
-	AnswerDeny
+	// AnswerDenyOnce denies this access; a later retry asks again.
+	AnswerDenyOnce
+	// AnswerNever denies this access and, for the rest of the session,
+	// every later one of the same kind (the exact path for files, see
+	// Request.Never) without asking.
+	AnswerNever
 	// AnswerAllowOnce allows this access.
 	AnswerAllowOnce
-	// AnswerAllowFolder allows everything under Request.Folder for the
+	// AnswerAllowTemp allows everything covered by Request.Scope for
+	// TempGrant.
+	AnswerAllowTemp
+	// AnswerAllowAlways allows everything covered by Request.Scope for the
 	// rest of the session.
-	AnswerAllowFolder
-	// AnswerAllowFolderTemp allows everything under Request.Folder for
-	// TempGrant. Only offered by `hallpass answer` (desktop notifications
-	// are limited to three buttons).
-	AnswerAllowFolderTemp
+	AnswerAllowAlways
 )
 
-// TempGrant is the duration of AnswerAllowFolderTemp.
+// TempGrant is the duration of AnswerAllowTemp.
 const TempGrant = 5 * time.Minute
 
 func (a Answer) String() string {
 	switch a {
-	case AnswerDeny:
+	case AnswerDenyOnce:
 		return "deny"
+	case AnswerNever:
+		return "never"
 	case AnswerAllowOnce:
-		return "allow-once"
-	case AnswerAllowFolder:
-		return "allow-folder"
-	case AnswerAllowFolderTemp:
-		return "allow-folder-temp"
+		return "once"
+	case AnswerAllowTemp:
+		return "temp"
+	case AnswerAllowAlways:
+		return "always"
 	default:
-		return "dismissed"
+		return "dismiss"
 	}
+}
+
+// ParseAnswer is the inverse of Answer.String. It also accepts the names used
+// before answers were unified ("folder", "folder-temp").
+func ParseAnswer(s string) Answer {
+	switch s {
+	case "deny":
+		return AnswerDenyOnce
+	case "never":
+		return AnswerNever
+	case "once":
+		return AnswerAllowOnce
+	case "temp", "folder-temp":
+		return AnswerAllowTemp
+	case "always", "folder":
+		return AnswerAllowAlways
+	}
+	return AnswerDismissed
 }
 
 // Request describes a pending access awaiting a decision.
 type Request struct {
-	Exe     string // target executable, for display
-	PID     uint32
-	Op      string // "write", "delete", "rename", ...
-	Path    string // resolved absolute path
-	Folder  string // offered by "Allow folder"; "" hides that choice
-	Waiting int    // other requests queued behind this one
+	Exe  string // target executable, for display
+	PID  uint32
+	Op   string // "write", "delete", "rename", ...
+	Path string // resolved absolute path
+	// Scope describes what AnswerAllowTemp and AnswerAllowAlways cover,
+	// e.g. a folder; "" hides those choices.
+	Scope string
+	// Never describes what AnswerNever covers.
+	Never   string
+	Waiting int // other requests queued behind this one
+}
+
+// Valid reports whether a is a meaningful answer to r: the scoped grants
+// need a scope.
+func (r Request) Valid(a Answer) bool {
+	return r.Scope != "" || (a != AnswerAllowTemp && a != AnswerAllowAlways)
 }
 
 // Asker prompts the user and returns their answer. The supervisor serializes

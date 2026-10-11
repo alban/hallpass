@@ -187,12 +187,17 @@ func Exe(pid uint32) string {
 // SeccompMode returns the "Seccomp:" field of /proc/<pid>/status (0 = none,
 // 2 = filter), or -1 if it cannot be read.
 func SeccompMode(pid int) int {
+	return statusField(pid, "Seccomp:")
+}
+
+// statusField returns a numeric field of /proc/<pid>/status, or -1.
+func statusField(pid int, name string) int {
 	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid))
 	if err != nil {
 		return -1
 	}
 	for _, line := range strings.Split(string(b), "\n") {
-		if v, ok := strings.CutPrefix(line, "Seccomp:"); ok {
+		if v, ok := strings.CutPrefix(line, name); ok {
 			n, err := strconv.Atoi(strings.TrimSpace(v))
 			if err != nil {
 				return -1
@@ -201,4 +206,50 @@ func SeccompMode(pid int) int {
 		}
 	}
 	return -1
+}
+
+// PidFile splits a resolved path of the form /proc/<pid>/<file> or
+// /proc/<pid>/task/<tid>/<file> into the target thread id and the file name.
+// Magic links below /proc/<pid> (cwd, root, fd/<n>, exe) are already resolved
+// by Resolve, so what is left is a procfs file about that process.
+func PidFile(path string) (tid int, name string, ok bool) {
+	rest, ok := strings.CutPrefix(path, "/proc/")
+	if !ok {
+		return 0, "", false
+	}
+	c := strings.Split(rest, "/")
+	tid, err := strconv.Atoi(c[0])
+	if err != nil || tid <= 0 || len(c) < 2 {
+		return 0, "", false
+	}
+	if c[1] == "task" && len(c) >= 4 {
+		if t, err := strconv.Atoi(c[2]); err == nil && t > 0 {
+			tid = t
+		}
+	}
+	return tid, c[len(c)-1], c[len(c)-1] != ""
+}
+
+// Comm returns the command name of thread tid, or "?".
+func Comm(tid int) string {
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/comm", tid))
+	if err != nil {
+		return "?"
+	}
+	return strings.TrimSuffix(string(b), "\n")
+}
+
+// Descends reports whether thread tid belongs to root or one of its
+// descendants, following the parent chain. This is racy (a process can exit
+// and its pid be reused) and processes reparented to a subreaper or init no
+// longer count: good enough for prompts, not for enforcement.
+func Descends(tid, root int) bool {
+	pid := statusField(tid, "Tgid:")
+	for i := 0; i < 4096 && pid > 1; i++ {
+		if pid == root {
+			return true
+		}
+		pid = statusField(pid, "PPid:")
+	}
+	return false
 }

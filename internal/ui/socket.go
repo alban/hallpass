@@ -121,7 +121,8 @@ type wireRequest struct {
 	PID     uint32 `json:"pid"`
 	Op      string `json:"op"`
 	Path    string `json:"path"`
-	Folder  string `json:"folder,omitempty"`
+	Scope   string `json:"scope,omitempty"`
+	Never   string `json:"never,omitempty"`
 	Waiting int    `json:"waiting,omitempty"`
 }
 
@@ -152,7 +153,7 @@ func (s *Socket) Ask(r Request) Answer {
 			}
 		}
 		line, _ := json.Marshal(wireRequest{
-			ID: id, Exe: r.Exe, PID: r.PID, Op: r.Op, Path: r.Path, Folder: r.Folder, Waiting: r.Waiting,
+			ID: id, Exe: r.Exe, PID: r.PID, Op: r.Op, Path: r.Path, Scope: r.Scope, Never: r.Never, Waiting: r.Waiting,
 		})
 		_ = s.client.SetDeadline(deadline)
 		if _, err := fmt.Fprintf(s.client, "PROMPT %s\n", line); err != nil {
@@ -171,22 +172,11 @@ func (s *Socket) Ask(r Request) Answer {
 			continue
 		}
 		_ = s.client.SetDeadline(time.Time{})
-		switch ans {
-		case "once":
-			return AnswerAllowOnce
-		case "folder", "folder-temp":
-			if r.Folder == "" {
-				return AnswerAllowOnce
-			}
-			if ans == "folder-temp" {
-				return AnswerAllowFolderTemp
-			}
-			return AnswerAllowFolder
-		case "deny":
-			return AnswerDeny
-		default:
-			return AnswerDismissed
+		if a := ParseAnswer(ans); r.Valid(a) {
+			return a
 		}
+		// A scoped grant without a scope: the narrowest allow.
+		return AnswerAllowOnce
 	}
 }
 
@@ -257,25 +247,24 @@ func RunClient(path string, in *os.File, out *os.File) error {
 		if r.Waiting > 0 {
 			fmt.Fprintf(out, "  (%d more waiting)\n", r.Waiting)
 		}
-		if r.Folder != "" {
-			fmt.Fprintf(out, "[o] allow once  [t] allow folder %s for %v  [f] allow folder for the session  [d] deny: ", r.Folder, TempGrant)
-		} else {
-			fmt.Fprint(out, "[o] allow once  [d] deny: ")
+		keys := map[string]Answer{"o": AnswerAllowOnce, "d": AnswerDenyOnce, "n": AnswerNever}
+		fmt.Fprint(out, "[o] allow once  ")
+		if r.Scope != "" {
+			fmt.Fprintf(out, "[t] allow %s for %v  [a] always  ", r.Scope, TempGrant)
+			keys["t"], keys["a"] = AnswerAllowTemp, AnswerAllowAlways
 		}
+		fmt.Fprint(out, "[d] deny  [n] never")
+		if r.Never != "" {
+			fmt.Fprintf(out, " (%s)", r.Never)
+		}
+		fmt.Fprint(out, ": ")
 		ans, err := user.ReadString('\n')
 		if err != nil {
 			return nil
 		}
-		reply := "dismiss"
-		switch strings.TrimSpace(ans) {
-		case "o", "O":
-			reply = "once"
-		case "t", "T":
-			reply = "folder-temp"
-		case "f", "F":
-			reply = "folder"
-		case "d", "D":
-			reply = "deny"
+		reply := AnswerDismissed
+		if a, ok := keys[strings.ToLower(strings.TrimSpace(ans))]; ok {
+			reply = a
 		}
 		fmt.Fprintf(c, "%d %s\n", r.ID, reply)
 	}

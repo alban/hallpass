@@ -93,3 +93,30 @@ func TestFolderFor(t *testing.T) {
 		}
 	}
 }
+
+func TestProcGrants(t *testing.T) {
+	e := newTestEngine()
+	k := ProcKey{Name: "oom_score_adj", Comm: "bash"}
+	other := ProcKey{Name: "oom_score_adj", Comm: "sshd"}
+	if got := e.EvalProc(k); got != Ask {
+		t.Fatalf("initial: %v, want ask", got)
+	}
+	e.AllowProcFor(k, time.Millisecond)
+	if got := e.EvalProc(k); got != Allow {
+		t.Errorf("temp grant: %v, want allow", got)
+	}
+	time.Sleep(5 * time.Millisecond)
+	if got := e.EvalProc(k); got != Ask {
+		t.Errorf("expired grant: %v, want ask", got)
+	}
+	e.AllowProcFor(k, 0)
+	e.AllowProcFor(k, time.Millisecond) // must not shrink the session grant
+	time.Sleep(5 * time.Millisecond)
+	if got := e.EvalProc(k); got != Allow {
+		t.Errorf("session grant: %v, want allow", got)
+	}
+	e.DenyProc(other)
+	if got := e.EvalProc(other); got != Deny {
+		t.Errorf("never: %v, want deny", got)
+	}
+}

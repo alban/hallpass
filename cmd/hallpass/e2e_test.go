@@ -132,8 +132,20 @@ func TestAnswerSocket(t *testing.T) {
 	if err := os.MkdirAll(e.home+"/.m2/r", 0o700); err != nil {
 		t.Fatal(err)
 	}
-	c := e.cmd(`echo a > "$HOME/.m2/a" && echo a=ok; echo a2 > "$HOME/.m2/r/a2" && echo a2=ok; echo b > "$HOME/b" 2>/dev/null && echo b=ok || echo b=denied`,
-		"--ask=answer", "--timeout=20s")
+	script := `
+check() { name=$1; shift; if "$@" 2>/dev/null; then echo "$name=ok"; else echo "$name=denied"; fi; }
+check a    sh -c 'echo a > "$HOME/.m2/a"'
+check a2   sh -c 'echo a2 > "$HOME/.m2/r/a2"'
+v=$(cat /proc/self/oom_score_adj)
+check self sh -c "echo $v > /proc/self/oom_score_adj"
+check b1   sh -c 'echo b > "$HOME/b"'
+check b2   sh -c 'echo b > "$HOME/b"'
+check b3   sh -c 'echo b > "$HOME/b"'
+v=$(cat /proc/$PPID/oom_score_adj)
+check out1 sh -c "echo $v > /proc/$PPID/oom_score_adj"
+check out2 sh -c "echo $v > /proc/$PPID/oom_score_adj"
+`
+	c := e.cmd(script, "--ask=answer", "--timeout=20s")
 	var out strings.Builder
 	c.Stdout, c.Stderr = &out, &out
 	if err := c.Start(); err != nil {
@@ -154,31 +166,49 @@ func TestAnswerSocket(t *testing.T) {
 	}
 	defer conn.Close()
 	rd := bufio.NewReader(conn)
-	// "folder-temp" on ~/.m2/a grants ~/.m2 for 5 minutes, so a2 goes
-	// through without prompting; the next prompt is for b.
-	for _, reply := range []string{"folder-temp", "deny"} {
+	// "temp" on ~/.m2/a grants ~/.m2 for 5 minutes, so a2 goes through
+	// without prompting. Writes to the sandbox's own /proc files are
+	// silent. "deny" is not remembered (b2 asks again), "never" is (b3
+	// does not). A write to hallpass's own /proc files is outside the
+	// sandbox: asked, and "always" covers the retry.
+	steps := []struct{ suffix, scope, reply string }{
+		{"/.m2/a", "/.m2", "temp"},
+		{"/b", "", "deny"},
+		{"/b", "", "never"},
+		{"/oom_score_adj", `oom_score_adj of "hallpass" processes outside the sandbox`, "always"},
+	}
+	for _, st := range steps {
 		line, err := rd.ReadString('\n')
 		if err != nil {
-			t.Fatalf("read prompt: %v", err)
+			t.Fatalf("read prompt: %v\n%s", err, out.String())
 		}
 		var req struct {
-			ID   uint64
-			Path string
+			ID    uint64
+			Path  string
+			Scope string
 		}
 		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "PROMPT ")), &req); err != nil {
 			t.Fatalf("bad prompt %q: %v", line, err)
 		}
+		if !strings.HasSuffix(req.Path, st.suffix) || !strings.HasSuffix(req.Scope, st.scope) {
+			t.Errorf("prompt for %q (scope %q), want *%s (scope *%s)", req.Path, req.Scope, st.suffix, st.scope)
+		}
 		// A stale answer must be ignored.
 		fmt.Fprintf(conn, "%d once\n", req.ID+1000)
-		fmt.Fprintf(conn, "%d %s\n", req.ID, reply)
+		fmt.Fprintf(conn, "%d %s\n", req.ID, st.reply)
 	}
 	if err := c.Wait(); err != nil {
 		t.Fatalf("hallpass: %v\n%s", err, out.String())
 	}
-	if !strings.Contains(out.String(), "a=ok") || !strings.Contains(out.String(), "a2=ok") || !strings.Contains(out.String(), "b=denied") {
-		t.Errorf("unexpected output:\n%s", out.String())
+	for _, want := range []string{"a=ok", "a2=ok", "self=ok", "b1=denied", "b2=denied", "b3=denied", "out1=ok", "out2=ok"} {
+		if !strings.Contains(out.String(), want+"\n") {
+			t.Errorf("output lacks %q", want)
+		}
 	}
 	if _, err := os.Stat(e.home + "/b"); err == nil {
 		t.Error("b was created despite deny")
+	}
+	if t.Failed() {
+		t.Logf("output:\n%s", out.String())
 	}
 }

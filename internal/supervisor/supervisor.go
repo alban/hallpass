@@ -114,6 +114,7 @@ func Run(cfg Config) (int, error) {
 		rules:    seccomp.Rules(cfg.AllowUserns),
 		listener: seccomp.NewListener(listenerFD),
 		inflight: map[string]*pending{},
+		root:     cmd.Process.Pid,
 	}
 	if cfg.Log != nil {
 		s.logEnc = json.NewEncoder(cfg.Log)
@@ -150,6 +151,7 @@ type session struct {
 	cfg      Config
 	rules    []seccomp.Rule
 	listener *seccomp.Listener
+	root     int // pid of the sandboxed command
 
 	logMu  sync.Mutex
 	logEnc *json.Encoder
@@ -235,9 +237,26 @@ func (s *session) handle(n seccomp.Notif) {
 		return
 	}
 
-	var ask []string
+	var ask []subject
+	exe := ""
 	for _, t := range targets {
 		if t.special != "" {
+			continue
+		}
+		if tid, name, ok := procfs.PidFile(t.path); ok {
+			// Processes of the sandbox may tune each other (e.g.
+			// oom_score_adj); other processes are asked about.
+			if procfs.Descends(tid, s.root) {
+				continue
+			}
+			k := policy.ProcKey{Name: name, Comm: procfs.Comm(tid)}
+			switch s.cfg.Policy.EvalProc(k) {
+			case policy.Deny:
+				s.deny(n, rule, t.path, "policy")
+				return
+			case policy.Ask:
+				ask = append(ask, s.procSubject(t.path, k))
+			}
 			continue
 		}
 		switch s.cfg.Policy.Eval(t.path) {
@@ -245,17 +264,17 @@ func (s *session) handle(n seccomp.Notif) {
 			s.deny(n, rule, t.path, "policy")
 			return
 		case policy.Ask:
-			ask = append(ask, t.path)
+			ask = append(ask, s.fileSubject(t.path))
 		}
 	}
 
-	exe := ""
-	for _, p := range ask {
+	for _, sub := range ask {
 		if exe == "" {
 			exe = procfs.Exe(n.PID)
 		}
-		if !s.ask(ui.Request{Exe: exe, PID: n.PID, Op: rule.Op, Path: p}) {
-			s.deny(n, rule, p, "user")
+		sub.req.Exe, sub.req.PID, sub.req.Op = exe, n.PID, rule.Op
+		if !s.ask(sub) {
+			s.deny(n, rule, sub.req.Path, "user")
 			return
 		}
 	}
@@ -297,18 +316,53 @@ func followLast(rule seccomp.Rule, n seccomp.Notif, i int) bool {
 	return false
 }
 
-// ask returns whether the user allows writing req.Path. Concurrent requests
-// for the same path share one prompt; queued prompts are re-evaluated after
-// each answer so an "Allow folder" settles them without asking again.
-func (s *session) ask(req ui.Request) bool {
+// subject is something the user is asked about: a file path, or a kind of
+// write to another process's /proc files.
+type subject struct {
+	key   string // coalesces concurrent identical requests
+	req   ui.Request
+	eval  func() policy.Decision
+	grant func(ttl time.Duration) // covers req.Scope; 0: rest of the session
+	never func()
+}
+
+func (s *session) fileSubject(path string) subject {
+	p := s.cfg.Policy
+	folder := p.FolderFor(path)
+	return subject{
+		key:   path,
+		req:   ui.Request{Path: path, Scope: folder, Never: "this path"},
+		eval:  func() policy.Decision { return p.Eval(path) },
+		grant: func(ttl time.Duration) { p.AllowFolderFor(folder, ttl) },
+		never: func() { p.DenyPath(path) },
+	}
+}
+
+func (s *session) procSubject(path string, k policy.ProcKey) subject {
+	p := s.cfg.Policy
+	what := fmt.Sprintf("%s of %q processes outside the sandbox", k.Name, k.Comm)
+	return subject{
+		key:   "\x00proc\x00" + k.Name + "\x00" + k.Comm,
+		req:   ui.Request{Path: path, Scope: what, Never: what},
+		eval:  func() policy.Decision { return p.EvalProc(k) },
+		grant: func(ttl time.Duration) { p.AllowProcFor(k, ttl) },
+		never: func() { p.DenyProc(k) },
+	}
+}
+
+// ask returns whether the user allows sub. Concurrent identical requests
+// share one prompt; queued prompts are re-evaluated after each answer so a
+// scoped grant settles them without asking again.
+func (s *session) ask(sub subject) bool {
+	req := sub.req
 	s.inflightMu.Lock()
-	if p, ok := s.inflight[req.Path]; ok {
+	if p, ok := s.inflight[sub.key]; ok {
 		s.inflightMu.Unlock()
 		<-p.done
 		return p.allowed
 	}
 	p := &pending{done: make(chan struct{})}
-	s.inflight[req.Path] = p
+	s.inflight[sub.key] = p
 	s.waiting++
 	s.inflightMu.Unlock()
 
@@ -318,30 +372,33 @@ func (s *session) ask(req ui.Request) bool {
 	req.Waiting = s.waiting
 	s.inflightMu.Unlock()
 
-	switch s.cfg.Policy.Eval(req.Path) {
+	switch sub.eval() {
 	case policy.Allow:
 		p.allowed = true
 	case policy.Deny:
 		p.allowed = false
 	default:
-		req.Folder = s.cfg.Policy.FolderFor(req.Path)
-		switch s.cfg.Asker.Ask(req) {
+		a := s.cfg.Asker.Ask(req)
+		if !req.Valid(a) {
+			a = ui.AnswerAllowOnce
+		}
+		switch a {
 		case ui.AnswerAllowOnce:
 			p.allowed = true
-		case ui.AnswerAllowFolder:
-			s.cfg.Policy.AllowFolder(req.Folder)
+		case ui.AnswerAllowTemp:
+			sub.grant(ui.TempGrant)
 			p.allowed = true
-		case ui.AnswerAllowFolderTemp:
-			s.cfg.Policy.AllowFolderFor(req.Folder, ui.TempGrant)
+		case ui.AnswerAllowAlways:
+			sub.grant(0)
 			p.allowed = true
-		case ui.AnswerDeny:
-			s.cfg.Policy.DenyPath(req.Path)
+		case ui.AnswerNever:
+			sub.never()
 		}
 	}
 	s.promptMu.Unlock()
 
 	s.inflightMu.Lock()
-	delete(s.inflight, req.Path)
+	delete(s.inflight, sub.key)
 	s.inflightMu.Unlock()
 	close(p.done)
 	return p.allowed

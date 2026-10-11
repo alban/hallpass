@@ -11,9 +11,23 @@ Everything the agent starts (shells, compilers, `git`, `npm`, scripts) inherits 
 
 ```
  hallpass: node (pid 41237) wants to write
- /home/me/.bashrc
- [o] allow once  [t] allow /home/me/.npm for 5m0s  [f] allow /home/me/.npm  [d] deny  [Esc] dismiss
+ /home/me/.npm/_cacache/tmp/x
+ [t] and [a] allow: /home/me/.npm
+ [o] allow once  [t] for 5m0s  [a] always  [d] deny  [n] never  [Esc] dismiss
 ```
+
+| Key | Effect |
+|-----|--------|
+| `o` | allow this access |
+| `t` | allow the scope (usually a folder) for 5 minutes |
+| `a` | allow the scope for the rest of the session |
+| `d` | deny this access; a retry asks again |
+| `n` | deny this path for the rest of the session, without asking again |
+| `Esc` | dismiss: deny, ask again next time |
+
+The desktop notification has room for three buttons only: Allow once, Allow 5 min and Deny (or Allow once, Deny and Never when there is no folder to offer).
+
+Processes of the sandbox may write each other's `/proc/<pid>` files (agents tune `oom_score_adj`, for example). Writing those of a process outside the sandbox is asked about, and `t`/`a`/`n` then apply to that file for every process with the same command name.
 
 The agent runs on a pseudo-terminal that hallpass relays, so the agent cannot see or answer the question. Output from the agent and its background jobs keeps showing above the bar, and when you answer, your terminal ends up exactly as if the bar had never been there. Keys typed in the first half second are ignored, so typing meant for the agent does not answer by accident. Without a terminal, hallpass asks with a desktop notification instead.
 
@@ -32,7 +46,7 @@ hallpass combines two kernel mechanisms:
 - **seccomp user notification** (lite mode, unprivileged): a seccomp filter pauses the syscalls that modify the filesystem and hands them to the hallpass supervisor, which resolves the path, applies the policy and, if needed, asks you. This is what lets hallpass *ask* instead of just failing the call.
 - **BPF-LSM** (strict mode, root setup, in progress): an eBPF program on the kernel's LSM hooks enforces the policy on the real file (inode), so it cannot be bypassed by symlink races, bind mounts or `io_uring`.
 
-Prompts are designed not to flood you: one notification per session, updated in place; identical pending requests (for example from `make -j`) are coalesced; and "Allow folder" settles every pending request under that folder.
+Prompts are designed not to flood you: one notification per session, updated in place; identical pending requests (for example from `make -j`) are coalesced; and an "allow for 5 minutes" or "always" answer settles every pending request under that folder.
 
 More detail: [docs/design.md](docs/design.md).
 

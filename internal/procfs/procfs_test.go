@@ -113,3 +113,37 @@ func TestResolveProcSelf(t *testing.T) {
 		t.Errorf("pipe via /proc/self/fd: got %+v, want Special", got)
 	}
 }
+
+func TestPidFile(t *testing.T) {
+	for _, tc := range []struct {
+		path string
+		tid  int
+		name string
+		ok   bool
+	}{
+		{"/proc/12/oom_score_adj", 12, "oom_score_adj", true},
+		{"/proc/12/task/13/comm", 13, "comm", true},
+		{"/proc/12/attr/current", 12, "current", true},
+		{"/proc/12", 0, "", false},
+		{"/proc/sys/vm/swappiness", 0, "", false},
+		{"/proc/0/x", 0, "", false},
+		{"/home/u/proc/12/x", 0, "", false},
+	} {
+		tid, name, ok := PidFile(tc.path)
+		if tid != tc.tid || name != tc.name || ok != tc.ok {
+			t.Errorf("PidFile(%q) = %d, %q, %v; want %d, %q, %v", tc.path, tid, name, ok, tc.tid, tc.name, tc.ok)
+		}
+	}
+}
+
+func TestDescends(t *testing.T) {
+	if !Descends(os.Getpid(), os.Getpid()) {
+		t.Error("a process descends from itself")
+	}
+	if !Descends(os.Getpid(), os.Getppid()) {
+		t.Error("a process descends from its parent")
+	}
+	if Descends(os.Getppid(), os.Getpid()) {
+		t.Error("the parent descends from its child")
+	}
+}

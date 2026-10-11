@@ -47,7 +47,20 @@ type Engine struct {
 
 	mu            sync.Mutex
 	sessionAllow  []grant             // folder prefixes ("Allow folder")
-	sessionDenied map[string]struct{} // exact paths ("Deny")
+	sessionDenied map[string]struct{} // exact paths ("Never")
+	proc          map[ProcKey]procRule
+}
+
+// ProcKey identifies a kind of write to another process's /proc directory:
+// the file name and the target's command name, since pids change.
+type ProcKey struct {
+	Name string // e.g. "oom_score_adj"
+	Comm string // target command, e.g. "bash"
+}
+
+type procRule struct {
+	allow   bool
+	expires time.Time // zero: rest of the session
 }
 
 // grant is an "Allow folder" answer; a zero expiry lasts for the session.
@@ -65,6 +78,7 @@ func New(home, workdir string, allow, deny []string) *Engine {
 		allow:         canonAll(allow),
 		deny:          canonAll(deny),
 		sessionDenied: map[string]struct{}{},
+		proc:          map[ProcKey]procRule{},
 	}
 }
 
@@ -150,6 +164,42 @@ func (e *Engine) DenyPath(path string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.sessionDenied[filepath.Clean(path)] = struct{}{}
+}
+
+// EvalProc returns the decision for writing a file of another process's /proc
+// directory, for a process outside the sandbox.
+func (e *Engine) EvalProc(k ProcKey) Decision {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	r, ok := e.proc[k]
+	if !ok || (!r.expires.IsZero() && time.Now().After(r.expires)) {
+		return Ask
+	}
+	if r.allow {
+		return Allow
+	}
+	return Deny
+}
+
+// AllowProcFor allows k for ttl (0: rest of the session).
+func (e *Engine) AllowProcFor(k ProcKey, ttl time.Duration) {
+	r := procRule{allow: true}
+	if ttl > 0 {
+		r.expires = time.Now().Add(ttl)
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if old, ok := e.proc[k]; ok && old.allow && old.expires.IsZero() {
+		return // never shrink a session grant
+	}
+	e.proc[k] = r
+}
+
+// DenyProc denies k for the rest of the session.
+func (e *Engine) DenyProc(k ProcKey) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.proc[k] = procRule{}
 }
 
 // FolderFor returns the folder offered by "Allow folder" for path, or "" when

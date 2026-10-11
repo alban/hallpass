@@ -78,12 +78,16 @@ func (d *Desktop) Ask(r Request) Answer {
 
 	body := fmt.Sprintf("<b>%s</b> (pid %d) wants to %s:\n%s",
 		html.EscapeString(baseName(r.Exe)), r.PID, r.Op, html.EscapeString(r.Path))
+	// GNOME Shell shows at most three buttons; "always" and "never" need
+	// the terminal or `hallpass answer`.
 	actions := []string{"once", "Allow once"}
-	if r.Folder != "" {
-		body += fmt.Sprintf("\n\nAllow folder: %s", html.EscapeString(r.Folder))
-		actions = append(actions, "folder", "Allow folder")
+	if r.Scope != "" {
+		body += fmt.Sprintf("\n\nAllow for %v: %s", TempGrant, html.EscapeString(r.Scope))
+		actions = append(actions, "temp", fmt.Sprintf("Allow %v", TempGrant))
+		actions = append(actions, "deny", "Deny")
+	} else {
+		actions = append(actions, "deny", "Deny", "never", "Never")
 	}
-	actions = append(actions, "deny", "Deny")
 	if r.Waiting > 0 {
 		body += fmt.Sprintf("\n(%d more waiting)", r.Waiting)
 	}
@@ -144,17 +148,12 @@ func match(sig *dbus.Signal, id uint32) (Answer, bool) {
 	}
 	switch sig.Name {
 	case notifIfc + ".ActionInvoked":
-		switch key, _ := sig.Body[1].(string); key {
-		case "once":
-			return AnswerAllowOnce, true
-		case "folder":
-			return AnswerAllowFolder, true
-		case "deny":
-			return AnswerDeny, true
-		default:
-			// "default" action (body clicked): keep waiting.
+		key, _ := sig.Body[1].(string)
+		if key == "default" {
+			// Body clicked: keep waiting.
 			return 0, false
 		}
+		return ParseAnswer(key), true
 	case notifIfc + ".NotificationClosed":
 		return AnswerDismissed, true
 	}

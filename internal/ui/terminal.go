@@ -32,25 +32,30 @@ func (a *Terminal) Ask(r Request) Answer {
 	if r.Waiting > 0 {
 		head += fmt.Sprintf("   (+%d waiting)", r.Waiting)
 	}
+	lines := []string{head, " " + r.Path}
 	keys := " [o] allow once"
-	accept := "oOdD\x1b\x03"
-	if r.Folder != "" {
-		keys += fmt.Sprintf("  [t] allow %s for %v  [f] allow %s", r.Folder, TempGrant, r.Folder)
-		accept += "tTfF"
+	accept := "oOdDnN\x1b\x03"
+	if r.Scope != "" {
+		lines = append(lines, fmt.Sprintf(" [t] and [a] allow: %s", r.Scope))
+		keys += fmt.Sprintf("  [t] for %v  [a] always", TempGrant)
+		accept += "tTaA"
 	}
-	keys += "  [d] deny  [Esc] dismiss"
+	keys += "  [d] deny  [n] never  [Esc] dismiss"
 	if a.timeout > 0 {
 		keys += fmt.Sprintf("   (dismissed in %v)", a.timeout)
 	}
-	switch a.t.Prompt([]string{head, " " + r.Path, keys}, accept, typeaheadGuard, a.timeout) {
+	lines = append(lines, keys)
+	switch a.t.Prompt(lines, accept, typeaheadGuard, a.timeout) {
 	case 'o', 'O':
 		return AnswerAllowOnce
 	case 't', 'T':
-		return AnswerAllowFolderTemp
-	case 'f', 'F':
-		return AnswerAllowFolder
+		return AnswerAllowTemp
+	case 'a', 'A':
+		return AnswerAllowAlways
 	case 'd', 'D':
-		return AnswerDeny
+		return AnswerDenyOnce
+	case 'n', 'N':
+		return AnswerNever
 	}
 	return AnswerDismissed
 }
