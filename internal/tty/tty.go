@@ -23,6 +23,7 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -63,6 +64,24 @@ type Term struct {
 	keys    chan []byte
 	outDone chan struct{}
 	winch   chan os.Signal
+
+	// menu, when set, is called (in its own goroutine) when the user
+	// presses Ctrl-] alone, instead of passing it to the program.
+	menu atomic.Pointer[func()]
+}
+
+// MenuKey is the key calling the function set with SetMenu: Ctrl-], as in
+// telnet.
+const MenuKey = 0x1d
+
+// SetMenu sets the function called when the user presses MenuKey.
+func (t *Term) SetMenu(f func()) { t.menu.Store(&f) }
+
+// Width returns the user's terminal width, in columns.
+func (t *Term) Width() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.cols
 }
 
 // maxHeld bounds the output kept while a prompt is shown; beyond it the
@@ -168,6 +187,12 @@ func (t *Term) inputLoop() {
 			default:
 			}
 			continue
+		}
+		if n == 1 && buf[0] == MenuKey {
+			if f := t.menu.Load(); f != nil {
+				go (*f)()
+				continue
+			}
 		}
 		if _, err := t.master.Write(buf[:n]); err != nil {
 			return

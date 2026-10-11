@@ -29,6 +29,9 @@ import (
 const usageText = `Usage:
   hallpass [flags] [--] [command [args...]]   run command (default: $SHELL)
   hallpass answer [PID]                       answer prompts from this terminal
+  hallpass policy [flags]                     print the rules these flags give
+
+In the program's terminal, press Ctrl-] to show the current rules.
 
 Flags:
 `
@@ -49,10 +52,15 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "answer" {
 		os.Exit(answerMain(os.Args[2:]))
 	}
-	os.Exit(runMain(os.Args[1:]))
+	if len(os.Args) > 1 && os.Args[1] == "policy" {
+		os.Exit(runMain(os.Args[2:], true))
+	}
+	os.Exit(runMain(os.Args[1:], false))
 }
 
-func runMain(argv []string) int {
+// runMain runs a sandboxed command, or with printPolicy prints the rules
+// the same flags would give it.
+func runMain(argv []string, printPolicy bool) int {
 	fs := flag.NewFlagSet("hallpass", flag.ContinueOnError)
 	fs.Usage = func() {
 		fmt.Fprint(fs.Output(), usageText)
@@ -88,35 +96,6 @@ func runMain(argv []string) int {
 	cfgDir, err := config.Dir()
 	if err != nil {
 		return fail(err)
-	}
-
-	var strict *lsm.LSM
-	switch mode {
-	case "lite":
-	case "strict":
-		// The supervisor runs as the sandbox's user: forbid it ptrace,
-		// pidfd_getfd, /proc/<pid>/mem and fd access to us, before any
-		// fd worth stealing exists. (Root keeps them, for the loader.)
-		if err := unix.Prctl(unix.PR_SET_DUMPABLE, 0, 0, 0, 0); err != nil {
-			return fail(fmt.Errorf("prctl(PR_SET_DUMPABLE): %w", err))
-		}
-		if err := lsm.Active(); err != nil {
-			return fail(err)
-		}
-		if os.Geteuid() != 0 {
-			if escalate, err = escalateTool(escalate, cfgDir); err != nil {
-				return fail(err)
-			}
-		}
-		if strict, err = privsep.Load(escalate, false); err != nil {
-			return fail(err)
-		}
-		defer strict.Close()
-		// The kernel enforces the rules, whatever namespaces the
-		// sandbox builds (e.g. an agent working on a container runtime).
-		allowUserns = true
-	default:
-		return fail(fmt.Errorf("unknown --mode %q (want lite or strict)", mode))
 	}
 
 	args := fs.Args()
@@ -159,6 +138,41 @@ func runMain(argv []string) int {
 	engine := policy.New(home, workdir,
 		append(policy.DefaultAllows(), allow...),
 		append(policy.DefaultDenies(home), deny...))
+	if printPolicy {
+		for _, l := range engine.Describe() {
+			fmt.Println(l)
+		}
+		return 0
+	}
+
+	var strict *lsm.LSM
+	switch mode {
+	case "lite":
+	case "strict":
+		// The supervisor runs as the sandbox's user: forbid it ptrace,
+		// pidfd_getfd, /proc/<pid>/mem and fd access to us, before any
+		// fd worth stealing exists. (Root keeps them, for the loader.)
+		if err := unix.Prctl(unix.PR_SET_DUMPABLE, 0, 0, 0, 0); err != nil {
+			return fail(fmt.Errorf("prctl(PR_SET_DUMPABLE): %w", err))
+		}
+		if err := lsm.Active(); err != nil {
+			return fail(err)
+		}
+		if os.Geteuid() != 0 {
+			if escalate, err = escalateTool(escalate, cfgDir); err != nil {
+				return fail(err)
+			}
+		}
+		if strict, err = privsep.Load(escalate, false); err != nil {
+			return fail(err)
+		}
+		defer strict.Close()
+		// The kernel enforces the rules, whatever namespaces the
+		// sandbox builds (e.g. an agent working on a container runtime).
+		allowUserns = true
+	default:
+		return fail(fmt.Errorf("unknown --mode %q (want lite or strict)", mode))
+	}
 
 	asker, pty, err := newAsker(ask, timeout)
 	if err != nil {

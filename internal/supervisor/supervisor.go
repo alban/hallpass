@@ -12,7 +12,9 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -139,6 +141,9 @@ func Run(cfg Config) (int, error) {
 	if cfg.Log != nil {
 		s.logEnc = json.NewEncoder(cfg.Log)
 	}
+	if cfg.TTY != nil {
+		cfg.TTY.SetMenu(s.menu)
+	}
 
 	if cfg.LSM != nil {
 		err := cfg.LSM.AddMember(cmd.Process.Pid)
@@ -208,6 +213,56 @@ type session struct {
 	onceMu   sync.Mutex
 	once     []lsm.Rule
 	onceProc []lsm.ProcRule
+
+	menuOpen atomic.Bool
+}
+
+// menu shows the session's rules over the program's screen (Ctrl-]), until
+// a key is pressed. Prompts wait meanwhile.
+func (s *session) menu() {
+	if !s.menuOpen.CompareAndSwap(false, true) {
+		return
+	}
+	defer s.menuOpen.Store(false)
+	s.promptMu.Lock()
+	defer s.promptMu.Unlock()
+	mode := "lite"
+	if s.cfg.LSM != nil {
+		mode = "strict"
+	}
+	deny, allow := s.cfg.Policy.Summary()
+	w := s.cfg.TTY.Width() - 1
+	lines := []string{fmt.Sprintf(" hallpass, %s mode: the rules of this session", mode)}
+	lines = append(lines, wrapList(" Denied:   ", deny, w)...)
+	lines = append(lines, wrapList(" Writable: ", allow, w)...)
+	lines = append(lines, " Anything else is asked. A folder covers everything below it.   [any key] close")
+	keys := make([]byte, 0, 255)
+	for k := 1; k < 256; k++ {
+		keys = append(keys, byte(k))
+	}
+	s.cfg.TTY.Prompt(lines, string(keys), 0, 0)
+}
+
+// wrapList lays out items after prefix, comma-separated, in lines of at
+// most width columns, continuation lines indented like the first item.
+func wrapList(prefix string, items []string, width int) []string {
+	indent := strings.Repeat(" ", len(prefix))
+	var lines []string
+	line := prefix
+	for i, it := range items {
+		if i < len(items)-1 {
+			it += ","
+		}
+		if line != prefix && line != indent && len(line)+1+len(it) > width {
+			lines = append(lines, line)
+			line = indent
+		}
+		if line != prefix && line != indent {
+			line += " "
+		}
+		line += it
+	}
+	return append(lines, line)
 }
 
 // syncKernel pushes the policy's current rules and the pending "allow once"

@@ -4,6 +4,7 @@
 package policy
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -159,5 +160,12 @@ func TestRules(t *testing.T) {
 	}
 	if deny, ok := got[ProcKey{Name: "mem", Comm: "node"}]; !ok || !deny {
 		t.Errorf("denied proc rule: %v", got)
+	}
+
+	d := strings.Join(e.Describe(), "\n")
+	for _, want := range []string{"  ~/.ssh\n", "  ~/src/proj (project)\n", "  ~/.bashrc (this path only)\n", "  /tmp\n", "~/.npm (until ", "/proc/<pid>/mem of node processes\nWritable"} {
+		if !strings.Contains(d, want) {
+			t.Errorf("Describe lacks %q:\n%s", want, d)
+		}
 	}
 }

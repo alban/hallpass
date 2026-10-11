@@ -66,7 +66,11 @@ hallpass [flags] [--] [command [args...]]     # default command: $SHELL
       --escalate TOOL      strict mode as a regular user: how to run the loader as root:
                            auto | ask | pkexec | sudo | run0 | doas | su | manual | none
                            (default: saved choice, else ask on a terminal, else auto)
+
+hallpass policy [flags]                       # print the rules these flags give, then exit
 ```
+
+By default, `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.config/gh`, `~/.kube`, `~/.docker`, `~/.netrc`, `~/.git-credentials` and `~/.config/hallpass` are denied; the project, `/tmp`, `/var/tmp`, `/dev/shm` and the usual `/dev` nodes are writable; anything else is asked. Press Ctrl-] inside a session to see its current rules, including answers given so far; any key closes the overlay.
 
 ### Strict mode
 

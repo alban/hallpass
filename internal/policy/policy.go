@@ -257,6 +257,61 @@ func (e *Engine) ProcRules() []ProcRule {
 	return rs
 }
 
+// Describe returns the rules in effect, one per line, for people: denials
+// first (they win), then what is writable without asking. Everything else
+// is asked.
+func (e *Engine) Describe() []string {
+	deny, allow := e.Summary()
+	out := []string{"Denied (wins over allowed):"}
+	for _, s := range deny {
+		out = append(out, "  "+s)
+	}
+	out = append(out, "Writable without asking:")
+	for _, s := range allow {
+		out = append(out, "  "+s)
+	}
+	return append(out, "Anything else is asked. A folder rule covers everything below it.")
+}
+
+// Summary returns the denied and the allowed items, described for people.
+func (e *Engine) Summary() (deny, allow []string) {
+	short := func(p string) string {
+		if under(p, e.home) {
+			return "~" + strings.TrimPrefix(p, e.home)
+		}
+		return p
+	}
+	for _, r := range e.Rules() {
+		s := short(r.Path)
+		if !r.Tree {
+			s += " (this path only)"
+		}
+		if !r.Expires.IsZero() {
+			s += " (until " + r.Expires.Format("15:04:05") + ")"
+		}
+		if r.Path == e.workdir {
+			s += " (project)"
+		}
+		if r.Deny {
+			deny = append(deny, s)
+		} else {
+			allow = append(allow, s)
+		}
+	}
+	for _, r := range e.ProcRules() {
+		s := "/proc/<pid>/" + r.Name + " of " + r.Comm + " processes"
+		if !r.Expires.IsZero() {
+			s += " (until " + r.Expires.Format("15:04:05") + ")"
+		}
+		if r.Deny {
+			deny = append(deny, s)
+		} else {
+			allow = append(allow, s)
+		}
+	}
+	return deny, allow
+}
+
 // FolderFor returns the folder offered by "Allow folder" for path, or "" when
 // no folder is safe to offer. The folder is the tool's top-level directory
 // rather than the immediate parent, so a cache with hundreds of subdirectories
