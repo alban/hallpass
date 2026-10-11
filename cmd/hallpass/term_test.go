@@ -5,6 +5,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -74,15 +75,14 @@ func waitFor(t *testing.T, cond func() bool, what string) {
 	t.Fatalf("timed out waiting for %s", what)
 }
 
-func TestTerminalPrompt(t *testing.T) {
-	e := newEnv(t)
+// runTerm starts hallpass --ask=term running script on a pty and mirrors its
+// output into a screen. done is closed when the output ends.
+func runTerm(t *testing.T, e env, script string) (m *os.File, scr *screen, c *exec.Cmd, done chan struct{}) {
+	t.Helper()
 	m, s := openPTY(t)
-	defer m.Close()
+	t.Cleanup(func() { m.Close() })
 
-	// 30 coloured lines fill and scroll the 24-row screen, so the overlay
-	// covers real content that must be repainted.
-	c := e.cmd(`for i in $(seq 1 30); do printf '\033[31mline%d\033[0m\n' $i; done; echo a > "$HOME/a" && echo a=ok; echo b > "$HOME/b" 2>/dev/null || echo b=denied; echo after`,
-		"--ask=term", "--timeout=20s")
+	c = e.cmd(script, "--ask=term", "--timeout=20s")
 	c.Stdin, c.Stdout, c.Stderr = s, s, s
 	c.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
 	if err := c.Start(); err != nil {
@@ -90,7 +90,7 @@ func TestTerminalPrompt(t *testing.T) {
 	}
 	s.Close()
 
-	scr := &screen{emu: vt.NewEmulator(100, 24)}
+	scr = &screen{emu: vt.NewEmulator(100, 24)}
 	go func() {
 		buf := make([]byte, 64)
 		for {
@@ -99,7 +99,7 @@ func TestTerminalPrompt(t *testing.T) {
 			}
 		}
 	}()
-	done := make(chan struct{})
+	done = make(chan struct{})
 	go func() {
 		defer close(done)
 		buf := make([]byte, 4096)
@@ -113,6 +113,14 @@ func TestTerminalPrompt(t *testing.T) {
 			}
 		}
 	}()
+	return m, scr, c, done
+}
+
+func TestTerminalPrompt(t *testing.T) {
+	e := newEnv(t)
+	// 30 coloured lines fill and scroll the 24-row screen, so the overlay
+	// covers real content that must be repainted.
+	m, scr, c, done := runTerm(t, e, `for i in $(seq 1 30); do printf '\033[31mline%d\033[0m\n' $i; done; echo a > "$HOME/a" && echo a=ok; echo b > "$HOME/b" 2>/dev/null || echo b=denied; echo after`)
 
 	prompts := 0
 	answer := func(key string) {
@@ -147,6 +155,57 @@ func TestTerminalPrompt(t *testing.T) {
 	}
 	if _, err := os.Stat(e.home + "/b"); err == nil {
 		t.Error("b was created despite deny")
+	}
+	if t.Failed() {
+		t.Logf("screen:\n%s", got)
+	}
+}
+
+// Output of other processes keeps showing above the overlay, and the
+// terminal ends as if the overlay had never been there.
+func TestTerminalPromptLiveOutput(t *testing.T) {
+	e := newEnv(t)
+	m, scr, c, done := runTerm(t, e, `seq 1 30; (for i in $(seq 1 25); do printf 'tick%d\n' $i; sleep 0.1; done) & sleep 0.3; echo a > "$HOME/a" && echo a=ok; wait; printf '\033[32mgreen\033[0m\n'`)
+
+	waitFor(t, func() bool { return strings.Contains(scr.rawText(), "wants to write") }, "prompt")
+	time.Sleep(600 * time.Millisecond) // past the type-ahead guard
+	first := scr.text()
+	time.Sleep(500 * time.Millisecond)
+	second := scr.text()
+	if !strings.Contains(second, "wants to write") {
+		t.Fatalf("overlay not visible:\n%s", second)
+	}
+	if first == second {
+		t.Fatalf("screen frozen while the overlay is shown:\n%s", second)
+	}
+	// The screen is full, so new lines appear under the overlay; the view
+	// scrolls to keep the cursor line (empty after a newline) right above
+	// it, with the newest output just before.
+	rows := strings.Split(second, "\n")
+	if len(rows) < 22 || !strings.HasPrefix(rows[19], "tick") || strings.TrimSpace(rows[20]) != "" {
+		t.Errorf("row above the overlay is not the latest tick:\n%s", second)
+	}
+	m.Write([]byte("o"))
+
+	if err := c.Wait(); err != nil {
+		t.Fatalf("hallpass: %v\n%s", err, scr.text())
+	}
+	<-done
+	got := scr.text()
+	for _, want := range []string{"tick25", "a=ok", "green"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("screen lacks %q", want)
+		}
+	}
+	if strings.Contains(got, "wants to write") {
+		t.Errorf("overlay left on screen")
+	}
+	// After the replay, the screen holds every tick in order, with no gaps:
+	// the test terminal saw the same stream as without the overlay.
+	for i := 8; i <= 25; i++ {
+		if !strings.Contains(got, "tick"+strconv.Itoa(i)+"\n") {
+			t.Errorf("tick%d missing", i)
+		}
 	}
 	if t.Failed() {
 		t.Logf("screen:\n%s", got)

@@ -15,7 +15,7 @@ Everything the agent starts (shells, compilers, `git`, `npm`, scripts) inherits 
  [o] allow once  [t] allow /home/me/.npm for 5m0s  [f] allow /home/me/.npm  [d] deny  [Esc] dismiss
 ```
 
-The agent runs on a pseudo-terminal that hallpass relays, so the agent cannot see or answer the question, and its screen is restored exactly when you answer. Keys typed in the first half second are ignored, so typing meant for the agent does not answer by accident. Without a terminal, hallpass asks with a desktop notification instead.
+The agent runs on a pseudo-terminal that hallpass relays, so the agent cannot see or answer the question. Output from the agent and its background jobs keeps showing above the bar, and when you answer, your terminal ends up exactly as if the bar had never been there. Keys typed in the first half second are ignored, so typing meant for the agent does not answer by accident. Without a terminal, hallpass asks with a desktop notification instead.
 
 Writes to secret stores (`~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.kube`, `~/.docker`, `~/.config/gh`) are always denied, without asking.
 

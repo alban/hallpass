@@ -6,10 +6,14 @@
 // questions in an overlay without the program seeing or answering them.
 //
 // Output normally passes through untouched and is mirrored into a terminal
-// emulator. While a prompt is shown, the program's output is held back and
-// its input diverted to hallpass; when the prompt closes, the rows under it
-// are repainted from the emulator, the cursor is restored, and the held output
-// is flushed. The program's terminal is never resized.
+// emulator. While a prompt is shown, the program's input is diverted to
+// hallpass and its output goes to the emulator only; the rows above the
+// prompt are repainted from the emulator as output arrives, scrolled so the
+// cursor line stays visible. The output is also kept, and when the prompt
+// closes the screen as it was when the prompt opened is repainted, the cursor
+// restored, and the kept output replayed, so the user's terminal ends in
+// exactly the state the program put it in (modes, colours, scrollback). The
+// program's terminal is never resized.
 package tty
 
 import (
@@ -41,15 +45,29 @@ type Term struct {
 
 	mu         sync.Mutex
 	emu        *vt.Emulator
-	esc        escTracker
+	esc        escTracker // parser state of the user's terminal
 	rows, cols int
-	ov         []string // overlay lines; nil when no prompt is shown
-	held       []byte   // program output held while the overlay is shown
+
+	// While a prompt is shown:
+	ov      []string      // overlay lines; nil when no prompt is shown
+	barX    int           // cursor column after drawing the overlay
+	held    []byte        // program output, replayed when the overlay closes
+	snap    []string      // rendered rows when the overlay opened
+	painted []string      // rendered rows currently above the overlay
+	exact   bool          // false after a resize: snap is stale, cannot replay
+	resume  chan struct{} // closed when the overlay closes
+
+	wmu   sync.Mutex    // orders writes to the user's terminal
+	dirty chan struct{} // the emulator changed while the overlay is shown
 
 	keys    chan []byte
 	outDone chan struct{}
 	winch   chan os.Signal
 }
+
+// maxHeld bounds the output kept while a prompt is shown; beyond it the
+// program blocks on write until the prompt closes.
+const maxHeld = 16 << 20
 
 // Open creates the pseudo-terminal, copying the settings and size of the
 // user's terminal (stdin/stdout).
@@ -87,6 +105,7 @@ func Open() (*Term, error) {
 		cols:    int(ws.Col),
 		keys:    make(chan []byte, 16),
 		outDone: make(chan struct{}),
+		dirty:   make(chan struct{}, 1),
 	}
 	// The emulator answers terminal queries through a pipe that blocks
 	// until read. The real terminal answers them, so drop these.
@@ -111,6 +130,7 @@ func (t *Term) Start() error {
 	go t.resizeLoop()
 	go t.inputLoop()
 	go t.outputLoop()
+	go t.paintLoop()
 	return nil
 }
 
@@ -162,12 +182,22 @@ func (t *Term) outputLoop() {
 		n, err := t.master.Read(buf)
 		if n > 0 {
 			t.mu.Lock()
-			if t.ov != nil {
-				t.held = append(t.held, buf[:n]...)
-			} else {
+			if t.ov == nil {
 				t.emit(buf[:n])
+				t.mu.Unlock()
+			} else {
+				t.held = append(t.held, buf[:n]...)
+				_, _ = t.emu.Write(buf[:n])
+				select {
+				case t.dirty <- struct{}{}:
+				default:
+				}
+				full, resume := len(t.held) > maxHeld, t.resume
+				t.mu.Unlock()
+				if full {
+					<-resume
+				}
 			}
-			t.mu.Unlock()
 		}
 		if err != nil {
 			// EIO once every copy of the slave is closed.
@@ -194,9 +224,45 @@ func (t *Term) resizeLoop() {
 		t.emu.Resize(t.cols, t.rows)
 		_ = unix.IoctlSetWinsize(int(t.master.Fd()), unix.TIOCSWINSZ, ws)
 		if t.ov != nil {
-			t.drawOverlay()
+			// The user's terminal reflowed the screen we saved: repaint
+			// everything from the emulator now and when closing.
+			t.exact = false
+			t.painted = make([]string, t.overlayTop())
+			t.write(t.drawOverlay() + t.paint())
 		}
 		t.mu.Unlock()
+	}
+}
+
+// write sends s to the user's terminal. Call with mu held.
+func (t *Term) write(s string) {
+	t.wmu.Lock()
+	_, _ = t.out.WriteString(s)
+	t.wmu.Unlock()
+}
+
+// paintLoop repaints the rows above the overlay when the emulator changed.
+// Output arriving while a repaint is written is coalesced into the next one,
+// so a slow terminal gets fewer, larger updates.
+func (t *Term) paintLoop() {
+	for {
+		select {
+		case <-t.dirty:
+		case <-t.outDone:
+			return
+		}
+		t.mu.Lock()
+		if t.ov == nil {
+			t.mu.Unlock()
+			continue
+		}
+		s := t.paint()
+		// Take wmu before releasing mu so that closeOverlay, which needs
+		// both, writes after this repaint.
+		t.wmu.Lock()
+		t.mu.Unlock()
+		_, _ = t.out.WriteString(s)
+		t.wmu.Unlock()
 	}
 }
 
@@ -218,8 +284,15 @@ func (t *Term) Prompt(lines []string, accept string, guard, timeout time.Duratio
 		<-t.keys
 	}
 	t.ov = lines
-	_, _ = t.out.WriteString("\x1b7") // DECSC: cursor, attributes, charset
-	t.drawOverlay()
+	t.exact = true
+	t.resume = make(chan struct{})
+	t.snap = make([]string, t.rows)
+	for y := range t.snap {
+		t.snap[y] = t.renderRow(y)
+	}
+	t.painted = append([]string(nil), t.snap[:t.overlayTop()]...)
+	// DECSC saves cursor, attributes and charset for closeOverlay.
+	t.write("\x1b7" + t.drawOverlay() + t.paint())
 	t.mu.Unlock()
 
 	shown := time.Now()
@@ -256,41 +329,88 @@ wait:
 
 func (t *Term) overlayTop() int { return max(0, t.rows-len(t.ov)) }
 
-func (t *Term) drawOverlay() {
+// drawOverlay returns the sequence drawing the overlay. Call with mu held.
+func (t *Term) drawOverlay() string {
 	var b strings.Builder
 	top := t.overlayTop()
+	t.barX = 1
 	for i, l := range t.ov {
 		if top+i >= t.rows {
 			break
 		}
+		l = ansi.Truncate(l, t.cols-1, "…")
 		// Bold white on blue, erased to the end of line in that colour.
-		fmt.Fprintf(&b, "\x1b[%d;1H\x1b[0;1;37;44m\x1b[2K%s", top+i+1, ansi.Truncate(l, t.cols-1, "…"))
+		fmt.Fprintf(&b, "\x1b[%d;1H\x1b[0;1;37;44m\x1b[2K%s", top+i+1, l)
+		t.barX = ansi.StringWidth(l) + 1
 	}
 	b.WriteString("\x1b[0m")
-	_, _ = t.out.WriteString(b.String())
+	return b.String()
 }
 
-// closeOverlay repaints the rows under the overlay from the emulator (which
-// reflects the screen when the overlay opened), restores the cursor, and
-// flushes the output held meanwhile.
+// renderRow returns row y of the emulator's screen as styled text.
+func (t *Term) renderRow(y int) string {
+	line := make(uv.Line, t.cols)
+	for x := range line {
+		if c := t.emu.CellAt(x, y); c != nil {
+			line[x] = *c
+		}
+	}
+	return line.Render()
+}
+
+func paintRow(b *strings.Builder, y int, line string) {
+	fmt.Fprintf(b, "\x1b[%d;1H\x1b[0m\x1b[2K%s\x1b[0m", y+1, line)
+}
+
+// paint returns the sequence updating the rows above the overlay from the
+// emulator, scrolled so that the program's cursor line stays visible. Only
+// rows that changed are rewritten. Call with mu held.
+func (t *Term) paint() string {
+	top := t.overlayTop()
+	off := max(0, t.emu.CursorPosition().Y-top+1)
+	var b strings.Builder
+	for y := 0; y < top && y < len(t.painted); y++ {
+		line := t.renderRow(y + off)
+		if line != t.painted[y] {
+			paintRow(&b, y, line)
+			t.painted[y] = line
+		}
+	}
+	if b.Len() == 0 {
+		return ""
+	}
+	// Park the cursor where the overlay left it.
+	fmt.Fprintf(&b, "\x1b[%d;%dH", t.rows, min(t.barX, t.cols))
+	return b.String()
+}
+
+// closeOverlay removes the overlay and brings the user's terminal to the
+// state the program put it in. Call with mu held.
 func (t *Term) closeOverlay() {
 	var b strings.Builder
-	top := t.overlayTop()
-	for y := top; y < top+len(t.ov) && y < t.rows; y++ {
-		line := make(uv.Line, t.cols)
-		for x := range line {
-			if c := t.emu.CellAt(x, y); c != nil {
-				line[x] = *c
+	if t.exact {
+		// Restore the screen as it was when the overlay opened, then replay
+		// the program's output: the user's terminal applies it as if it had
+		// never been interrupted, modes and scrollback included.
+		top := t.overlayTop()
+		for y, line := range t.snap {
+			if y >= top || t.painted[y] != line {
+				paintRow(&b, y, line)
 			}
 		}
-		fmt.Fprintf(&b, "\x1b[%d;1H\x1b[0m\x1b[2K%s\x1b[0m", y+1, line.Render())
+		b.WriteString("\x1b8") // DECRC
+		b.Write(t.held)
+		t.esc.feed(t.held)
+	} else {
+		// The size changed: show the emulator's screen. Modes the program
+		// changed meanwhile are lost; full-screen programs redraw on resize.
+		for y := range t.rows {
+			paintRow(&b, y, t.renderRow(y))
+		}
+		p := t.emu.CursorPosition()
+		fmt.Fprintf(&b, "\x1b8\x1b[%d;%dH", p.Y+1, p.X+1)
 	}
-	b.WriteString("\x1b8") // DECRC
-	_, _ = t.out.WriteString(b.String())
-	t.ov = nil
-	held := t.held
-	t.held = nil
-	if len(held) > 0 {
-		t.emit(held)
-	}
+	t.write(b.String())
+	t.ov, t.held, t.snap, t.painted = nil, nil, nil, nil
+	close(t.resume)
 }
