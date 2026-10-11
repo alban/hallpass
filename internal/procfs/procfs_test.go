@@ -1,0 +1,115 @@
+// Copyright The hallpass Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package procfs
+
+import (
+	"os"
+	"path/filepath"
+	"strconv"
+	"testing"
+)
+
+func TestResolve(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret := filepath.Join(root, "secret")
+	proj := filepath.Join(root, "proj")
+	for _, d := range []string{filepath.Join(secret, "sub"), filepath.Join(proj, "dir")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	links := map[string]string{
+		"proj/abs":      secret,
+		"proj/rel":      "../secret",
+		"proj/subl":     secret + "/sub",
+		"proj/relsub":   "dir/../../secret/sub", // dir is real: lexical == real here
+		"proj/viasubl":  "subl/..",              // must resolve to secret, not proj
+		"proj/dangling": secret + "/new",
+		"proj/loop":     "loop",
+	}
+	for l, dst := range links {
+		if err := os.Symlink(dst, filepath.Join(root, l)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pid := uint32(os.Getpid())
+
+	for _, tc := range []struct {
+		raw    string
+		follow bool
+		want   string
+	}{
+		{proj + "/dir/f", true, proj + "/dir/f"},
+		{proj + "/abs/f", true, secret + "/f"},
+		{proj + "/rel/f", true, secret + "/f"},
+		{proj + "/subl/../f", true, secret + "/f"}, // ".." after a symlink
+		{proj + "/viasubl/f", true, secret + "/f"},
+		{proj + "/relsub/f", true, secret + "/sub/f"},
+		{proj + "/dangling", true, secret + "/new"},
+		{proj + "/dangling", false, proj + "/dangling"},
+		{proj + "/abs", false, proj + "/abs"},
+		{proj + "/./dir/../dir/f", true, proj + "/dir/f"},
+		{proj + "/missing/../f", true, proj + "/f"},
+	} {
+		got, err := Resolve(pid, AtFDCWD, tc.raw, tc.follow)
+		if err != nil {
+			t.Errorf("Resolve(%s): %v", tc.raw, err)
+			continue
+		}
+		if got.Path != tc.want {
+			t.Errorf("Resolve(%s, follow=%v) = %s, want %s", tc.raw, tc.follow, got.Path, tc.want)
+		}
+	}
+
+	if _, err := Resolve(pid, AtFDCWD, proj+"/loop/f", true); err == nil {
+		t.Error("symlink loop: want error")
+	}
+}
+
+func TestResolveRelative(t *testing.T) {
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	got, err := Resolve(uint32(os.Getpid()), AtFDCWD, "a/../b", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Path != dir+"/b" {
+		t.Errorf("got %s, want %s", got.Path, dir+"/b")
+	}
+
+	f, err := os.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	got, err = Resolve(uint32(os.Getpid()), int64(f.Fd()), "c", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Path != dir+"/c" {
+		t.Errorf("dirfd: got %s, want %s", got.Path, dir+"/c")
+	}
+}
+
+func TestResolveProcSelf(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	defer w.Close()
+	got, err := Resolve(uint32(os.Getpid()), AtFDCWD, "/proc/self/fd/"+strconv.Itoa(int(w.Fd())), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Special == "" {
+		t.Errorf("pipe via /proc/self/fd: got %+v, want Special", got)
+	}
+}
