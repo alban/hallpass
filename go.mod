@@ -6,6 +6,7 @@ require (
 	github.com/charmbracelet/ultraviolet v0.0.0-20260303162955-0b88c25f3fff
 	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/charmbracelet/x/vt v0.0.0-20261011004359-2acd7e345453
+	github.com/cilium/ebpf v0.22.0
 	github.com/godbus/dbus/v5 v5.2.2
 	golang.org/x/net v0.59.0
 	golang.org/x/sys v0.49.0
@@ -25,5 +26,5 @@ require (
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
-	golang.org/x/sync v0.19.0 // indirect
+	golang.org/x/sync v0.20.0 // indirect
 )
