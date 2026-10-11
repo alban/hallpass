@@ -120,3 +120,44 @@ func TestProcGrants(t *testing.T) {
 		t.Errorf("never: %v, want deny", got)
 	}
 }
+
+func TestRules(t *testing.T) {
+	e := newTestEngine()
+	e.DenyPath("/home/u/.bashrc")
+	e.AllowFolderFor("/home/u/src", 0)
+	e.AllowFolderFor("/home/u/.npm", time.Hour)
+	has := func(want Rule) bool {
+		for _, r := range e.Rules() {
+			if r.Path == want.Path && r.Tree == want.Tree && r.Deny == want.Deny && r.Expires.IsZero() == want.Expires.IsZero() {
+				return true
+			}
+		}
+		return false
+	}
+	for _, want := range []Rule{
+		{Path: "/home/u/.ssh", Tree: true, Deny: true},
+		{Path: "/home/u/src/proj", Tree: true},
+		{Path: "/home/u/.cache/go-build", Tree: true},
+		{Path: "/home/u/.bashrc", Deny: true},
+		{Path: "/home/u/src", Tree: true},
+		{Path: "/home/u/.npm", Tree: true, Expires: time.Now()},
+	} {
+		if !has(want) {
+			t.Errorf("missing %+v in %+v", want, e.Rules())
+		}
+	}
+
+	k := ProcKey{Name: "oom_score_adj", Comm: "node"}
+	e.AllowProcFor(k, 0)
+	e.DenyProc(ProcKey{Name: "mem", Comm: "node"})
+	got := map[ProcKey]bool{}
+	for _, r := range e.ProcRules() {
+		got[r.ProcKey] = r.Deny
+	}
+	if deny, ok := got[k]; !ok || deny {
+		t.Errorf("allowed proc rule: %v", got)
+	}
+	if deny, ok := got[ProcKey{Name: "mem", Comm: "node"}]; !ok || !deny {
+		t.Errorf("denied proc rule: %v", got)
+	}
+}

@@ -202,6 +202,61 @@ func (e *Engine) DenyProc(k ProcKey) {
 	e.proc[k] = procRule{}
 }
 
+// Rule is a path rule in the form strict mode's kernel enforcement takes:
+// Path and, with Tree, everything below it.
+type Rule struct {
+	Path    string
+	Tree    bool
+	Deny    bool
+	Expires time.Time // zero: rest of the session
+}
+
+// ProcRule is a decision on a ProcKey.
+type ProcRule struct {
+	ProcKey
+	Deny    bool
+	Expires time.Time
+}
+
+// Rules returns the decisions Eval takes without asking, as rules; anything
+// they do not allow is to be asked about. Deny rules win over allow rules.
+func (e *Engine) Rules() []Rule {
+	var rs []Rule
+	for _, d := range e.deny {
+		rs = append(rs, Rule{Path: d, Tree: true, Deny: true})
+	}
+	rs = append(rs, Rule{Path: e.workdir, Tree: true})
+	for _, a := range e.allow {
+		rs = append(rs, Rule{Path: a, Tree: true})
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for p := range e.sessionDenied {
+		rs = append(rs, Rule{Path: p, Deny: true})
+	}
+	now := time.Now()
+	for _, g := range e.sessionAllow {
+		if g.expires.IsZero() || now.Before(g.expires) {
+			rs = append(rs, Rule{Path: g.dir, Tree: true, Expires: g.expires})
+		}
+	}
+	return rs
+}
+
+// ProcRules returns the remembered decisions on other processes' /proc files.
+func (e *Engine) ProcRules() []ProcRule {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	var rs []ProcRule
+	now := time.Now()
+	for k, r := range e.proc {
+		if r.expires.IsZero() || now.Before(r.expires) {
+			rs = append(rs, ProcRule{ProcKey: k, Deny: !r.allow, Expires: r.expires})
+		}
+	}
+	return rs
+}
+
 // FolderFor returns the folder offered by "Allow folder" for path, or "" when
 // no folder is safe to offer. The folder is the tool's top-level directory
 // rather than the immediate parent, so a cache with hundreds of subdirectories
