@@ -44,7 +44,7 @@ Agent CLIs have their own permission prompts and sandboxes, but those are enforc
 hallpass combines two kernel mechanisms:
 
 - **seccomp user notification** (lite mode, unprivileged): a seccomp filter pauses the syscalls that modify the filesystem and hands them to the hallpass supervisor, which resolves the path, applies the policy and, if needed, asks you. This is what lets hallpass *ask* instead of just failing the call.
-- **BPF-LSM** (strict mode, root setup, in progress): an eBPF program on the kernel's LSM hooks enforces the policy on the real file (inode), so it cannot be bypassed by symlink races, bind mounts or `io_uring`.
+- **BPF-LSM** (strict mode, root needed only to load it): an eBPF program on the kernel's LSM hooks enforces the same policy on the real file (inode), so it cannot be bypassed by symlink races, bind mounts, other mount namespaces or `io_uring`. Your answers to the prompts are pushed to the kernel before the paused syscall continues.
 
 Prompts are designed not to flood you: one notification per session, updated in place; identical pending requests (for example from `make -j`) are coalesced; and an "allow for 5 minutes" or "always" answer settles every pending request under that folder.
 
@@ -60,9 +60,22 @@ hallpass [flags] [--] [command [args...]]     # default command: $SHELL
       --deny PATH          always denied (repeatable, wins over --allow)
       --ask MODE           auto | term | desktop | answer | deny   (default: auto = term if on a terminal, else desktop, else answer)
       --timeout DUR        unanswered prompt is denied after DUR (default 30s; 0 = wait forever)
-      --allow-userns       let the sandbox create user/mount namespaces (weakens lite mode)
+      --allow-userns       let the sandbox create user/mount namespaces (weakens lite mode; always on in strict mode)
       --log FILE           append one JSON line per mediated syscall to FILE
+      --mode MODE          lite (default, no root) | strict (BPF-LSM enforcement)
+      --escalate TOOL      strict mode as a regular user: how to run the loader as root:
+                           auto (default) | pkexec | sudo | run0 | doas | su | manual | none
 ```
+
+### Strict mode
+
+Run hallpass as your user; only loading the BPF programs needs root:
+
+```console
+hallpass --mode=strict -- copilot
+```
+
+hallpass starts a short-lived copy of itself as root (`--escalate`: `auto` picks pkexec in a graphical session, else sudo, run0 or doas; `manual` prints the command for you to run as root and waits for Enter). The helper checks it was started for a hallpass of the invoking user, loads and attaches the programs, hands their file descriptors back to the supervisor and exits. The supervisor makes itself non-dumpable, and the LSM denies signals from the sandbox to it.
 
 See [docs/usage.md](docs/usage.md).
 
@@ -79,15 +92,15 @@ hallpass -C ~/src/app -- codex
 Things to know:
 
 - **Full-screen TUIs**: hallpass draws its question over the agent's screen and repaints it afterwards; the agent's terminal is never resized. This also works over ssh. Without a terminal, use the desktop prompt or `hallpass answer` from another terminal ([docs/usage.md](docs/usage.md#over-ssh)).
-- **Agents' own sandboxes**: some agents run commands inside their own bubblewrap sandbox (for example Codex), which creates user and mount namespaces. hallpass lite mode blocks new namespaces by default, because inside a private mount namespace a process could bind-mount a protected directory somewhere that looks harmless. The agent's own sandbox will then fail to start or fall back; disable it in the agent, or pass `--allow-userns` and accept the weaker lite-mode guarantees. Strict mode, which checks real inodes, will not need this restriction.
+- **Agents' own sandboxes**: some agents run commands inside their own bubblewrap sandbox (for example Codex), which creates user and mount namespaces. hallpass lite mode blocks new namespaces by default, because inside a private mount namespace a process could bind-mount a protected directory somewhere that looks harmless. The agent's own sandbox will then fail to start or fall back; disable it in the agent, pass `--allow-userns` and accept the weaker lite-mode guarantees, or use strict mode, which allows namespaces because it checks real inodes.
 - **Agents that use seccomp user notification themselves** cannot install their own listener under hallpass: the kernel allows only one listener per filter chain and returns `EBUSY`. This fails closed.
-- **sudo** does not work inside lite mode (`no_new_privs`), by design.
+- **sudo** does not work inside the sandbox (`no_new_privs`), in either mode, by design.
 
 ## Requirements
 
 - Linux with seccomp user notification (5.0+; `SECCOMP_USER_NOTIF_FLAG_CONTINUE` needs 5.5+). Check `/proc/sys/kernel/seccomp/actions_avail` contains `user_notif`.
 - arm64 or amd64.
-- Strict mode: BPF-LSM active, i.e. `bpf` listed in `/sys/kernel/security/lsm`. Fedora enables it by default; Ubuntu builds it but does not activate it (add `bpf` to the `lsm=` kernel parameter).
+- Strict mode: BPF-LSM active, i.e. `bpf` listed in `/sys/kernel/security/lsm`. Fedora enables it by default; Ubuntu builds it but does not activate it (add `bpf` to the `lsm=` kernel parameter). The programs also need the `bpf_preempt_disable` kfunc (upstream 6.10); the verifier rejects them otherwise. Tested on 7.2.
 - Desktop prompts: a session D-Bus with an `org.freedesktop.Notifications` service supporting actions (GNOME, KDE, most notification daemons).
 
 ## Building
@@ -105,6 +118,13 @@ Milestone 1 (lite mode) is best effort:
 - Pre-existing hard links to protected files are not detected.
 - `chmod`, `chown`, extended attributes and timestamps are not mediated yet.
 - Network and `execve` policy are planned for later milestones.
+
+Strict mode:
+
+- The supervisor holds writable fds of the BPF maps, so the user running hallpass can put any process, including other users', under the policy or under signal protection. Choosing an escalation tool is the administrator's consent to that.
+- If the supervisor dies, the programs are detached. Seccomp then fails the sandbox's mediated syscalls closed, but nothing else is enforced on processes left behind.
+- With `--escalate=manual` from a root shell, the helper cannot tell which user invoked it and only checks that the target runs the same hallpass binary.
+- `kernel.yama.ptrace_scope=3` prevents the helper from fetching the socket (`pidfd_getfd`); run hallpass as root instead.
 
 ## License
 
