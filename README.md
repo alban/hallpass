@@ -1,0 +1,97 @@
+# hallpass
+
+**Run an AI coding agent in your shell, and get asked before it writes outside your project.**
+
+```console
+$ cd ~/src/myproject
+$ hallpass -- copilot        # or: claude, codex, gemini, agy, aider, ... or just `hallpass` for a shell
+```
+
+Everything the agent starts (shells, compilers, `git`, `npm`, scripts) inherits the sandbox. Writes inside the project directory go through without asking. Writes anywhere else make hallpass pause the process and ask you on the desktop:
+
+```
+┌ hallpass ────────────────────────────────────────────┐
+│ node (pid 41237) wants to write:                     │
+│ /home/me/.bashrc                                     │
+│                      [Allow once] [Allow folder] [Deny] │
+└──────────────────────────────────────────────────────┘
+```
+
+Writes to secret stores (`~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.kube`, `~/.docker`, `~/.config/gh`) are always denied, without asking.
+
+> **Status: proof of concept.** Milestone 1 is not a security boundary yet; see [Limitations](#limitations).
+
+## Why
+
+Agent CLIs have their own permission prompts and sandboxes, but those are enforced by the agent process itself and configured by files the agent can often write. hallpass is enforced by the kernel, from outside the agent, so it does not depend on the agent being well-behaved. It complements the agent's own controls rather than replacing them.
+
+## How it works
+
+hallpass combines two kernel mechanisms:
+
+- **seccomp user notification** (lite mode, unprivileged): a seccomp filter pauses the syscalls that modify the filesystem and hands them to the hallpass supervisor, which resolves the path, applies the policy and, if needed, asks you. This is what lets hallpass *ask* instead of just failing the call.
+- **BPF-LSM** (strict mode, root setup, in progress): an eBPF program on the kernel's LSM hooks enforces the policy on the real file (inode), so it cannot be bypassed by symlink races, bind mounts or `io_uring`.
+
+Prompts are designed not to flood you: one notification per session, updated in place; identical pending requests (for example from `make -j`) are coalesced; and "Allow folder" settles every pending request under that folder.
+
+More detail: [docs/design.md](docs/design.md).
+
+## Usage
+
+```
+hallpass [flags] [--] [command [args...]]     # default command: $SHELL
+
+  -C, --workdir DIR        project dir, writable without asking (default: cwd)
+      --allow PATH         also writable without asking (repeatable)
+      --deny PATH          always denied (repeatable, wins over --allow)
+      --ask MODE           auto | desktop | answer | deny   (default: auto)
+      --timeout DUR        unanswered prompt is denied after DUR (default 30s; 0 = wait forever)
+      --allow-userns       let the sandbox create user/mount namespaces (weakens lite mode)
+      --log FILE           append one JSON line per mediated syscall to FILE
+```
+
+See [docs/usage.md](docs/usage.md).
+
+## Using hallpass with agent CLIs
+
+Wrap the top-level command; there is nothing to configure in the agent:
+
+```console
+hallpass -- copilot
+hallpass -- claude
+hallpass -C ~/src/app -- codex
+```
+
+Things to know:
+
+- **Full-screen TUIs**: the agent owns your terminal, so hallpass cannot prompt in it. Use the desktop prompt (default when a notification service is available). Over ssh, see [docs/usage.md](docs/usage.md#over-ssh).
+- **Agents' own sandboxes**: some agents run commands inside their own bubblewrap sandbox (for example Codex), which creates user and mount namespaces. hallpass lite mode blocks new namespaces by default, because inside a private mount namespace a process could bind-mount a protected directory somewhere that looks harmless. The agent's own sandbox will then fail to start or fall back; disable it in the agent, or pass `--allow-userns` and accept the weaker lite-mode guarantees. Strict mode, which checks real inodes, will not need this restriction.
+- **Agents that use seccomp user notification themselves** cannot install their own listener under hallpass: the kernel allows only one listener per filter chain and returns `EBUSY`. This fails closed.
+- **sudo** does not work inside lite mode (`no_new_privs`), by design.
+
+## Requirements
+
+- Linux with seccomp user notification (5.0+; `SECCOMP_USER_NOTIF_FLAG_CONTINUE` needs 5.5+). Check `/proc/sys/kernel/seccomp/actions_avail` contains `user_notif`.
+- arm64 or amd64.
+- Strict mode: BPF-LSM active, i.e. `bpf` listed in `/sys/kernel/security/lsm`. Fedora enables it by default; Ubuntu builds it but does not activate it (add `bpf` to the `lsm=` kernel parameter).
+- Desktop prompts: a session D-Bus with an `org.freedesktop.Notifications` service supporting actions (GNOME, KDE, most notification daemons).
+
+## Building
+
+```console
+go build ./cmd/hallpass
+```
+
+## Limitations
+
+Milestone 1 (lite mode) is best effort:
+
+- Only writes are mediated (write-intent `open`, create, delete, rename, link, `truncate`, `mknod`). Reading secrets is not blocked in lite mode.
+- Allowed syscalls continue with `SECCOMP_USER_NOTIF_FLAG_CONTINUE`, so a malicious multi-threaded process can change the path between the check and the kernel acting on it (TOCTOU). Strict mode (BPF-LSM) closes this.
+- Pre-existing hard links to protected files are not detected.
+- `chmod`, `chown`, extended attributes and timestamps are not mediated yet.
+- Network and `execve` policy are planned for later milestones.
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).
