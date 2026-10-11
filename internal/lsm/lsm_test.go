@@ -36,6 +36,48 @@ func TestLoad(t *testing.T) {
 	}
 }
 
+func TestFromFDs(t *testing.T) {
+	needRoot(t)
+	l, err := Load(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	dup := func(swap int) []int {
+		var fds []int
+		for _, fd := range l.FDs() {
+			d, err := unix.FcntlInt(uintptr(fd), unix.F_DUPFD_CLOEXEC, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fds = append(fds, d)
+		}
+		if swap > 0 {
+			fds[swap], fds[swap+1] = fds[swap+1], fds[swap]
+		}
+		return fds
+	}
+	l2, err := FromFDs(dup(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := l2.Sync([]Rule{{Path: "/tmp", Tree: true}}, nil); err != nil {
+		t.Error(err)
+	}
+	l2.Close()
+	for _, swap := range []int{4, 6} { // a map as a link; two links swapped
+		if l3, err := FromFDs(dup(swap)); err == nil {
+			l3.Close()
+			t.Errorf("swap at %d accepted", swap)
+		} else {
+			t.Logf("swap at %d: %v", swap, err)
+		}
+	}
+	if _, err := FromFDs(dup(0)[:6]); err == nil {
+		t.Error("missing links accepted")
+	}
+}
+
 // TestEnforce runs a shell as a member and checks what it may write.
 func TestEnforce(t *testing.T) {
 	needRoot(t)

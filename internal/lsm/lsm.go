@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/cilium/ebpf"
+	"github.com/cilium/ebpf/btf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
 	"golang.org/x/sys/unix"
@@ -111,6 +112,26 @@ func newLSM() *LSM {
 	}
 }
 
+// attachOrder lists the programs in the order Load attaches them, which is
+// also the order of their link fds in FDs. task_alloc comes first, so no
+// member can fork unmarked once the others run.
+var attachOrder = []string{
+	"hp_task_alloc", "hp_sb_alloc", "hp_sb_free", "hp_task_kill", "hp_file_send_sigiotask",
+	"hp_file_open", "hp_path_mknod", "hp_path_mkdir", "hp_path_rmdir", "hp_path_unlink",
+	"hp_path_symlink", "hp_path_link", "hp_path_rename", "hp_path_truncate",
+}
+
+func programsByName(p *hallpassPrograms) map[string]*ebpf.Program {
+	return map[string]*ebpf.Program{
+		"hp_task_alloc": p.HpTaskAlloc, "hp_sb_alloc": p.HpSbAlloc, "hp_sb_free": p.HpSbFree,
+		"hp_task_kill": p.HpTaskKill, "hp_file_send_sigiotask": p.HpFileSendSigiotask,
+		"hp_file_open": p.HpFileOpen, "hp_path_mknod": p.HpPathMknod, "hp_path_mkdir": p.HpPathMkdir,
+		"hp_path_rmdir": p.HpPathRmdir, "hp_path_unlink": p.HpPathUnlink,
+		"hp_path_symlink": p.HpPathSymlink, "hp_path_link": p.HpPathLink,
+		"hp_path_rename": p.HpPathRename, "hp_path_truncate": p.HpPathTruncate,
+	}
+}
+
 // Load loads and attaches the programs. With logAllowed, allowed operations
 // are reported too, not only denials. Needs root.
 func Load(logAllowed bool) (*LSM, error) {
@@ -135,13 +156,13 @@ func Load(logAllowed bool) (*LSM, error) {
 	m := &objs.hallpassMaps
 	l.members, l.protected, l.rules, l.proc, l.events = m.Members, m.Protected, m.Rules, m.Proc, m.Events
 	m.OwnedSbs.Close()
-	p := &objs.hallpassPrograms
-	// task_alloc first, so no member can fork unmarked once others run.
-	for _, prog := range []*ebpf.Program{
-		p.HpTaskAlloc, p.HpSbAlloc, p.HpSbFree, p.HpTaskKill, p.HpFileSendSigiotask,
-		p.HpFileOpen, p.HpPathMknod, p.HpPathMkdir, p.HpPathRmdir, p.HpPathUnlink,
-		p.HpPathSymlink, p.HpPathLink, p.HpPathRename, p.HpPathTruncate,
-	} {
+	progs := programsByName(&objs.hallpassPrograms)
+	for _, name := range attachOrder {
+		prog := progs[name]
+		if prog == nil {
+			l.Close()
+			return nil, fmt.Errorf("no program %s", name)
+		}
 		lk, err := link.AttachLSM(link.LSMOptions{Program: prog})
 		if err != nil {
 			l.Close()
@@ -165,6 +186,50 @@ func (l *LSM) start() error {
 	return err
 }
 
+// hookIDs returns the kernel BTF IDs of the LSM hooks of attachOrder.
+func hookIDs() ([]btf.TypeID, []string, error) {
+	spec, err := loadHallpass()
+	if err != nil {
+		return nil, nil, err
+	}
+	kernel, err := btf.LoadKernelSpec()
+	if err != nil {
+		return nil, nil, fmt.Errorf("kernel BTF: %w", err)
+	}
+	ids := make([]btf.TypeID, len(attachOrder))
+	hooks := make([]string, len(attachOrder))
+	for i, name := range attachOrder {
+		ps := spec.Programs[name]
+		if ps == nil {
+			return nil, nil, fmt.Errorf("no program %s", name)
+		}
+		fn, err := kernel.AnyTypeByName("bpf_lsm_" + ps.AttachTo)
+		if err != nil {
+			return nil, nil, fmt.Errorf("hook %s: %w", ps.AttachTo, err)
+		}
+		if ids[i], err = kernel.TypeID(fn); err != nil {
+			return nil, nil, err
+		}
+		hooks[i] = ps.AttachTo
+	}
+	return ids, hooks, nil
+}
+
+// checkLink makes sure lk attaches a BPF-LSM program to hook (BTF ID id), so
+// a helper cannot hand over a link that enforces nothing. It only needs the
+// link fd, no privileges.
+func checkLink(lk link.Link, hook string, id btf.TypeID) error {
+	info, err := lk.Info()
+	if err != nil {
+		return fmt.Errorf("link for %s: %w", hook, err)
+	}
+	t := info.Tracing()
+	if info.Type != link.TracingType || t == nil || uint32(t.AttachType) != uint32(ebpf.AttachLSMMac) || btf.TypeID(t.TargetBtfId) != id {
+		return fmt.Errorf("link is not attached to LSM hook %s", hook)
+	}
+	return nil
+}
+
 // FDs returns the fds that make up l, in the order FromFDs expects: the
 // maps, then the links. They stay owned by l.
 func (l *LSM) FDs() []int {
@@ -177,23 +242,31 @@ func (l *LSM) FDs() []int {
 // BPF map only needs a writable fd to it.
 func FromFDs(fds []int) (*LSM, error) {
 	want := []ebpf.MapType{ebpf.TaskStorage, ebpf.TaskStorage, ebpf.Hash, ebpf.Hash, ebpf.RingBuf}
-	if len(fds) <= len(want) {
+	if len(fds) != len(want)+len(attachOrder) {
 		for _, fd := range fds {
 			unix.Close(fd)
 		}
-		return nil, fmt.Errorf("got %d fds, want more than %d", len(fds), len(want))
+		return nil, fmt.Errorf("got %d fds, want %d", len(fds), len(want)+len(attachOrder))
 	}
 	l := newLSM()
 	maps := []**ebpf.Map{&l.members, &l.protected, &l.rules, &l.proc, &l.events}
-	var err error
+	ids, hooks, err := hookIDs()
 	for i, fd := range fds {
-		if i >= len(want) {
-			l.links = append(l.links, os.NewFile(uintptr(fd), "hallpass-link"))
-			l.linkFDs = append(l.linkFDs, fd)
-			continue
-		}
 		if err != nil {
 			unix.Close(fd)
+			continue
+		}
+		if i >= len(want) {
+			var lk link.Link
+			if lk, err = link.NewFromFD(fd); err != nil {
+				err = fmt.Errorf("fd %d: %w", i, err)
+				continue
+			}
+			l.links = append(l.links, lk)
+			if f, ok := lk.(interface{ FD() int }); ok {
+				l.linkFDs = append(l.linkFDs, f.FD())
+			}
+			err = checkLink(lk, hooks[i-len(want)], ids[i-len(want)])
 			continue
 		}
 		var m *ebpf.Map
