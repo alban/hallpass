@@ -25,6 +25,14 @@ type hallpassEvent struct {
 	Path [4096]int8
 }
 
+type hallpassHpScratch struct {
+	_     structs.HostLayout
+	Depth uint32
+	Pad   uint32
+	Chain [64]uint64
+	Key   hallpassRuleKey
+}
+
 type hallpassProcKey struct {
 	_    structs.HostLayout
 	Name [32]int8
@@ -58,25 +66,29 @@ type hallpassRuleVal struct {
 //
 // Used for safe lookups in a Collection or CollectionSpec.
 const (
-	hallpassMapEvents          = "events"
-	hallpassMapMembers         = "members"
-	hallpassMapOwnedSbs        = "owned_sbs"
-	hallpassMapProc            = "proc"
-	hallpassMapRules           = "rules"
-	hallpassProgHpFileOpen     = "hp_file_open"
-	hallpassProgHpPathLink     = "hp_path_link"
-	hallpassProgHpPathMkdir    = "hp_path_mkdir"
-	hallpassProgHpPathMknod    = "hp_path_mknod"
-	hallpassProgHpPathRename   = "hp_path_rename"
-	hallpassProgHpPathRmdir    = "hp_path_rmdir"
-	hallpassProgHpPathSymlink  = "hp_path_symlink"
-	hallpassProgHpPathTruncate = "hp_path_truncate"
-	hallpassProgHpPathUnlink   = "hp_path_unlink"
-	hallpassProgHpSbAlloc      = "hp_sb_alloc"
-	hallpassProgHpSbFree       = "hp_sb_free"
-	hallpassProgHpTaskAlloc    = "hp_task_alloc"
-	hallpassVarLogAllowed      = "log_allowed"
-	hallpassVarUnusedEvent     = "unused_event"
+	hallpassMapEvents               = "events"
+	hallpassMapMembers              = "members"
+	hallpassMapOwnedSbs             = "owned_sbs"
+	hallpassMapProc                 = "proc"
+	hallpassMapProtected            = "protected"
+	hallpassMapRules                = "rules"
+	hallpassMapScratch              = "scratch"
+	hallpassProgHpFileOpen          = "hp_file_open"
+	hallpassProgHpFileSendSigiotask = "hp_file_send_sigiotask"
+	hallpassProgHpPathLink          = "hp_path_link"
+	hallpassProgHpPathMkdir         = "hp_path_mkdir"
+	hallpassProgHpPathMknod         = "hp_path_mknod"
+	hallpassProgHpPathRename        = "hp_path_rename"
+	hallpassProgHpPathRmdir         = "hp_path_rmdir"
+	hallpassProgHpPathSymlink       = "hp_path_symlink"
+	hallpassProgHpPathTruncate      = "hp_path_truncate"
+	hallpassProgHpPathUnlink        = "hp_path_unlink"
+	hallpassProgHpSbAlloc           = "hp_sb_alloc"
+	hallpassProgHpSbFree            = "hp_sb_free"
+	hallpassProgHpTaskAlloc         = "hp_task_alloc"
+	hallpassProgHpTaskKill          = "hp_task_kill"
+	hallpassVarLogAllowed           = "log_allowed"
+	hallpassVarUnusedEvent          = "unused_event"
 )
 
 // loadHallpass returns the embedded CollectionSpec for hallpass.
@@ -121,29 +133,33 @@ type hallpassSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type hallpassProgramSpecs struct {
-	HpFileOpen     *ebpf.ProgramSpec `ebpf:"hp_file_open"`
-	HpPathLink     *ebpf.ProgramSpec `ebpf:"hp_path_link"`
-	HpPathMkdir    *ebpf.ProgramSpec `ebpf:"hp_path_mkdir"`
-	HpPathMknod    *ebpf.ProgramSpec `ebpf:"hp_path_mknod"`
-	HpPathRename   *ebpf.ProgramSpec `ebpf:"hp_path_rename"`
-	HpPathRmdir    *ebpf.ProgramSpec `ebpf:"hp_path_rmdir"`
-	HpPathSymlink  *ebpf.ProgramSpec `ebpf:"hp_path_symlink"`
-	HpPathTruncate *ebpf.ProgramSpec `ebpf:"hp_path_truncate"`
-	HpPathUnlink   *ebpf.ProgramSpec `ebpf:"hp_path_unlink"`
-	HpSbAlloc      *ebpf.ProgramSpec `ebpf:"hp_sb_alloc"`
-	HpSbFree       *ebpf.ProgramSpec `ebpf:"hp_sb_free"`
-	HpTaskAlloc    *ebpf.ProgramSpec `ebpf:"hp_task_alloc"`
+	HpFileOpen          *ebpf.ProgramSpec `ebpf:"hp_file_open"`
+	HpFileSendSigiotask *ebpf.ProgramSpec `ebpf:"hp_file_send_sigiotask"`
+	HpPathLink          *ebpf.ProgramSpec `ebpf:"hp_path_link"`
+	HpPathMkdir         *ebpf.ProgramSpec `ebpf:"hp_path_mkdir"`
+	HpPathMknod         *ebpf.ProgramSpec `ebpf:"hp_path_mknod"`
+	HpPathRename        *ebpf.ProgramSpec `ebpf:"hp_path_rename"`
+	HpPathRmdir         *ebpf.ProgramSpec `ebpf:"hp_path_rmdir"`
+	HpPathSymlink       *ebpf.ProgramSpec `ebpf:"hp_path_symlink"`
+	HpPathTruncate      *ebpf.ProgramSpec `ebpf:"hp_path_truncate"`
+	HpPathUnlink        *ebpf.ProgramSpec `ebpf:"hp_path_unlink"`
+	HpSbAlloc           *ebpf.ProgramSpec `ebpf:"hp_sb_alloc"`
+	HpSbFree            *ebpf.ProgramSpec `ebpf:"hp_sb_free"`
+	HpTaskAlloc         *ebpf.ProgramSpec `ebpf:"hp_task_alloc"`
+	HpTaskKill          *ebpf.ProgramSpec `ebpf:"hp_task_kill"`
 }
 
 // hallpassMapSpecs contains maps before they are loaded into the kernel.
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type hallpassMapSpecs struct {
-	Events   *ebpf.MapSpec `ebpf:"events"`
-	Members  *ebpf.MapSpec `ebpf:"members"`
-	OwnedSbs *ebpf.MapSpec `ebpf:"owned_sbs"`
-	Proc     *ebpf.MapSpec `ebpf:"proc"`
-	Rules    *ebpf.MapSpec `ebpf:"rules"`
+	Events    *ebpf.MapSpec `ebpf:"events"`
+	Members   *ebpf.MapSpec `ebpf:"members"`
+	OwnedSbs  *ebpf.MapSpec `ebpf:"owned_sbs"`
+	Proc      *ebpf.MapSpec `ebpf:"proc"`
+	Protected *ebpf.MapSpec `ebpf:"protected"`
+	Rules     *ebpf.MapSpec `ebpf:"rules"`
+	Scratch   *ebpf.MapSpec `ebpf:"scratch"`
 }
 
 // hallpassVariableSpecs contains global variables before they are loaded into the kernel.
@@ -174,11 +190,13 @@ func (o *hallpassObjects) Close() error {
 //
 // It can be passed to loadHallpassObjects or ebpf.CollectionSpec.LoadAndAssign.
 type hallpassMaps struct {
-	Events   *ebpf.Map `ebpf:"events"`
-	Members  *ebpf.Map `ebpf:"members"`
-	OwnedSbs *ebpf.Map `ebpf:"owned_sbs"`
-	Proc     *ebpf.Map `ebpf:"proc"`
-	Rules    *ebpf.Map `ebpf:"rules"`
+	Events    *ebpf.Map `ebpf:"events"`
+	Members   *ebpf.Map `ebpf:"members"`
+	OwnedSbs  *ebpf.Map `ebpf:"owned_sbs"`
+	Proc      *ebpf.Map `ebpf:"proc"`
+	Protected *ebpf.Map `ebpf:"protected"`
+	Rules     *ebpf.Map `ebpf:"rules"`
+	Scratch   *ebpf.Map `ebpf:"scratch"`
 }
 
 func (m *hallpassMaps) Close() error {
@@ -187,7 +205,9 @@ func (m *hallpassMaps) Close() error {
 		m.Members,
 		m.OwnedSbs,
 		m.Proc,
+		m.Protected,
 		m.Rules,
+		m.Scratch,
 	)
 }
 
@@ -203,23 +223,26 @@ type hallpassVariables struct {
 //
 // It can be passed to loadHallpassObjects or ebpf.CollectionSpec.LoadAndAssign.
 type hallpassPrograms struct {
-	HpFileOpen     *ebpf.Program `ebpf:"hp_file_open"`
-	HpPathLink     *ebpf.Program `ebpf:"hp_path_link"`
-	HpPathMkdir    *ebpf.Program `ebpf:"hp_path_mkdir"`
-	HpPathMknod    *ebpf.Program `ebpf:"hp_path_mknod"`
-	HpPathRename   *ebpf.Program `ebpf:"hp_path_rename"`
-	HpPathRmdir    *ebpf.Program `ebpf:"hp_path_rmdir"`
-	HpPathSymlink  *ebpf.Program `ebpf:"hp_path_symlink"`
-	HpPathTruncate *ebpf.Program `ebpf:"hp_path_truncate"`
-	HpPathUnlink   *ebpf.Program `ebpf:"hp_path_unlink"`
-	HpSbAlloc      *ebpf.Program `ebpf:"hp_sb_alloc"`
-	HpSbFree       *ebpf.Program `ebpf:"hp_sb_free"`
-	HpTaskAlloc    *ebpf.Program `ebpf:"hp_task_alloc"`
+	HpFileOpen          *ebpf.Program `ebpf:"hp_file_open"`
+	HpFileSendSigiotask *ebpf.Program `ebpf:"hp_file_send_sigiotask"`
+	HpPathLink          *ebpf.Program `ebpf:"hp_path_link"`
+	HpPathMkdir         *ebpf.Program `ebpf:"hp_path_mkdir"`
+	HpPathMknod         *ebpf.Program `ebpf:"hp_path_mknod"`
+	HpPathRename        *ebpf.Program `ebpf:"hp_path_rename"`
+	HpPathRmdir         *ebpf.Program `ebpf:"hp_path_rmdir"`
+	HpPathSymlink       *ebpf.Program `ebpf:"hp_path_symlink"`
+	HpPathTruncate      *ebpf.Program `ebpf:"hp_path_truncate"`
+	HpPathUnlink        *ebpf.Program `ebpf:"hp_path_unlink"`
+	HpSbAlloc           *ebpf.Program `ebpf:"hp_sb_alloc"`
+	HpSbFree            *ebpf.Program `ebpf:"hp_sb_free"`
+	HpTaskAlloc         *ebpf.Program `ebpf:"hp_task_alloc"`
+	HpTaskKill          *ebpf.Program `ebpf:"hp_task_kill"`
 }
 
 func (p *hallpassPrograms) Close() error {
 	return _HallpassClose(
 		p.HpFileOpen,
+		p.HpFileSendSigiotask,
 		p.HpPathLink,
 		p.HpPathMkdir,
 		p.HpPathMknod,
@@ -231,6 +254,7 @@ func (p *hallpassPrograms) Close() error {
 		p.HpSbAlloc,
 		p.HpSbFree,
 		p.HpTaskAlloc,
+		p.HpTaskKill,
 	)
 }
 

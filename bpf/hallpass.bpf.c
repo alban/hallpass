@@ -19,6 +19,7 @@
 #include "bpf_tracing.h"
 #include "bpf_core_read.h"
 
+#define EPERM 1
 #define EACCES 13
 #define MAX_DEPTH 64
 #define NAME_LEN 256
@@ -96,11 +97,11 @@ struct event {
 const struct event *unused_event __attribute__((unused));
 
 /*
- * A ring buffer record doubles as scratch space: it is private to this
- * invocation even if the task is preempted, unlike a per-CPU array.
+ * Scratch space for check_dentry, too big for the stack. Per CPU, so it is
+ * only used with preemption disabled: LSM programs only disable migration,
+ * and another task on the same CPU would otherwise overwrite it mid-check.
  */
-struct record {
-	struct event ev;
+struct hp_scratch {
 	__u32 depth;
 	__u32 pad;
 	__u64 chain[MAX_DEPTH];
@@ -108,11 +109,29 @@ struct record {
 };
 
 struct {
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, struct hp_scratch);
+} scratch SEC(".maps");
+
+struct {
 	__uint(type, BPF_MAP_TYPE_TASK_STORAGE);
 	__uint(map_flags, BPF_F_NO_PREALLOC);
 	__type(key, int);
 	__type(value, __u8);
 } members SEC(".maps");
+
+/*
+ * Thread group leaders that members may not signal: the supervisor, which
+ * runs as the same user as the sandbox. Not inherited.
+ */
+struct {
+	__uint(type, BPF_MAP_TYPE_TASK_STORAGE);
+	__uint(map_flags, BPF_F_NO_PREALLOC);
+	__type(key, int);
+	__type(value, __u8);
+} protected SEC(".maps");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
@@ -155,8 +174,8 @@ static __always_inline bool live(__u64 expiry, __u64 now)
 	return expiry > now;
 }
 
-/* Returns 0 to allow or -EACCES. */
-static __always_inline int check_dentry(struct record *r, struct dentry *target)
+/* Returns 0 to allow or -EACCES. Preemption must be disabled. */
+static __always_inline int walk(struct hp_scratch *r, struct dentry *target)
 {
 	struct super_block *sb = BPF_CORE_READ(target, d_sb);
 	__u64 sbkey = (__u64)sb;
@@ -228,6 +247,21 @@ static __always_inline int check_dentry(struct record *r, struct dentry *target)
 	return 0;
 }
 
+/* Returns 0 to allow or -EACCES. */
+static __always_inline int check_dentry(struct dentry *target)
+{
+	__u32 zero = 0;
+	struct hp_scratch *r;
+	int ret = -EACCES;
+
+	bpf_preempt_disable();
+	r = bpf_map_lookup_elem(&scratch, &zero);
+	if (r)
+		ret = walk(r, target);
+	bpf_preempt_enable();
+	return ret;
+}
+
 /*
  * Files under /proc/<pid>/: processes of the sandbox may write each other's
  * files; for other processes, the proc map decides. Returns 1 when inode is
@@ -269,31 +303,32 @@ static __always_inline int check_proc(struct dentry *dentry, struct inode *inode
 	return 0;
 }
 
-static __always_inline struct record *reserve(void)
+/*
+ * Reports the decision, if wanted, and returns it. When the ring buffer is
+ * full the event is lost, not the decision.
+ */
+static __always_inline int finish(__u32 op, int ret, const struct path *path,
+				  struct dentry *named)
 {
-	return bpf_ringbuf_reserve(&events, sizeof(struct record), 0);
-}
+	struct event *e;
 
-/* Reports the decision, if wanted, and releases the record. */
-static __always_inline int finish(struct record *r, __u32 op, int ret,
-				  const struct path *path, struct dentry *named)
-{
-	if (ret == 0 && !log_allowed) {
-		bpf_ringbuf_discard(r, 0);
+	if (ret == 0 && !log_allowed)
 		return ret;
-	}
-	r->ev.ts = bpf_ktime_get_ns();
-	r->ev.pid = bpf_get_current_pid_tgid() >> 32;
-	r->ev.op = op;
-	r->ev.ret = ret;
-	bpf_get_current_comm(r->ev.comm, COMM_LEN);
-	r->ev.path[0] = 0;
+	e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+	if (!e)
+		return ret;
+	e->ts = bpf_ktime_get_ns();
+	e->pid = bpf_get_current_pid_tgid() >> 32;
+	e->op = op;
+	e->ret = ret;
+	bpf_get_current_comm(e->comm, COMM_LEN);
+	e->path[0] = 0;
 	if (path)
-		bpf_path_d_path(path, r->ev.path, PATH_LEN);
-	r->ev.name[0] = 0;
+		bpf_path_d_path(path, e->path, PATH_LEN);
+	e->name[0] = 0;
 	if (named)
-		bpf_probe_read_kernel_str(r->ev.name, NAME_LEN, BPF_CORE_READ(named, d_name.name));
-	bpf_ringbuf_submit(r, 0);
+		bpf_probe_read_kernel_str(e->name, NAME_LEN, BPF_CORE_READ(named, d_name.name));
+	bpf_ringbuf_submit(e, 0);
 	return ret;
 }
 
@@ -301,32 +336,23 @@ static __always_inline int finish(struct record *r, __u32 op, int ret,
 static __always_inline int check_one(__u32 op, const struct path *path, struct dentry *dentry,
 				     bool named)
 {
-	struct record *r;
-
 	if (!is_member())
 		return 0;
-	r = reserve();
-	if (!r)
-		return -EACCES;
-	return finish(r, op, check_dentry(r, dentry), path, named ? dentry : 0);
+	return finish(op, check_dentry(dentry), path, named ? dentry : 0);
 }
 
 /* Two dentries (link, rename): both must be allowed. */
 static __always_inline int check_two(__u32 op, const struct path *old_dir, struct dentry *old,
 				     const struct path *new_dir, struct dentry *new)
 {
-	struct record *r;
 	int ret;
 
 	if (!is_member())
 		return 0;
-	r = reserve();
-	if (!r)
-		return -EACCES;
-	ret = check_dentry(r, old);
+	ret = check_dentry(old);
 	if (ret)
-		return finish(r, op, ret, old_dir, old);
-	return finish(r, op, check_dentry(r, new), new_dir, new);
+		return finish(op, ret, old_dir, old);
+	return finish(op, check_dentry(new), new_dir, new);
 }
 
 SEC("lsm/task_alloc")
@@ -337,6 +363,39 @@ int BPF_PROG(hp_task_alloc, struct task_struct *task, __u64 clone_flags, int ret
 	if (is_member() &&
 	    !bpf_task_storage_get(&members, task, 0, BPF_LOCAL_STORAGE_GET_F_CREATE))
 		return -EACCES; /* never let a member spawn an unmarked task */
+	return 0;
+}
+
+static __always_inline bool is_protected(struct task_struct *p)
+{
+	return bpf_task_storage_get(&protected, p->group_leader, 0, 0) != 0;
+}
+
+/* kill, tgkill, pidfd_send_signal, also to process groups. */
+SEC("lsm/task_kill")
+int BPF_PROG(hp_task_kill, struct task_struct *p, struct kernel_siginfo *info, int sig,
+	     const struct cred *cred, int ret)
+{
+	if (ret)
+		return ret;
+	if (sig && is_member() && is_protected(p))
+		return -EPERM;
+	return 0;
+}
+
+/*
+ * SIGIO (any signal, with F_SETSIG) of a file whose owner was set to a
+ * protected process. Called in whatever task triggers the I/O, so it cannot
+ * tell who set the owner; the supervisor never asks for SIGIO itself.
+ */
+SEC("lsm/file_send_sigiotask")
+int BPF_PROG(hp_file_send_sigiotask, struct task_struct *tsk, struct fown_struct *fown, int sig,
+	     int ret)
+{
+	if (ret)
+		return ret;
+	if (is_protected(tsk))
+		return -EPERM;
 	return 0;
 }
 
@@ -381,8 +440,6 @@ static __always_inline bool on_overlay_layer(struct file *file)
 SEC("lsm/file_open")
 int BPF_PROG(hp_file_open, struct file *file, int ret)
 {
-	struct record *r;
-
 	if (ret)
 		return ret;
 	if (!(file->f_mode & FMODE_WRITE) && !(file->f_flags & O_TRUNC))
@@ -391,13 +448,10 @@ int BPF_PROG(hp_file_open, struct file *file, int ret)
 		return 0;
 	if (!is_member())
 		return 0;
-	r = reserve();
-	if (!r)
-		return -EACCES;
 	ret = check_proc(file->f_path.dentry, file->f_inode);
 	if (ret == 1)
-		ret = check_dentry(r, file->f_path.dentry);
-	return finish(r, HP_OP_OPEN, ret, &file->f_path, 0);
+		ret = check_dentry(file->f_path.dentry);
+	return finish(HP_OP_OPEN, ret, &file->f_path, 0);
 }
 
 SEC("lsm/path_mknod")

@@ -16,6 +16,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"strings"
@@ -84,9 +85,12 @@ type nodeKey struct {
 
 // LSM is a loaded and attached set of programs, with its rules.
 type LSM struct {
-	objs  hallpassObjects
-	links []link.Link
-	rd    *ringbuf.Reader
+	members, protected, rules, proc, events *ebpf.Map
+	// links keep the programs attached; closing them detaches.
+	links []io.Closer
+	// linkFDs are the links' fds, for handing them to another process.
+	linkFDs []int
+	rd      *ringbuf.Reader
 
 	mountinfo string
 
@@ -95,6 +99,16 @@ type LSM struct {
 	next    uint64
 	nodes   map[nodeKey]hallpassRuleVal
 	procs   map[hallpassProcKey]hallpassProcVal
+}
+
+func newLSM() *LSM {
+	return &LSM{
+		mountinfo: "/proc/self/mountinfo",
+		cookies:   map[nodeKey]uint64{},
+		next:      1,
+		nodes:     map[nodeKey]hallpassRuleVal{},
+		procs:     map[hallpassProcKey]hallpassProcVal{},
+	}
 }
 
 // Load loads and attaches the programs. With logAllowed, allowed operations
@@ -107,24 +121,24 @@ func Load(logAllowed bool) (*LSM, error) {
 	if err := spec.Variables["log_allowed"].Set(logAllowed); err != nil {
 		return nil, err
 	}
-	l := &LSM{
-		mountinfo: "/proc/self/mountinfo",
-		cookies:   map[nodeKey]uint64{},
-		next:      1,
-		nodes:     map[nodeKey]hallpassRuleVal{},
-		procs:     map[hallpassProcKey]hallpassProcVal{},
-	}
-	if err := spec.LoadAndAssign(&l.objs, nil); err != nil {
+	var objs hallpassObjects
+	if err := spec.LoadAndAssign(&objs, nil); err != nil {
 		var ve *ebpf.VerifierError
 		if errors.As(err, &ve) {
 			return nil, fmt.Errorf("load BPF programs: %+v", ve)
 		}
 		return nil, fmt.Errorf("load BPF programs: %w", err)
 	}
-	p := &l.objs.hallpassPrograms
+	// The links hold the programs, and the programs their maps.
+	defer objs.hallpassPrograms.Close()
+	l := newLSM()
+	m := &objs.hallpassMaps
+	l.members, l.protected, l.rules, l.proc, l.events = m.Members, m.Protected, m.Rules, m.Proc, m.Events
+	m.OwnedSbs.Close()
+	p := &objs.hallpassPrograms
 	// task_alloc first, so no member can fork unmarked once others run.
 	for _, prog := range []*ebpf.Program{
-		p.HpTaskAlloc, p.HpSbAlloc, p.HpSbFree,
+		p.HpTaskAlloc, p.HpSbAlloc, p.HpSbFree, p.HpTaskKill, p.HpFileSendSigiotask,
 		p.HpFileOpen, p.HpPathMknod, p.HpPathMkdir, p.HpPathRmdir, p.HpPathUnlink,
 		p.HpPathSymlink, p.HpPathLink, p.HpPathRename, p.HpPathTruncate,
 	} {
@@ -134,8 +148,68 @@ func Load(logAllowed bool) (*LSM, error) {
 			return nil, fmt.Errorf("attach %s: %w", prog, err)
 		}
 		l.links = append(l.links, lk)
+		if f, ok := lk.(interface{ FD() int }); ok {
+			l.linkFDs = append(l.linkFDs, f.FD())
+		}
 	}
-	if l.rd, err = ringbuf.NewReader(l.objs.Events); err != nil {
+	if err := l.start(); err != nil {
+		l.Close()
+		return nil, err
+	}
+	return l, nil
+}
+
+func (l *LSM) start() error {
+	var err error
+	l.rd, err = ringbuf.NewReader(l.events)
+	return err
+}
+
+// FDs returns the fds that make up l, in the order FromFDs expects: the
+// maps, then the links. They stay owned by l.
+func (l *LSM) FDs() []int {
+	fds := []int{l.members.FD(), l.protected.FD(), l.rules.FD(), l.proc.FD(), l.events.FD()}
+	return append(fds, l.linkFDs...)
+}
+
+// FromFDs rebuilds an LSM from fds received from the process that loaded it
+// (see FDs) and takes ownership of them. It needs no privilege: updating a
+// BPF map only needs a writable fd to it.
+func FromFDs(fds []int) (*LSM, error) {
+	want := []ebpf.MapType{ebpf.TaskStorage, ebpf.TaskStorage, ebpf.Hash, ebpf.Hash, ebpf.RingBuf}
+	if len(fds) <= len(want) {
+		for _, fd := range fds {
+			unix.Close(fd)
+		}
+		return nil, fmt.Errorf("got %d fds, want more than %d", len(fds), len(want))
+	}
+	l := newLSM()
+	maps := []**ebpf.Map{&l.members, &l.protected, &l.rules, &l.proc, &l.events}
+	var err error
+	for i, fd := range fds {
+		if i >= len(want) {
+			l.links = append(l.links, os.NewFile(uintptr(fd), "hallpass-link"))
+			l.linkFDs = append(l.linkFDs, fd)
+			continue
+		}
+		if err != nil {
+			unix.Close(fd)
+			continue
+		}
+		var m *ebpf.Map
+		if m, err = ebpf.NewMapFromFD(fd); err != nil {
+			err = fmt.Errorf("fd %d: %w", i, err)
+			continue
+		}
+		*maps[i] = m
+		if m.Type() != want[i] {
+			err = fmt.Errorf("fd %d: map type %s, want %s", i, m.Type(), want[i])
+		}
+	}
+	if err == nil {
+		err = l.start()
+	}
+	if err != nil {
 		l.Close()
 		return nil, err
 	}
@@ -150,18 +224,32 @@ func (l *LSM) Close() error {
 	for _, lk := range l.links {
 		lk.Close()
 	}
-	return l.objs.Close()
+	for _, m := range []*ebpf.Map{l.members, l.protected, l.rules, l.proc, l.events} {
+		if m != nil {
+			m.Close()
+		}
+	}
+	return nil
 }
 
 // AddMember puts process pid in the sandbox; the tasks it creates from then
 // on are members too. Threads it already has are not.
 func (l *LSM) AddMember(pid int) error {
+	return l.mark(l.members, pid)
+}
+
+// Protect forbids members to signal process pid (all its threads).
+func (l *LSM) Protect(pid int) error {
+	return l.mark(l.protected, pid)
+}
+
+func (l *LSM) mark(m *ebpf.Map, pid int) error {
 	fd, err := unix.PidfdOpen(pid, 0)
 	if err != nil {
 		return fmt.Errorf("pidfd_open %d: %w", pid, err)
 	}
 	defer unix.Close(fd)
-	return l.objs.Members.Update(uint32(fd), uint8(1), ebpf.UpdateAny)
+	return m.Update(uint32(fd), uint8(1), ebpf.UpdateAny)
 }
 
 // Events calls fn for each decision reported by the programs, until Close.
@@ -252,13 +340,13 @@ func (l *LSM) Sync(rules []Rule, procs []ProcRule) error {
 		if old, ok := l.nodes[k]; ok && old == v {
 			continue
 		}
-		if err := l.objs.Rules.Update(ruleKey(k), v, ebpf.UpdateAny); err != nil {
+		if err := l.rules.Update(ruleKey(k), v, ebpf.UpdateAny); err != nil {
 			return fmt.Errorf("update rule %q: %w", k.name, err)
 		}
 	}
 	for k := range l.nodes {
 		if _, ok := nodes[k]; !ok {
-			if err := l.objs.Rules.Delete(ruleKey(k)); err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
+			if err := l.rules.Delete(ruleKey(k)); err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
 				return err
 			}
 		}
@@ -286,13 +374,13 @@ func (l *LSM) Sync(rules []Rule, procs []ProcRule) error {
 		if old, ok := l.procs[k]; ok && old == v {
 			continue
 		}
-		if err := l.objs.Proc.Update(k, v, ebpf.UpdateAny); err != nil {
+		if err := l.proc.Update(k, v, ebpf.UpdateAny); err != nil {
 			return err
 		}
 	}
 	for k := range l.procs {
 		if _, ok := pm[k]; !ok {
-			_ = l.objs.Proc.Delete(k)
+			_ = l.proc.Delete(k)
 		}
 	}
 	l.procs = pm
