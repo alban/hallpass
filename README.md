@@ -7,15 +7,15 @@ $ cd ~/src/myproject
 $ hallpass -- copilot        # or: claude, codex, gemini, agy, aider, ... or just `hallpass` for a shell
 ```
 
-Everything the agent starts (shells, compilers, `git`, `npm`, scripts) inherits the sandbox. Writes inside the project directory go through without asking. Writes anywhere else make hallpass pause the process and ask you on the desktop:
+Everything the agent starts (shells, compilers, `git`, `npm`, scripts) inherits the sandbox. Writes inside the project directory go through without asking. Writes anywhere else make hallpass pause the process and ask you in a bar drawn over the bottom of your terminal, like a tmux status line:
 
 ```
-┌ hallpass ────────────────────────────────────────────┐
-│ node (pid 41237) wants to write:                     │
-│ /home/me/.bashrc                                     │
-│                      [Allow once] [Allow folder] [Deny] │
-└──────────────────────────────────────────────────────┘
+ hallpass: node (pid 41237) wants to write
+ /home/me/.bashrc
+ [o] allow once  [t] allow /home/me/.npm for 5m0s  [f] allow /home/me/.npm  [d] deny  [Esc] dismiss
 ```
+
+The agent runs on a pseudo-terminal that hallpass relays, so the agent cannot see or answer the question, and its screen is restored exactly when you answer. Keys typed in the first half second are ignored, so typing meant for the agent does not answer by accident. Without a terminal, hallpass asks with a desktop notification instead.
 
 Writes to secret stores (`~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.kube`, `~/.docker`, `~/.config/gh`) are always denied, without asking.
 
@@ -44,7 +44,7 @@ hallpass [flags] [--] [command [args...]]     # default command: $SHELL
   -C, --workdir DIR        project dir, writable without asking (default: cwd)
       --allow PATH         also writable without asking (repeatable)
       --deny PATH          always denied (repeatable, wins over --allow)
-      --ask MODE           auto | desktop | answer | deny   (default: auto)
+      --ask MODE           auto | term | desktop | answer | deny   (default: auto = term if on a terminal, else desktop, else answer)
       --timeout DUR        unanswered prompt is denied after DUR (default 30s; 0 = wait forever)
       --allow-userns       let the sandbox create user/mount namespaces (weakens lite mode)
       --log FILE           append one JSON line per mediated syscall to FILE
@@ -64,7 +64,7 @@ hallpass -C ~/src/app -- codex
 
 Things to know:
 
-- **Full-screen TUIs**: the agent owns your terminal, so hallpass cannot prompt in it. Use the desktop prompt (default when a notification service is available). Over ssh, see [docs/usage.md](docs/usage.md#over-ssh).
+- **Full-screen TUIs**: hallpass draws its question over the agent's screen and repaints it afterwards; the agent's terminal is never resized. This also works over ssh. Without a terminal, use the desktop prompt or `hallpass answer` from another terminal ([docs/usage.md](docs/usage.md#over-ssh)).
 - **Agents' own sandboxes**: some agents run commands inside their own bubblewrap sandbox (for example Codex), which creates user and mount namespaces. hallpass lite mode blocks new namespaces by default, because inside a private mount namespace a process could bind-mount a protected directory somewhere that looks harmless. The agent's own sandbox will then fail to start or fall back; disable it in the agent, or pass `--allow-userns` and accept the weaker lite-mode guarantees. Strict mode, which checks real inodes, will not need this restriction.
 - **Agents that use seccomp user notification themselves** cannot install their own listener under hallpass: the kernel allows only one listener per filter chain and returns `EBUSY`. This fails closed.
 - **sudo** does not work inside lite mode (`no_new_privs`), by design.

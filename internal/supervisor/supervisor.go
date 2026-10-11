@@ -19,6 +19,7 @@ import (
 	"github.com/alban/hallpass/internal/policy"
 	"github.com/alban/hallpass/internal/procfs"
 	"github.com/alban/hallpass/internal/seccomp"
+	"github.com/alban/hallpass/internal/tty"
 	"github.com/alban/hallpass/internal/ui"
 	"golang.org/x/sys/unix"
 )
@@ -31,6 +32,9 @@ type Config struct {
 	Asker       ui.Asker
 	AllowUserns bool
 	Log         io.Writer // JSON lines, one per mediated syscall; nil disables
+	// TTY, when set, is the pseudo-terminal the command runs on (for
+	// terminal prompts); otherwise it inherits hallpass's stdio.
+	TTY *tty.Term
 }
 
 // Run starts the command under the seccomp filter, mediates its syscalls until
@@ -47,6 +51,13 @@ func Run(cfg Config) (int, error) {
 	cmd.Args[0] = "hallpass-child"
 	cmd.Dir = cfg.Dir
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if cfg.TTY != nil {
+		s := cfg.TTY.Slave()
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = s, s, s
+		// New session with the pty as controlling terminal, so Ctrl-C,
+		// Ctrl-Z and job control work inside.
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
+	}
 	cmd.ExtraFiles = []*os.File{childSock} // fd 3 in the child
 	cmd.Env = append(os.Environ(),
 		childEnvSentinel+"=1",
@@ -72,12 +83,22 @@ func Run(cfg Config) (int, error) {
 	signal.Notify(fwd, syscall.SIGTERM, syscall.SIGHUP)
 	defer signal.Stop(fwd)
 
+	if cfg.TTY != nil {
+		if err := cfg.TTY.Start(); err != nil {
+			childSock.Close()
+			unix.Close(parentSock)
+			return 0, fmt.Errorf("terminal: %w", err)
+		}
+	}
 	if err := cmd.Start(); err != nil {
 		childSock.Close()
 		unix.Close(parentSock)
 		return 0, err
 	}
 	childSock.Close()
+	if cfg.TTY != nil {
+		cfg.TTY.CloseSlave()
+	}
 
 	listenerFD, err := recvFD(parentSock)
 	unix.Close(parentSock)

@@ -84,7 +84,7 @@ func TestFolderFor(t *testing.T) {
 		{"/etc/f", "/etc"},
 		{"/home/u/.bashrc", ""}, // would be $HOME
 		{"/f", ""},
-		{"/home/u/.ssh/f", ""},  // contains a deny path
+		{"/home/u/.ssh/f", ""},    // contains a deny path
 		{"/home/u/.config/x", ""}, // ~/.config contains ~/.config/gh
 		{"/home/u/.config/app/x", "/home/u/.config/app"},
 	} {

@@ -17,6 +17,7 @@ import (
 
 	"github.com/alban/hallpass/internal/policy"
 	"github.com/alban/hallpass/internal/supervisor"
+	"github.com/alban/hallpass/internal/tty"
 	"github.com/alban/hallpass/internal/ui"
 )
 
@@ -61,7 +62,7 @@ func runMain(argv []string) int {
 	fs.StringVar(&workdir, "workdir", "", "same as -C")
 	fs.Var(&allow, "allow", "`path` also writable without asking (repeatable)")
 	fs.Var(&deny, "deny", "`path` always denied (repeatable, wins over --allow)")
-	fs.StringVar(&ask, "ask", "auto", "how to ask: auto | desktop | answer | deny")
+	fs.StringVar(&ask, "ask", "auto", "how to ask: auto | term | desktop | answer | deny")
 	fs.DurationVar(&timeout, "timeout", 30*time.Second, "deny unanswered prompts after `duration` (0: wait forever)")
 	fs.BoolVar(&allowUserns, "allow-userns", false, "let the sandbox create user/mount namespaces (weakens lite mode)")
 	fs.StringVar(&logPath, "log", "", "append one JSON line per mediated syscall to `file`")
@@ -111,7 +112,7 @@ func runMain(argv []string) int {
 		append(policy.DefaultAllows(), allow...),
 		append(policy.DefaultDenies(home), deny...))
 
-	asker, err := newAsker(ask, timeout)
+	asker, pty, err := newAsker(ask, timeout)
 	if err != nil {
 		return fail(err)
 	}
@@ -134,7 +135,11 @@ func runMain(argv []string) int {
 		Asker:       asker,
 		AllowUserns: allowUserns,
 		Log:         logw,
+		TTY:         pty,
 	})
+	if pty != nil {
+		pty.Close() // restore the terminal before printing anything
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "hallpass: %v\n", err)
 		if code == 0 {
@@ -144,21 +149,43 @@ func runMain(argv []string) int {
 	return code
 }
 
-func newAsker(mode string, timeout time.Duration) (ui.Asker, error) {
+// newAsker picks how to ask. "auto" prefers the terminal overlay (works
+// locally and over ssh, and keeps the question next to the agent), then the
+// desktop, then `hallpass answer`.
+func newAsker(mode string, timeout time.Duration) (ui.Asker, *tty.Term, error) {
 	switch mode {
 	case "deny":
-		return ui.AutoDeny{}, nil
+		return ui.AutoDeny{}, nil, nil
+	case "term":
+		return newTermAsker(timeout)
 	case "desktop":
-		return ui.NewDesktop(timeout)
+		d, err := ui.NewDesktop(timeout)
+		return d, nil, err
 	case "answer":
-		return newSocketAsker(timeout)
+		s, err := newSocketAsker(timeout)
+		return s, nil, err
 	case "auto":
-		if d, err := ui.NewDesktop(timeout); err == nil {
-			return d, nil
+		if tty.Available() {
+			return newTermAsker(timeout)
 		}
-		return newSocketAsker(timeout)
+		if d, err := ui.NewDesktop(timeout); err == nil {
+			return d, nil, nil
+		}
+		s, err := newSocketAsker(timeout)
+		return s, nil, err
 	}
-	return nil, fmt.Errorf("unknown --ask mode %q", mode)
+	return nil, nil, fmt.Errorf("unknown --ask mode %q", mode)
+}
+
+func newTermAsker(timeout time.Duration) (ui.Asker, *tty.Term, error) {
+	if !tty.Available() {
+		return nil, nil, errors.New("--ask=term needs stdin and stdout to be a terminal")
+	}
+	t, err := tty.Open()
+	if err != nil {
+		return nil, nil, err
+	}
+	return ui.NewTerminal(t, timeout), t, nil
 }
 
 func newSocketAsker(timeout time.Duration) (ui.Asker, error) {
