@@ -49,8 +49,44 @@ func TestLocate(t *testing.T) {
 		{"/tmp/f", false, []loc{{41, "/f"}}},
 		{"/", false, []loc{{8<<20 | 1, "/"}}},
 	} {
-		if got := locate(m, c.path, c.tree); !reflect.DeepEqual(got, c.want) {
+		if got := locate(m, c.path, c.tree, 0); !reflect.DeepEqual(got, c.want) {
 			t.Errorf("locate(%q, %v) = %v, want %v", c.path, c.tree, got, c.want)
+		}
+	}
+}
+
+func TestLocateStackedRoot(t *testing.T) {
+	// vimto: 9p mounted over / after the switch to the overlay root, which
+	// path lookups still use.
+	m, err := parseMounts(strings.NewReader(`32 27 0:27 / / rw - overlay overlay rw
+34 32 0:32 / /proc rw - proc proc rw
+41 32 0:35 / / rw - 9p sd-9p-0 rw
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []loc{{27, "/tmp/x"}}
+	if got := locate(m, "/tmp/x", true, 32); !reflect.DeepEqual(got, want) {
+		t.Errorf("with mount id: %v, want %v", got, want)
+	}
+	if got := locate(m, "/tmp/x", false, 0); got[0].dev != 35 {
+		t.Errorf("without mount id: %v", got)
+	}
+}
+
+func TestMountID(t *testing.T) {
+	m, err := readMounts("/proc/self/mountinfo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"/", "/proc/self", "/proc/does/not/exist", t.TempDir()} {
+		id := mountID(p)
+		found := false
+		for _, mt := range m {
+			found = found || mt.id == id
+		}
+		if !found {
+			t.Errorf("mountID(%q) = %d, not in mountinfo", p, id)
 		}
 	}
 }

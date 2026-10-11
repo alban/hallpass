@@ -27,6 +27,9 @@
 #define COMM_LEN 16
 
 #define FMODE_WRITE 0x2
+/* Stable: ERR_PTR(-EINVAL), and the uapi MS_KERNMOUNT. */
+#define MNT_NS_INTERNAL ((void *)-22L)
+#define SB_KERNMOUNT (1UL << 22)
 #define O_TRUNC 01000
 #define S_IFMT 00170000
 #define S_IFSOCK 0140000
@@ -359,6 +362,22 @@ int BPF_PROG(hp_sb_free, struct super_block *sb)
 	return 0;
 }
 
+/*
+ * Overlayfs opens the files of its layers itself: as backing files of the
+ * overlay files the user opened, which were checked already, and for copy-up.
+ * Its layers are private mounts, in no namespace, so not reachable by path.
+ * clone_private_mount() is only used by overlayfs; kern_mount() also makes
+ * internal mounts (shmem...), but of SB_KERNMOUNT superblocks.
+ */
+static __always_inline bool on_overlay_layer(struct file *file)
+{
+	struct vfsmount *vfs = file->f_path.mnt;
+	struct mount *mnt = (void *)vfs - bpf_core_field_offset(struct mount, mnt);
+
+	return BPF_CORE_READ(mnt, mnt_ns) == MNT_NS_INTERNAL &&
+	       !(BPF_CORE_READ(vfs, mnt_sb, s_flags) & SB_KERNMOUNT);
+}
+
 SEC("lsm/file_open")
 int BPF_PROG(hp_file_open, struct file *file, int ret)
 {
@@ -367,6 +386,8 @@ int BPF_PROG(hp_file_open, struct file *file, int ret)
 	if (ret)
 		return ret;
 	if (!(file->f_mode & FMODE_WRITE) && !(file->f_flags & O_TRUNC))
+		return 0;
+	if (on_overlay_layer(file))
 		return 0;
 	if (!is_member())
 		return 0;

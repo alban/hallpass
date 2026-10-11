@@ -229,7 +229,7 @@ func (l *LSM) Sync(rules []Rule, procs []ProcRule) error {
 		if exp == 0 {
 			continue
 		}
-		for _, lc := range locate(mounts, r.Path, r.Tree) {
+		for _, lc := range locate(mounts, r.Path, r.Tree, mountID(r.Path)) {
 			k, ok := l.node(nodes, lc)
 			if !ok {
 				continue

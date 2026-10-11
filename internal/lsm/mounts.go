@@ -11,10 +11,13 @@ import (
 	"path"
 	"strconv"
 	"strings"
+
+	"golang.org/x/sys/unix"
 )
 
 // mount is one line of /proc/<pid>/mountinfo.
 type mount struct {
+	id    uint64
 	dev   uint32 // kernel encoding of the superblock's s_dev: major<<20 | minor
 	root  string // directory of the filesystem mounted here
 	point string // mount point
@@ -54,7 +57,12 @@ func parseMounts(r io.Reader) ([]mount, error) {
 		if err1 != nil || err2 != nil {
 			return nil, fmt.Errorf("mountinfo: bad device %q", f[2])
 		}
+		id, err := strconv.ParseUint(f[0], 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("mountinfo: bad mount id %q", f[0])
+		}
 		out = append(out, mount{
+			id:    id,
 			dev:   uint32(ma<<20 | mi),
 			root:  unescape(f[3]),
 			point: unescape(f[4]),
@@ -82,12 +90,43 @@ func unescape(s string) string {
 	return b.String()
 }
 
-// locate translates the absolute, cleaned host path p. The first result is
-// the filesystem p is on. For a tree rule, it is followed by the roots of the
-// filesystems mounted below p, which the rule covers too.
-func locate(mounts []mount, p string, tree bool) []loc {
+// mountID returns the id of the mount the path p resolves to, or of its
+// closest existing ancestor; 0 if unknown.
+func mountID(p string) uint64 {
+	for {
+		var st unix.Statx_t
+		err := unix.Statx(unix.AT_FDCWD, p, unix.AT_SYMLINK_NOFOLLOW, unix.STATX_MNT_ID, &st)
+		if err == nil && st.Mask&unix.STATX_MNT_ID != 0 {
+			return st.Mnt_id
+		}
+		if err == nil || p == "/" {
+			return 0
+		}
+		p = path.Dir(p)
+	}
+}
+
+// locate translates the absolute, cleaned host path p, on the mount with the
+// given id. The first result is the filesystem p is on. For a tree rule, it is
+// followed by the roots of the filesystems mounted below p, which the rule
+// covers too.
+//
+// The mount id comes from the kernel's own path lookup: matching mount points
+// alone picks the wrong one when a mount is stacked over the root after a
+// chroot or pivot_root (vimto mounts 9p over its overlay root). Without it,
+// the longest mount point wins.
+func locate(mounts []mount, p string, tree bool, id uint64) []loc {
 	best := -1
 	for i, m := range mounts {
+		if id != 0 && m.id == id && under(p, m.point) {
+			best = i
+			break
+		}
+	}
+	for i, m := range mounts {
+		if best >= 0 && mounts[best].id == id {
+			break
+		}
 		if under(p, m.point) && (best < 0 || len(m.point) >= len(mounts[best].point)) {
 			best = i // the last of equal mount points is on top
 		}
