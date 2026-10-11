@@ -1,1 +1,5 @@
 /hallpass
+
+# Editor files (vim/gvim swap files, backups)
+.*.sw[a-p]
+*~
