@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/alban/hallpass/internal/config"
 	"github.com/alban/hallpass/internal/lsm"
 	"github.com/alban/hallpass/internal/policy"
 	"github.com/alban/hallpass/internal/privsep"
@@ -22,6 +23,7 @@ import (
 	"github.com/alban/hallpass/internal/tty"
 	"github.com/alban/hallpass/internal/ui"
 	"golang.org/x/sys/unix"
+	"golang.org/x/term"
 )
 
 const usageText = `Usage:
@@ -75,12 +77,17 @@ func runMain(argv []string) int {
 	fs.BoolVar(&allowUserns, "allow-userns", false, "let the sandbox create user/mount namespaces (weakens lite mode; always on in strict mode)")
 	fs.StringVar(&logPath, "log", "", "append one JSON line per mediated syscall to `file`")
 	fs.StringVar(&mode, "mode", "lite", "lite (seccomp only, no root needed) | strict (the kernel enforces the answers with BPF-LSM; root needed to load it)")
-	fs.StringVar(&escalate, "escalate", "auto", "strict mode, when not root: how to run the loader as root: "+strings.Join(privsep.Tools, " | "))
+	fs.StringVar(&escalate, "escalate", "", "strict mode, when not root: how to run the loader as root: "+strings.Join(privsep.Tools, " | ")+" (default: the saved choice, else ask on a terminal, else auto)")
 	if err := fs.Parse(argv); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
 		return 2
+	}
+
+	cfgDir, err := config.Dir()
+	if err != nil {
+		return fail(err)
 	}
 
 	var strict *lsm.LSM
@@ -96,7 +103,11 @@ func runMain(argv []string) int {
 		if err := lsm.Active(); err != nil {
 			return fail(err)
 		}
-		var err error
+		if os.Geteuid() != 0 {
+			if escalate, err = escalateTool(escalate, cfgDir); err != nil {
+				return fail(err)
+			}
+		}
 		if strict, err = privsep.Load(escalate, false); err != nil {
 			return fail(err)
 		}
@@ -143,6 +154,8 @@ func runMain(argv []string) int {
 		}
 	}
 
+	// The sandbox must not change what hallpass runs next time, outside it.
+	deny = append(deny, cfgDir)
 	engine := policy.New(home, workdir,
 		append(policy.DefaultAllows(), allow...),
 		append(policy.DefaultDenies(home), deny...))
@@ -259,6 +272,52 @@ func answerMain(argv []string) int {
 		return fail(err)
 	}
 	return 0
+}
+
+// escalateTool resolves --escalate: the flag, else the saved choice, else
+// ask on a terminal, else auto.
+func escalateTool(flagValue, cfgDir string) (string, error) {
+	if flagValue != "" && flagValue != "ask" {
+		if !privsep.Valid(flagValue) {
+			return "", fmt.Errorf("unknown --escalate %q (want one of %s)", flagValue, strings.Join(privsep.Tools, ", "))
+		}
+		return flagValue, nil
+	}
+	cfg, err := config.Load(cfgDir)
+	if err != nil {
+		return "", err
+	}
+	saved := cfg.Get("escalate")
+	if saved != "" && !privsep.Valid(saved) {
+		return "", fmt.Errorf("%s: unknown escalate value %q (want one of %s)", cfg.Path(), saved, strings.Join(privsep.Tools, ", "))
+	}
+	if flagValue == "" && saved != "" && saved != "ask" {
+		return saved, nil
+	}
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		if flagValue == "ask" || saved == "ask" {
+			return "", errors.New("--escalate=ask needs a terminal on stdin")
+		}
+		return "auto", nil
+	}
+	tool, remember, err := privsep.Choose(os.Stdin, os.Stderr)
+	if err != nil {
+		return "", err
+	}
+	switch {
+	case remember:
+		err = cfg.Set("escalate", tool)
+		if err == nil {
+			fmt.Fprintf(os.Stderr, "hallpass: saved in %s; change it with --escalate=ask\n", cfg.Path())
+		}
+	case saved != "" && saved != "ask":
+		// "Ask next time" replaces the saved choice.
+		err = cfg.Set("escalate", "ask")
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "hallpass: saving the choice: %v\n", err)
+	}
+	return tool, nil
 }
 
 func fail(err error) int {

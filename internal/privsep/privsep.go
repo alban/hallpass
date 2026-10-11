@@ -37,8 +37,73 @@ const HelperArg = "--internal-load"
 // maxFDs bounds the fds received: the maps and one link per program.
 const maxFDs = 64
 
-// Tools lists the accepted --escalate values.
-var Tools = []string{"auto", "pkexec", "sudo", "run0", "doas", "su", "manual", "none"}
+// Tools lists the accepted --escalate values. "ask" is resolved by Choose
+// before Load.
+var Tools = []string{"auto", "ask", "pkexec", "sudo", "run0", "doas", "su", "manual", "none"}
+
+// Valid reports whether tool is one of Tools.
+func Valid(tool string) bool {
+	for _, t := range Tools {
+		if t == tool {
+			return true
+		}
+	}
+	return false
+}
+
+// Choose asks the user which tool to use among those installed, and whether
+// to use it next time without asking. Enter picks the "auto" tool.
+func Choose(in io.Reader, out io.Writer) (tool string, remember bool, err error) {
+	var choices []string
+	for _, t := range []string{"pkexec", "sudo", "run0", "doas", "su"} {
+		if _, err := exec.LookPath(t); err == nil {
+			choices = append(choices, t)
+		}
+	}
+	choices = append(choices, "manual")
+	def := pickTool()
+	if def == "" {
+		def = "manual"
+	}
+	fmt.Fprintln(out, "hallpass: strict mode needs root to load its BPF programs. Run the loader with:")
+	defN := 0
+	for i, t := range choices {
+		mark := ""
+		if t == def {
+			mark, defN = " (default)", i+1
+		}
+		fmt.Fprintf(out, "  %d) %s%s\n", i+1, t, mark)
+	}
+	r := bufio.NewReader(in)
+	for tool == "" {
+		fmt.Fprintf(out, "Choice [%d]: ", defN)
+		line, err := r.ReadString('\n')
+		if err != nil {
+			return "", false, fmt.Errorf("reading the choice: %w", err)
+		}
+		line = strings.TrimSpace(line)
+		if line == "" {
+			tool = def
+			break
+		}
+		if n, err := strconv.Atoi(line); err == nil && n >= 1 && n <= len(choices) {
+			tool = choices[n-1]
+		} else {
+			for _, t := range choices {
+				if t == line {
+					tool = t
+				}
+			}
+		}
+	}
+	fmt.Fprintf(out, "Use %s next time without asking? [y/N]: ", tool)
+	line, err := r.ReadString('\n')
+	if err != nil {
+		return "", false, fmt.Errorf("reading the answer: %w", err)
+	}
+	line = strings.ToLower(strings.TrimSpace(line))
+	return tool, line == "y" || line == "yes", nil
+}
 
 // Load returns strict mode's programs, loaded and attached. As root they
 // are loaded in this process; otherwise through a helper started with tool.

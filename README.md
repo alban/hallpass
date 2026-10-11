@@ -64,7 +64,8 @@ hallpass [flags] [--] [command [args...]]     # default command: $SHELL
       --log FILE           append one JSON line per mediated syscall to FILE
       --mode MODE          lite (default, no root) | strict (BPF-LSM enforcement)
       --escalate TOOL      strict mode as a regular user: how to run the loader as root:
-                           auto (default) | pkexec | sudo | run0 | doas | su | manual | none
+                           auto | ask | pkexec | sudo | run0 | doas | su | manual | none
+                           (default: saved choice, else ask on a terminal, else auto)
 ```
 
 ### Strict mode
@@ -75,7 +76,7 @@ Run hallpass as your user; only loading the BPF programs needs root:
 hallpass --mode=strict -- copilot
 ```
 
-hallpass starts a short-lived copy of itself as root (`--escalate`: `auto` picks pkexec in a graphical session, else sudo, run0 or doas; `manual` prints the command for you to run as root and waits for Enter). The helper checks it was started for a hallpass of the invoking user, loads and attaches the programs, hands their file descriptors back to the supervisor and exits. The supervisor makes itself non-dumpable, and the LSM denies signals from the sandbox to it.
+hallpass starts a short-lived copy of itself as root (`--escalate`: `auto` picks pkexec in a graphical session, else sudo, run0 or doas; `manual` prints the command for you to run as root and waits for Enter). Without `--escalate`, hallpass uses the choice saved in `~/.config/hallpass/config` (`escalate = sudo`), or else asks on the terminal which tool to use and whether to remember it; `--escalate=ask` asks again. The sandbox can never write `~/.config/hallpass`. The helper checks it was started for a hallpass of the invoking user, loads and attaches the programs, hands their file descriptors back to the supervisor and exits. The supervisor makes itself non-dumpable, and the LSM denies signals from the sandbox to it.
 
 See [docs/usage.md](docs/usage.md).
 

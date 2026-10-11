@@ -6,7 +6,9 @@ package privsep
 import (
 	"bytes"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -91,6 +93,37 @@ func TestManual(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), `'/bin/hallpass' '--internal-load' '1' '2'`) || !strings.Contains(out.String(), "nothing received yet") {
 		t.Errorf("unexpected output:\n%s", out.String())
+	}
+}
+
+func TestChoose(t *testing.T) {
+	bin := t.TempDir()
+	for _, n := range []string{"sudo", "doas"} {
+		if err := os.WriteFile(filepath.Join(bin, n), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", bin)
+	t.Setenv("DISPLAY", "")
+	t.Setenv("WAYLAND_DISPLAY", "")
+	for _, tc := range []struct {
+		in       string
+		tool     string
+		remember bool
+	}{
+		{"\n\n", "sudo", false},           // default
+		{"2\ny\n", "doas", true},          // by number
+		{"manual\nYES\n", "manual", true}, // by name
+		{"9\nbogus\n3\nn\n", "manual", false},
+	} {
+		var out bytes.Buffer
+		tool, remember, err := Choose(strings.NewReader(tc.in), &out)
+		if err != nil || tool != tc.tool || remember != tc.remember {
+			t.Errorf("%q: got %s %v %v, want %s %v\n%s", tc.in, tool, remember, err, tc.tool, tc.remember, out.String())
+		}
+	}
+	if _, _, err := Choose(strings.NewReader(""), io.Discard); err == nil {
+		t.Error("no error on EOF")
 	}
 }
 
