@@ -70,7 +70,7 @@ hallpass [flags] [--] [command [args...]]     # default command: $SHELL
 hallpass policy [flags]                       # print the rules these flags give, then exit
 ```
 
-By default, `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.config/gh`, `~/.kube`, `~/.docker`, `~/.netrc`, `~/.git-credentials` and `~/.config/hallpass` are denied; the project, `/tmp`, `/var/tmp`, `/dev/shm` and the usual `/dev` nodes are writable; anything else is asked. Press Ctrl-] inside a session to see its current rules, including answers given so far; any key closes the overlay.
+By default, `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.config/gh`, `~/.kube`, `~/.docker`, `~/.netrc`, `~/.git-credentials` and `~/.config/hallpass` are denied; the project, a private `$TMPDIR` for the session (removed at exit if empty) and the usual `/dev` nodes are writable; anything else is asked, including the shared `/tmp`, `/var/tmp` and `/dev/shm` (answer "always" to allow them). Press Ctrl-] inside a session to see its current rules, including answers given so far; any key closes the overlay.
 
 ### Strict mode
 

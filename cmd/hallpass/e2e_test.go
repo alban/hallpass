@@ -36,7 +36,7 @@ type env struct {
 	root, home, proj, runtime string
 }
 
-// newEnv creates a fake $HOME outside /tmp (which the default policy allows).
+// newEnv creates a fake $HOME outside /tmp, like a real one.
 func newEnv(t *testing.T) env {
 	t.Helper()
 	cache, err := os.UserCacheDir()
@@ -90,6 +90,10 @@ check mvout    sh -c 'echo x > m && mv m "$HOME/m"'
 check mvin     mv "$HOME/.ssh/id" ./id
 check userns   unshare -U true
 check tmp      sh -c 'echo x > /tmp/hallpass-e2e-$$ && rm /tmp/hallpass-e2e-$$'
+check shm      sh -c 'echo x > /dev/shm/hallpass-e2e-$$ && rm /dev/shm/hallpass-e2e-$$'
+check tmpdir   sh -c 'echo x > "$TMPDIR/f" && rm "$TMPDIR/f"'
+check mktemp   sh -c 'rm "$(mktemp)"'
+echo "TMPDIR=$TMPDIR"
 exit 7
 `
 	c := e.cmd(script, "--ask=deny")
@@ -107,12 +111,17 @@ exit 7
 		"workdir": "allowed", "home": "denied", "ssh": "denied", "sshnew": "denied",
 		"rmssh": "denied", "mkdir": "denied", "symlink": "denied", "dotdot": "denied",
 		"hardlink": "denied", "mvout": "denied", "mvin": "denied", "userns": "denied",
-		"tmp": "allowed",
+		"tmp": "denied", "shm": "denied", "tmpdir": "allowed", "mktemp": "allowed",
 	}
 	for k, v := range want {
 		if got[k] != v {
 			t.Errorf("%s: got %q, want %q", k, got[k], v)
 		}
+	}
+	if d := got["TMPDIR"]; !strings.Contains(d, "/hallpass-") {
+		t.Errorf("TMPDIR = %q, want a per-session hallpass-* dir", d)
+	} else if _, err := os.Lstat(d); err == nil {
+		t.Errorf("empty TMPDIR %s not removed at exit", d)
 	}
 	if b, _ := os.ReadFile(e.home + "/.ssh/id"); string(b) != "secret\n" {
 		t.Errorf("~/.ssh/id modified: %q", b)

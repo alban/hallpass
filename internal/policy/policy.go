@@ -42,6 +42,7 @@ func (d Decision) String() string {
 type Engine struct {
 	home    string
 	workdir string
+	tmpdir  string
 	allow   []string
 	deny    []string
 
@@ -82,6 +83,13 @@ func New(home, workdir string, allow, deny []string) *Engine {
 	}
 }
 
+// SetTmpdir makes dir, the session's $TMPDIR, writable without asking. Call
+// it before the engine is shared.
+func (e *Engine) SetTmpdir(dir string) {
+	e.tmpdir = canon(dir)
+	e.allow = append(e.allow, e.tmpdir)
+}
+
 // DefaultDenies returns the built-in secret locations under home.
 func DefaultDenies(home string) []string {
 	names := []string{".ssh", ".gnupg", ".aws", ".azure", ".config/gh", ".kube", ".docker", ".netrc", ".git-credentials"}
@@ -92,12 +100,11 @@ func DefaultDenies(home string) []string {
 	return out
 }
 
-// DefaultAllows returns locations that ordinary programs write to constantly
-// and that are not useful to protect: scratch directories and terminal/null
-// devices.
+// DefaultAllows returns devices that ordinary programs write to constantly
+// and that hold nothing to protect. Shared scratch space (/tmp, /var/tmp,
+// /dev/shm) is not in it: other programs read it too, so the user decides.
 func DefaultAllows() []string {
 	return []string{
-		"/tmp", "/var/tmp", "/dev/shm",
 		"/dev/null", "/dev/zero", "/dev/full", "/dev/random", "/dev/urandom",
 		"/dev/tty", "/dev/ptmx", "/dev/pts",
 	}
@@ -291,6 +298,9 @@ func (e *Engine) Summary() (deny, allow []string) {
 		}
 		if r.Path == e.workdir {
 			s += " (project)"
+		}
+		if r.Path == e.tmpdir {
+			s += " ($TMPDIR, removed at exit if empty)"
 		}
 		if r.Deny {
 			deny = append(deny, s)

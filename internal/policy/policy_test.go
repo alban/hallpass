@@ -11,7 +11,9 @@ import (
 
 func newTestEngine() *Engine {
 	home := "/home/u"
-	return New(home, "/home/u/src/proj", append(DefaultAllows(), "/home/u/.cache/go-build"), DefaultDenies(home))
+	e := New(home, "/home/u/src/proj", append(DefaultAllows(), "/home/u/.cache/go-build"), DefaultDenies(home))
+	e.SetTmpdir("/home/u/tmp/hallpass-1")
+	return e
 }
 
 func TestEval(t *testing.T) {
@@ -24,7 +26,9 @@ func TestEval(t *testing.T) {
 		{"/home/u/src/proj", Allow},
 		{"/home/u/src/projX/main.go", Ask}, // prefix match is per component
 		{"/home/u/.cache/go-build/ab/x", Allow},
-		{"/tmp/x", Allow},
+		{"/tmp/x", Ask},
+		{"/dev/shm/x", Ask},
+		{"/home/u/tmp/hallpass-1/x", Allow},
 		{"/dev/null", Allow},
 		{"/home/u/.ssh/authorized_keys", Deny},
 		{"/home/u/.ssh", Deny},
@@ -163,7 +167,7 @@ func TestRules(t *testing.T) {
 	}
 
 	d := strings.Join(e.Describe(), "\n")
-	for _, want := range []string{"  ~/.ssh\n", "  ~/src/proj (project)\n", "  ~/.bashrc (this path only)\n", "  /tmp\n", "~/.npm (until ", "/proc/<pid>/mem of node processes\nWritable"} {
+	for _, want := range []string{"  ~/.ssh\n", "  ~/src/proj (project)\n", "  ~/.bashrc (this path only)\n", "  /dev/null\n", "  ~/tmp/hallpass-1 ($TMPDIR, removed at exit if empty)\n", "~/.npm (until ", "/proc/<pid>/mem of node processes\nWritable"} {
 		if !strings.Contains(d, want) {
 			t.Errorf("Describe lacks %q:\n%s", want, d)
 		}

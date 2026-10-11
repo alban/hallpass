@@ -139,11 +139,24 @@ func runMain(argv []string, printPolicy bool) int {
 		append(policy.DefaultAllows(), allow...),
 		append(policy.DefaultDenies(home), deny...))
 	if printPolicy {
+		engine.SetTmpdir(filepath.Join(os.TempDir(), "hallpass-*"))
 		for _, l := range engine.Describe() {
 			fmt.Println(l)
 		}
 		return 0
 	}
+	// A private $TMPDIR, so tools that honour it (mktemp, compilers, ...)
+	// work without asking and without sharing /tmp.
+	tmpdir, err := os.MkdirTemp("", "hallpass-")
+	if err != nil {
+		return fail(err)
+	}
+	defer func() {
+		if err := os.Remove(tmpdir); err != nil && !errors.Is(err, os.ErrNotExist) {
+			fmt.Fprintf(os.Stderr, "hallpass: kept %s: not empty\n", tmpdir)
+		}
+	}()
+	engine.SetTmpdir(tmpdir)
 
 	var strict *lsm.LSM
 	switch mode {
@@ -199,6 +212,7 @@ func runMain(argv []string, printPolicy bool) int {
 		Log:         logw,
 		TTY:         pty,
 		LSM:         strict,
+		Env:         []string{"TMPDIR=" + tmpdir},
 	})
 	if pty != nil {
 		pty.Close() // restore the terminal before printing anything

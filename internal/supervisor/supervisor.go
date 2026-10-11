@@ -41,6 +41,8 @@ type Config struct {
 	// LSM, when set, is strict mode: the kernel enforces the policy on the
 	// sandbox, and the supervisor keeps its rules in sync with the answers.
 	LSM *lsm.LSM
+	// Env is added to the sandbox's environment (KEY=value).
+	Env []string
 }
 
 // onceTTL is how long the kernel allows a path after "allow once": long
@@ -78,6 +80,7 @@ func Run(cfg Config) (int, error) {
 		childEnvFD+"=3",
 		"HALLPASS=1",
 	)
+	cmd.Env = append(cmd.Env, cfg.Env...)
 	if cfg.AllowUserns {
 		cmd.Env = append(cmd.Env, childEnvUserns+"=1")
 	}
