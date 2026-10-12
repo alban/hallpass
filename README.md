@@ -2,6 +2,8 @@
 
 # hallpass
 
+**Documentation: [alban.github.io/hallpass](https://alban.github.io/hallpass/)**
+
 **Run an AI coding agent in your shell, and get asked before it writes outside your project.**
 
 ```console
