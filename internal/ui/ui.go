@@ -84,8 +84,8 @@ type Request struct {
 	Scope string
 	// Never describes what AnswerNever covers.
 	Never string
-	// Warn, when set, flags the path as a known secret store (e.g. "SSH
-	// keys"); the prompt shows it in red.
+	// Warn, when set, is a warning about the request (e.g. "SSH keys —
+	// secret store"); the prompt shows it in red.
 	Warn    string
 	Waiting int // other requests queued behind this one
 	// Cmdline and Parents (command names, nearest first) describe the

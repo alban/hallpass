@@ -239,3 +239,68 @@ check out2 sh -c "echo $v > /proc/$PPID/oom_score_adj"
 		t.Logf("output:\n%s", out.String())
 	}
 }
+
+// TestUnknownPath checks that a write whose path hallpass cannot read is
+// asked about, flagged, with only "once", "deny" and "never" offered.
+func TestUnknownPath(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("needs python3")
+	}
+	e := newEnv(t)
+	// openat with an unmapped path pointer: the kernel fails it with
+	// EFAULT once hallpass lets it through.
+	script := `python3 -c '
+import ctypes
+libc = ctypes.CDLL(None, use_errno=True)
+for i in range(3):
+    libc.openat(-100, ctypes.c_void_p(1), 0o101, 0o644)
+    print("errno=%d" % ctypes.get_errno(), flush=True)
+'`
+	c := e.cmd(script, "--ask=answer", "--timeout=20s")
+	var out strings.Builder
+	c.Stdout, c.Stderr = &out, &out
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	sock := fmt.Sprintf("%s/hallpass/%d.sock", e.runtime, c.Process.Pid)
+	var conn net.Conn
+	var err error
+	for i := 0; i < 100; i++ {
+		if conn, err = net.Dial("unix", sock); err == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if err != nil {
+		c.Process.Kill()
+		t.Fatalf("dial %s: %v", sock, err)
+	}
+	defer conn.Close()
+	rd := bufio.NewReader(conn)
+	for _, reply := range []string{"once", "never"} {
+		line, err := rd.ReadString('\n')
+		if err != nil {
+			t.Fatalf("read prompt: %v\n%s", err, out.String())
+		}
+		var req struct {
+			ID    uint64
+			Path  string
+			Scope string
+			Warn  string
+		}
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "PROMPT ")), &req); err != nil {
+			t.Fatalf("bad prompt %q: %v", line, err)
+		}
+		if req.Scope != "" || !strings.HasPrefix(req.Warn, "Unknown path") {
+			t.Errorf("prompt %+v: want no scope and an unknown-path warning", req)
+		}
+		fmt.Fprintf(conn, "%d %s\n", req.ID, reply)
+	}
+	if err := c.Wait(); err != nil {
+		t.Fatalf("hallpass: %v\n%s", err, out.String())
+	}
+	// once: EFAULT from the kernel; never: EACCES, then EACCES unasked.
+	if want := "errno=14\nerrno=13\nerrno=13\n"; !strings.HasSuffix(out.String(), want) {
+		t.Errorf("output %q, want %q", out.String(), want)
+	}
+}

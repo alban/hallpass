@@ -39,7 +39,7 @@ func (a *Terminal) Ask(r Request) Answer {
 	}
 	lines := []string{head, " " + sanitize(r.Path)}
 	if r.Warn != "" {
-		lines = append(lines, " "+redBold("[!] "+sanitize(r.Warn)+" — secret store"))
+		lines = append(lines, " "+redBold("[!] "+sanitize(r.Warn)))
 	}
 	if o := r.Origin(); o != "" {
 		lines = append(lines, " by: "+o)

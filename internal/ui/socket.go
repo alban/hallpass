@@ -251,7 +251,7 @@ func RunClient(path string, in *os.File, out *os.File) error {
 		r.Exe, r.Path, r.Scope, r.Never, r.Warn = sanitize(r.Exe), sanitize(r.Path), sanitize(r.Scope), sanitize(r.Never), sanitize(r.Warn)
 		fmt.Fprintf(out, "\n%s (pid %d) wants to %s:\n  %s\n", baseName(r.Exe), r.PID, r.Op, r.Path)
 		if r.Warn != "" {
-			fmt.Fprintf(out, "  [!] %s — secret store\n", r.Warn)
+			fmt.Fprintf(out, "  [!] %s\n", r.Warn)
 		}
 		if o := (Request{Cmdline: r.Cmdline, Parents: r.Parents}).Origin(); o != "" {
 			fmt.Fprintf(out, "  by: %s\n", o)

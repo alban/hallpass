@@ -255,6 +255,9 @@ type session struct {
 	once     []lsm.Rule
 	onceProc []lsm.ProcRule
 
+	// neverUnknown: the user answered "never" to an unreadable path.
+	neverUnknown atomic.Bool
+
 	menuOpen atomic.Bool
 }
 
@@ -441,11 +444,18 @@ func (s *session) handle(n seccomp.Notif) {
 		special string
 	}
 	var targets []target
+	var ask []subject
 	for i, pa := range rule.Paths {
 		raw, err := procfs.ReadCString(n.PID, n.Args[pa.Path])
 		if err != nil {
-			s.deny(n, rule, "", "unreadable path: "+err.Error())
-			return
+			if s.cfg.LSM != nil {
+				// The kernel's rules decide on the real inode.
+				s.log(logEntry{PID: n.PID, Syscall: rule.Name, Decision: "continue", Reason: "lsm: unreadable path: " + err.Error()})
+				_ = s.listener.Continue(n.ID)
+				return
+			}
+			ask = append(ask, s.unknownSubject(n.ID, err))
+			continue
 		}
 		dirfd := int64(procfs.AtFDCWD)
 		if pa.DirFD >= 0 {
@@ -465,7 +475,6 @@ func (s *session) handle(n seccomp.Notif) {
 		return
 	}
 
-	var ask []subject
 	exe := ""
 	for _, t := range targets {
 		if t.special != "" {
@@ -497,6 +506,7 @@ func (s *session) handle(n seccomp.Notif) {
 	}
 
 	var cmdline, parents []string
+	unknown := false
 	for _, sub := range ask {
 		if exe == "" {
 			exe = procfs.Exe(n.PID)
@@ -506,13 +516,22 @@ func (s *session) handle(n seccomp.Notif) {
 		sub.req.Exe, sub.req.PID, sub.req.Op = exe, n.PID, rule.Op
 		sub.req.Cmdline, sub.req.Parents = cmdline, parents
 		if !s.ask(sub) {
-			s.deny(n, rule, sub.req.Path, "user")
+			if sub.unknown {
+				s.deny(n, rule, "", "user: unknown path")
+			} else {
+				s.deny(n, rule, sub.req.Path, "user")
+			}
 			return
+		}
+		if sub.unknown {
+			unknown = true
 		}
 	}
 
 	reason := "policy"
-	if len(ask) > 0 {
+	if unknown {
+		reason = "user: unknown path"
+	} else if len(ask) > 0 {
 		reason = "user"
 	}
 	path := ""
@@ -557,14 +576,20 @@ type subject struct {
 	grant func(ttl time.Duration) // covers req.Scope; 0: rest of the session
 	never func()
 	once  func() // strict mode: let the kernel allow it this time
+	// unknown: the path could not be read (see unknownSubject).
+	unknown bool
 }
 
 func (s *session) fileSubject(path string) subject {
 	p := s.cfg.Policy
 	folder := p.FolderFor(path)
+	warn := p.Warn(path)
+	if warn != "" {
+		warn += " — secret store"
+	}
 	return subject{
 		key:   path,
-		req:   ui.Request{Path: path, Scope: folder, Never: "this path", Warn: p.Warn(path)},
+		req:   ui.Request{Path: path, Scope: folder, Never: "this path", Warn: warn},
 		eval:  func() policy.Decision { return p.Eval(path) },
 		grant: func(ttl time.Duration) { p.AllowFolderFor(folder, ttl) },
 		never: func() { p.DenyPath(path) },
@@ -582,6 +607,32 @@ func (s *session) procSubject(path string, k policy.ProcKey) subject {
 		grant: func(ttl time.Duration) { p.AllowProcFor(k, ttl) },
 		never: func() { p.DenyProc(k) },
 		once:  func() { s.allowProcOnce(k) },
+	}
+}
+
+// unknownSubject asks about a syscall whose path hallpass could not read.
+// Only lite mode gets here. Allowing it skips every rule, including the
+// denies, and a process can make its path unreadable on purpose: so only
+// "once" is offered, never a lasting grant, and the prompt is not shared
+// with other syscalls.
+func (s *session) unknownSubject(id uint64, err error) subject {
+	return subject{
+		key: fmt.Sprintf("\x00unknown\x00%d", id),
+		req: ui.Request{
+			Path:  "(unknown path)",
+			Never: "all unknown paths",
+			Warn:  "Unknown path — hallpass could not read it (" + err.Error() + ")",
+		},
+		eval: func() policy.Decision {
+			if s.neverUnknown.Load() {
+				return policy.Deny
+			}
+			return policy.Ask
+		},
+		grant:   func(time.Duration) {},
+		never:   func() { s.neverUnknown.Store(true) },
+		once:    func() {},
+		unknown: true,
 	}
 }
 
