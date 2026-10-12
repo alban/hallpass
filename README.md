@@ -16,7 +16,7 @@ $ hallpass -allow ~/.copilot -allow ~/.cache/copilot -- copilot
 
 Agents keep their own state (sessions, logs, caches) outside the project: the `-allow` flags let copilot write it without asking. They are optional: without them, hallpass asks you when copilot writes there, which is a good way to see what an agent touches. Other agents (claude, codex, gemini, agy, aider, ...) work the same, with their own directories; plain `hallpass` starts a shell.
 
-![hallpass denying a shell, then a Makefile run by copilot, writing to ~/.bashrc](demos/hallpass.gif)
+![hallpass denying a write to ~/.bashrc from a shell, then denying copilot's install step from copying a binary into ~/.local/bin](demos/hallpass.gif)
 
 Everything the agent starts (shells, compilers, `git`, `npm`, scripts) inherits the sandbox. Writes inside the project directory go through without asking. Writes anywhere else make hallpass pause the process and ask you in a bar drawn over the bottom of your terminal, like a tmux status line:
 
@@ -45,9 +45,9 @@ Processes of the sandbox may write each other's `/proc/<pid>` files (agents tune
 
 The agent runs on a pseudo-terminal that hallpass relays, so the agent cannot see or answer the question. Output from the agent and its background jobs keeps showing above the bar, and when you answer, your terminal ends up exactly as if the bar had never been there. Keys typed in the first half second are ignored, so typing meant for the agent does not answer by accident. Without a terminal, hallpass asks with a desktop notification instead.
 
-Writes to secret stores (`~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.kube`, `~/.docker`, `~/.config/gh`) are always denied, without asking.
+Writes to secret stores (`~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.config/gh`, `~/.kube`, `~/.docker`, `~/.netrc`, `~/.git-credentials`) are asked about like any other write, but the prompt is flagged in red (for example "SSH keys — secret store"), so allowing one is a deliberate choice rather than a reflex. They are not denied outright: writing them is sometimes legitimate (`ssh-keygen`, `gh auth login`, `aws configure`), and a silent deny would hide the attempt instead of surfacing it.
 
-> **Status: proof of concept.** Milestone 1 is not a security boundary yet; see [Limitations](#limitations).
+> **Status: proof of concept.** Lite mode is best effort, not a security boundary; strict mode (BPF-LSM) enforces in the kernel. See [Limitations](#limitations).
 
 ## Why
 
@@ -84,7 +84,7 @@ hallpass [flags] [--] [command [args...]]     # default command: $SHELL
 hallpass policy [flags]                       # print the rules these flags give, then exit
 ```
 
-By default, `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.config/gh`, `~/.kube`, `~/.docker`, `~/.netrc`, `~/.git-credentials` and `~/.config/hallpass` are denied; the project, a private `$TMPDIR` for the session (removed at exit if empty) and the usual `/dev` nodes are writable; anything else is asked, including the shared `/tmp`, `/var/tmp` and `/dev/shm` (answer "always" to allow them). Press Ctrl-] inside a session to see its current rules, including answers given so far; any key closes the overlay.
+By default, only `~/.config/hallpass` is denied (the sandbox must not change what hallpass runs next time); the project, a private `$TMPDIR` for the session (removed at exit if empty) and the usual `/dev` nodes are writable; anything else is asked, including the shared `/tmp`, `/var/tmp` and `/dev/shm` (answer "always" to allow them). Writes to known secret stores (`~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.config/gh`, `~/.kube`, `~/.docker`, `~/.netrc`, `~/.git-credentials`) are asked too, with a red warning label. Press Ctrl-] inside a session to see its current rules, including answers given so far; any key closes the overlay.
 
 ### Strict mode
 
@@ -130,13 +130,13 @@ go build ./cmd/hallpass
 
 ## Limitations
 
-Milestone 1 (lite mode) is best effort:
+Lite mode is best effort:
 
 - Only writes are mediated (write-intent `open`, create, delete, rename, link, `truncate`, `mknod`). Reading secrets is not blocked in lite mode.
 - Allowed syscalls continue with `SECCOMP_USER_NOTIF_FLAG_CONTINUE`, so a malicious multi-threaded process can change the path between the check and the kernel acting on it (TOCTOU). Strict mode (BPF-LSM) closes this.
 - Pre-existing hard links to protected files are not detected.
 - `chmod`, `chown`, extended attributes and timestamps are not mediated yet.
-- Network and `execve` policy are planned for later milestones.
+- Network and `execve` policy are not implemented yet.
 
 Strict mode:
 

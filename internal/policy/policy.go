@@ -2,16 +2,21 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package policy decides whether a resolved path access is allowed, denied, or
-// needs to be asked. Precedence (milestone 1):
+// needs to be asked. Precedence:
 //
-//  1. deny list (secrets, --deny) and paths denied during this session
+//  1. deny list (--deny) and paths denied during this session
 //  2. workdir, allow list (--allow, built-in defaults) and folders allowed
 //     during this session
 //  3. otherwise Ask
+//
+// Known secret stores (~/.ssh, ~/.aws, ...) are not denied outright: they are
+// asked about like anything else, but the prompt is flagged (see Warn) so an
+// "allow" is a deliberate choice rather than a reflex.
 package policy
 
 import (
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -45,11 +50,19 @@ type Engine struct {
 	tmpdir  string
 	allow   []string
 	deny    []string
+	warn    []warnLoc
 
 	mu            sync.Mutex
 	sessionAllow  []grant             // folder prefixes ("Allow folder")
 	sessionDenied map[string]struct{} // exact paths ("Never")
 	proc          map[ProcKey]procRule
+}
+
+// warnLoc is a sensitive location: a write under path is still asked about,
+// but the prompt is flagged with label (e.g. "SSH keys") in red.
+type warnLoc struct {
+	path  string
+	label string
 }
 
 // ProcKey identifies a kind of write to another process's /proc directory:
@@ -73,11 +86,13 @@ type grant struct {
 // New builds an engine. All paths must be absolute; they are cleaned and, when
 // they exist, symlink-resolved so they compare equal to resolved targets.
 func New(home, workdir string, allow, deny []string) *Engine {
+	home = canon(home)
 	return &Engine{
-		home:          canon(home),
+		home:          home,
 		workdir:       canon(workdir),
 		allow:         canonAll(allow),
 		deny:          canonAll(deny),
+		warn:          sensitiveLocations(home),
 		sessionDenied: map[string]struct{}{},
 		proc:          map[ProcKey]procRule{},
 	}
@@ -90,14 +105,44 @@ func (e *Engine) SetTmpdir(dir string) {
 	e.allow = append(e.allow, e.tmpdir)
 }
 
-// DefaultDenies returns the built-in secret locations under home.
-func DefaultDenies(home string) []string {
-	names := []string{".ssh", ".gnupg", ".aws", ".azure", ".config/gh", ".kube", ".docker", ".netrc", ".git-credentials"}
-	out := make([]string, len(names))
-	for i, n := range names {
-		out[i] = filepath.Join(home, n)
+// sensitiveLabels maps a location under home to a human name for its secrets.
+// Writes there are asked about like anywhere else, but the prompt is flagged
+// so an "allow" is a deliberate choice, not a reflex. They are not denied
+// outright: writing them is sometimes legitimate (ssh-keygen, gh auth login,
+// aws configure), and a silent deny would hide the attempt instead of
+// surfacing it.
+var sensitiveLabels = map[string]string{
+	".ssh":             "SSH keys",
+	".gnupg":           "GnuPG keys",
+	".aws":             "AWS credentials",
+	".azure":           "Azure credentials",
+	".config/gh":       "GitHub CLI credentials",
+	".kube":            "Kubernetes credentials",
+	".docker":          "Docker credentials",
+	".netrc":           "network credentials",
+	".git-credentials": "Git credentials",
+}
+
+// sensitiveLocations resolves sensitiveLabels against home, sorted by path.
+func sensitiveLocations(home string) []warnLoc {
+	out := make([]warnLoc, 0, len(sensitiveLabels))
+	for name, label := range sensitiveLabels {
+		out = append(out, warnLoc{path: canon(filepath.Join(home, name)), label: label})
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].path < out[j].path })
 	return out
+}
+
+// Warn returns a short label when path is a known secret store (e.g. "SSH
+// keys"), to flag the prompt. It returns "" otherwise.
+func (e *Engine) Warn(path string) string {
+	path = filepath.Clean(path)
+	for _, w := range e.warn {
+		if under(path, w.path) {
+			return w.label
+		}
+	}
+	return ""
 }
 
 // DefaultAllows returns devices that ordinary programs write to constantly
@@ -277,17 +322,26 @@ func (e *Engine) Describe() []string {
 	for _, s := range allow {
 		out = append(out, "  "+s)
 	}
+	if len(e.warn) > 0 {
+		out = append(out, "Asked, and flagged as a secret store:")
+		for _, w := range e.warn {
+			out = append(out, "  "+e.short(w.path)+" ("+w.label+")")
+		}
+	}
 	return append(out, "Anything else is asked. A folder rule covers everything below it.")
+}
+
+// short renders p relative to home with a leading ~ when possible.
+func (e *Engine) short(p string) string {
+	if under(p, e.home) {
+		return "~" + strings.TrimPrefix(p, e.home)
+	}
+	return p
 }
 
 // Summary returns the denied and the allowed items, described for people.
 func (e *Engine) Summary() (deny, allow []string) {
-	short := func(p string) string {
-		if under(p, e.home) {
-			return "~" + strings.TrimPrefix(p, e.home)
-		}
-		return p
-	}
+	short := e.short
 	for _, r := range e.Rules() {
 		s := short(r.Path)
 		if !r.Tree {
@@ -361,6 +415,13 @@ func (e *Engine) FolderFor(path string) string {
 	for _, d := range e.deny {
 		if under(d, folder) {
 			// Offering it would look like it covers the secret.
+			return ""
+		}
+	}
+	for _, w := range e.warn {
+		if under(w.path, folder) && w.path != folder {
+			// A broad folder must not silently swallow a flagged secret
+			// store nested under it (e.g. ~/.config over ~/.config/gh).
 			return ""
 		}
 	}

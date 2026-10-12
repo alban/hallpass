@@ -29,6 +29,8 @@ func NewTerminal(t *tty.Term, timeout time.Duration) *Terminal {
 // bold highlights s in an overlay line, keeping the overlay's reverse video.
 func bold(s string) string { return "\x1b[1m" + s + "\x1b[22m" }
 
+func redBold(s string) string { return "\x1b[1;31m" + s + "\x1b[39m\x1b[22m" }
+
 // Ask shows the overlay and waits for a key.
 func (a *Terminal) Ask(r Request) Answer {
 	head := bold(fmt.Sprintf(" hallpass: %s (pid %d) wants to %s", sanitize(baseName(r.Exe)), r.PID, r.Op))
@@ -36,6 +38,9 @@ func (a *Terminal) Ask(r Request) Answer {
 		head += fmt.Sprintf("   (+%d waiting)", r.Waiting)
 	}
 	lines := []string{head, " " + sanitize(r.Path)}
+	if r.Warn != "" {
+		lines = append(lines, " "+redBold("[!] "+sanitize(r.Warn)+" — secret store"))
+	}
 	if o := r.Origin(); o != "" {
 		lines = append(lines, " by: "+o)
 	}

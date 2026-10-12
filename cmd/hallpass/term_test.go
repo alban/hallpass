@@ -162,6 +162,30 @@ func TestTerminalPrompt(t *testing.T) {
 	}
 }
 
+// A write to a known secret store is still asked about, but the prompt is
+// flagged with a red warning label.
+func TestTerminalPromptSecretWarning(t *testing.T) {
+	e := newEnv(t)
+	m, scr, c, done := runTerm(t, e, `echo x >> "$HOME/.ssh/id" 2>/dev/null || echo denied`)
+
+	waitFor(t, func() bool { return strings.Contains(scr.rawText(), "wants to write") }, "prompt")
+	time.Sleep(600 * time.Millisecond) // past the type-ahead guard
+	if got := scr.text(); !strings.Contains(got, "SSH keys") || !strings.Contains(got, "secret store") {
+		t.Errorf("overlay lacks the secret-store warning:\n%s", got)
+	}
+	if raw := scr.rawText(); !strings.Contains(raw, "\x1b[1;31m") {
+		t.Errorf("warning not rendered in red")
+	}
+	m.Write([]byte("d"))
+	if err := c.Wait(); err != nil {
+		t.Fatalf("hallpass: %v\n%s", err, scr.text())
+	}
+	<-done
+	if b, _ := os.ReadFile(e.home + "/.ssh/id"); string(b) != "secret\n" {
+		t.Errorf("~/.ssh/id modified despite deny: %q", b)
+	}
+}
+
 // Paths come from the agent: escape sequences in them must not reach the
 // terminal, or they could redraw the prompt.
 func TestTerminalPromptEscapes(t *testing.T) {

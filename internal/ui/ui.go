@@ -83,7 +83,10 @@ type Request struct {
 	// e.g. a folder; "" hides those choices.
 	Scope string
 	// Never describes what AnswerNever covers.
-	Never   string
+	Never string
+	// Warn, when set, flags the path as a known secret store (e.g. "SSH
+	// keys"); the prompt shows it in red.
+	Warn    string
 	Waiting int // other requests queued behind this one
 	// Cmdline and Parents (command names, nearest first) describe the
 	// process. Both come from the process itself: display only.

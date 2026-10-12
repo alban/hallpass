@@ -137,7 +137,7 @@ func runMain(argv []string, printPolicy bool) int {
 	deny = append(deny, cfgDir)
 	engine := policy.New(home, workdir,
 		append(policy.DefaultAllows(), allow...),
-		append(policy.DefaultDenies(home), deny...))
+		deny)
 	if printPolicy {
 		engine.SetTmpdir(filepath.Join(os.TempDir(), "hallpass-*"))
 		for _, l := range engine.Describe() {

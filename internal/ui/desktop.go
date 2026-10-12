@@ -100,6 +100,10 @@ func (d *Desktop) Ask(r Request) Answer {
 
 	body := fmt.Sprintf("<b>%s</b> (pid %d) wants to %s:\n%s",
 		html.EscapeString(sanitize(baseName(r.Exe))), r.PID, r.Op, html.EscapeString(sanitize(r.Path)))
+	if r.Warn != "" {
+		body += fmt.Sprintf("\n<b><span foreground=\"#cc0000\">[!] %s — secret store</span></b>",
+			html.EscapeString(sanitize(r.Warn)))
+	}
 	if o := r.Origin(); o != "" {
 		body += "\nby: " + html.EscapeString(o)
 	}

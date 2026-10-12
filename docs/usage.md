@@ -20,7 +20,7 @@ hallpass policy [flags]                       # print the rules these flags give
 
 ## Default policy
 
-By default, `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.config/gh`, `~/.kube`, `~/.docker`, `~/.netrc`, `~/.git-credentials` and `~/.config/hallpass` are denied; the project, a private `$TMPDIR` for the session (removed at exit if empty) and the usual `/dev` nodes are writable; anything else is asked, including the shared `/tmp`, `/var/tmp` and `/dev/shm` (answer "always" to allow them).
+By default, only `~/.config/hallpass` is denied (the sandbox must not change what hallpass runs next time); the project, a private `$TMPDIR` for the session (removed at exit if empty) and the usual `/dev` nodes are writable; anything else is asked, including the shared `/tmp`, `/var/tmp` and `/dev/shm` (answer "always" to allow them). Writes to known secret stores (`~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.config/gh`, `~/.kube`, `~/.docker`, `~/.netrc`, `~/.git-credentials`) are asked too, with a red warning label like "SSH keys — secret store".
 
 Press Ctrl-] inside a session to see its current rules, including answers given so far; any key closes the overlay.
 
@@ -87,13 +87,13 @@ go build ./cmd/hallpass
 
 ## Limitations
 
-Milestone 1 (lite mode) is best effort:
+Lite mode is best effort:
 
 - Only writes are mediated (write-intent `open`, create, delete, rename, link, `truncate`, `mknod`). Reading secrets is not blocked in lite mode.
 - Allowed syscalls continue with `SECCOMP_USER_NOTIF_FLAG_CONTINUE`, so a malicious multi-threaded process can change the path between the check and the kernel acting on it (TOCTOU). Strict mode (BPF-LSM) closes this.
 - Pre-existing hard links to protected files are not detected.
 - `chmod`, `chown`, extended attributes and timestamps are not mediated yet.
-- Network and `execve` policy are planned for later milestones.
+- Network and `execve` policy are not implemented yet.
 
 Strict mode:
 

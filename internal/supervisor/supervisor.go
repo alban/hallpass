@@ -529,7 +529,7 @@ func (s *session) fileSubject(path string) subject {
 	folder := p.FolderFor(path)
 	return subject{
 		key:   path,
-		req:   ui.Request{Path: path, Scope: folder, Never: "this path"},
+		req:   ui.Request{Path: path, Scope: folder, Never: "this path", Warn: p.Warn(path)},
 		eval:  func() policy.Decision { return p.Eval(path) },
 		grant: func(ttl time.Duration) { p.AllowFolderFor(folder, ttl) },
 		never: func() { p.DenyPath(path) },

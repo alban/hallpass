@@ -11,7 +11,7 @@ import (
 
 func newTestEngine() *Engine {
 	home := "/home/u"
-	e := New(home, "/home/u/src/proj", append(DefaultAllows(), "/home/u/.cache/go-build"), DefaultDenies(home))
+	e := New(home, "/home/u/src/proj", append(DefaultAllows(), "/home/u/.cache/go-build"), nil)
 	e.SetTmpdir("/home/u/tmp/hallpass-1")
 	return e
 }
@@ -30,8 +30,8 @@ func TestEval(t *testing.T) {
 		{"/dev/shm/x", Ask},
 		{"/home/u/tmp/hallpass-1/x", Allow},
 		{"/dev/null", Allow},
-		{"/home/u/.ssh/authorized_keys", Deny},
-		{"/home/u/.ssh", Deny},
+		{"/home/u/.ssh/authorized_keys", Ask},
+		{"/home/u/.ssh", Ask},
 		{"/home/u/.sshx", Ask},
 		{"/home/u/.bashrc", Ask},
 		{"/etc/passwd", Ask},
@@ -42,9 +42,29 @@ func TestEval(t *testing.T) {
 	}
 }
 
+func TestWarn(t *testing.T) {
+	e := newTestEngine()
+	for _, tc := range []struct {
+		path string
+		want string
+	}{
+		{"/home/u/.ssh/authorized_keys", "SSH keys"},
+		{"/home/u/.ssh", "SSH keys"},
+		{"/home/u/.aws/credentials", "AWS credentials"},
+		{"/home/u/.config/gh/hosts.yml", "GitHub CLI credentials"},
+		{"/home/u/.sshx", ""},
+		{"/home/u/.bashrc", ""},
+		{"/home/u/src/proj/main.go", ""},
+	} {
+		if got := e.Warn(tc.path); got != tc.want {
+			t.Errorf("Warn(%s) = %q, want %q", tc.path, got, tc.want)
+		}
+	}
+}
+
 func TestDenyWinsOverWorkdir(t *testing.T) {
-	e := New("/home/u", "/home/u/.ssh", nil, DefaultDenies("/home/u"))
-	if got := e.Eval("/home/u/.ssh/config"); got != Deny {
+	e := New("/home/u", "/home/u/secret", nil, []string{"/home/u/secret"})
+	if got := e.Eval("/home/u/secret/config"); got != Deny {
 		t.Errorf("got %v, want Deny", got)
 	}
 }
@@ -89,8 +109,8 @@ func TestFolderFor(t *testing.T) {
 		{"/etc/f", "/etc"},
 		{"/home/u/.bashrc", ""}, // would be $HOME
 		{"/f", ""},
-		{"/home/u/.ssh/f", ""},    // contains a deny path
-		{"/home/u/.config/x", ""}, // ~/.config contains ~/.config/gh
+		{"/home/u/.ssh/f", "/home/u/.ssh"}, // the secret store itself may be offered as its own scope
+		{"/home/u/.config/x", ""},          // ~/.config contains ~/.config/gh
 		{"/home/u/.config/app/x", "/home/u/.config/app"},
 	} {
 		if got := e.FolderFor(tc.path); got != tc.want {
@@ -140,7 +160,6 @@ func TestRules(t *testing.T) {
 		return false
 	}
 	for _, want := range []Rule{
-		{Path: "/home/u/.ssh", Tree: true, Deny: true},
 		{Path: "/home/u/src/proj", Tree: true},
 		{Path: "/home/u/.cache/go-build", Tree: true},
 		{Path: "/home/u/.bashrc", Deny: true},
@@ -167,7 +186,7 @@ func TestRules(t *testing.T) {
 	}
 
 	d := strings.Join(e.Describe(), "\n")
-	for _, want := range []string{"  ~/.ssh\n", "  ~/src/proj (project)\n", "  ~/.bashrc (this path only)\n", "  /dev/null\n", "  ~/tmp/hallpass-1 ($TMPDIR, removed at exit if empty)\n", "~/.npm (until ", "/proc/<pid>/mem of node processes\nWritable"} {
+	for _, want := range []string{"  ~/.ssh (SSH keys)\n", "  ~/src/proj (project)\n", "  ~/.bashrc (this path only)\n", "  /dev/null\n", "  ~/tmp/hallpass-1 ($TMPDIR, removed at exit if empty)\n", "~/.npm (until ", "/proc/<pid>/mem of node processes\nWritable", "flagged as a secret store:\n"} {
 		if !strings.Contains(d, want) {
 			t.Errorf("Describe lacks %q:\n%s", want, d)
 		}
