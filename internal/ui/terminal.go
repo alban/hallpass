@@ -26,9 +26,12 @@ func NewTerminal(t *tty.Term, timeout time.Duration) *Terminal {
 	return &Terminal{t: t, timeout: timeout}
 }
 
+// bold highlights s in an overlay line, keeping the overlay's reverse video.
+func bold(s string) string { return "\x1b[1m" + s + "\x1b[22m" }
+
 // Ask shows the overlay and waits for a key.
 func (a *Terminal) Ask(r Request) Answer {
-	head := fmt.Sprintf(" hallpass: %s (pid %d) wants to %s", sanitize(baseName(r.Exe)), r.PID, r.Op)
+	head := bold(fmt.Sprintf(" hallpass: %s (pid %d) wants to %s", sanitize(baseName(r.Exe)), r.PID, r.Op))
 	if r.Waiting > 0 {
 		head += fmt.Sprintf("   (+%d waiting)", r.Waiting)
 	}
@@ -36,14 +39,14 @@ func (a *Terminal) Ask(r Request) Answer {
 	if o := r.Origin(); o != "" {
 		lines = append(lines, " by: "+o)
 	}
-	keys := " [o] allow once"
+	keys := " " + bold("[o]") + " allow once"
 	accept := "oOdDnN\x1b\x03"
 	if r.Scope != "" {
 		lines = append(lines, fmt.Sprintf(" [t] and [a] allow: %s", sanitize(r.Scope)))
-		keys += fmt.Sprintf("  [t] for %v  [a] always", TempGrant)
+		keys += fmt.Sprintf("  %s for %v  %s always", bold("[t]"), TempGrant, bold("[a]"))
 		accept += "tTaA"
 	}
-	keys += "  [d] deny  [n] never  [Esc] dismiss"
+	keys += fmt.Sprintf("  %s deny  %s never  %s dismiss", bold("[d]"), bold("[n]"), bold("[Esc]"))
 	if a.timeout > 0 {
 		keys += fmt.Sprintf("   (dismissed in %v)", a.timeout)
 	}
