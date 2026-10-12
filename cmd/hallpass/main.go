@@ -58,217 +58,143 @@ func main() {
 	os.Exit(runMain(os.Args[1:], false))
 }
 
-// runMain runs a sandboxed command, or with printPolicy prints the rules
-// the same flags would give it.
-func runMain(argv []string, printPolicy bool) int {
+// options are the flags of a run.
+type options struct {
+	workdir     string
+	allow, deny listFlag
+	ask         string
+	timeout     time.Duration
+	allowUserns bool
+	logPath     string
+	mode        string
+	escalate    string
+	noImplicit  bool
+	allowTTY    bool
+	wait        string
+	args        []string // command to run
+}
+
+// parseFlags parses and checks argv. When it returns ok == false, the run
+// ends with exit code code.
+func parseFlags(argv []string, printPolicy bool) (o options, code int, ok bool) {
 	fs := flag.NewFlagSet("hallpass", flag.ContinueOnError)
 	fs.Usage = func() {
 		fmt.Fprint(fs.Output(), usageText)
 		fs.PrintDefaults()
 	}
-	var (
-		workdir     string
-		allow, deny listFlag
-		ask         string
-		timeout     time.Duration
-		allowUserns bool
-		logPath     string
-		mode        string
-		escalate    string
-		noImplicit  bool
-		allowTTY    bool
-		wait        string
-	)
-	fs.StringVar(&workdir, "C", "", "project `dir`, writable without asking (default: current directory)")
-	fs.StringVar(&workdir, "workdir", "", "same as -C")
-	fs.Var(&allow, "allow", "`path` also writable without asking (repeatable)")
-	fs.Var(&deny, "deny", "`path` always denied (repeatable, wins over --allow)")
-	fs.BoolVar(&noImplicit, "no-implicit", false, "writable without asking: only the --allow paths (no project dir, $TMPDIR, devices or terminal)")
-	fs.BoolVar(&allowTTY, "allow-tty", true, "the session's own terminal (/dev/tty, its /dev/pts/N) is writable without asking; --no-implicit turns it off unless given explicitly")
-	fs.StringVar(&ask, "ask", "auto", "how to ask: auto | term | desktop | answer | deny | allow (allow and log: audit)")
-	fs.DurationVar(&timeout, "timeout", 30*time.Second, "deny unanswered prompts after `duration` (0: wait forever)")
-	fs.BoolVar(&allowUserns, "allow-userns", false, "let the sandbox create user/mount namespaces (weakens lite mode; always on in strict mode)")
-	fs.StringVar(&logPath, "log", "", "append one JSON line per mediated syscall to `file`")
-	fs.StringVar(&mode, "mode", "lite", "lite (seccomp only, no root needed) | strict (the kernel enforces the answers with BPF-LSM; root needed to load it)")
-	fs.StringVar(&escalate, "escalate", "", "strict mode, when not root: how to run the loader as root: "+strings.Join(privsep.Tools, " | ")+" (default: the saved choice, else ask on a terminal, else auto)")
-	fs.StringVar(&wait, "wait", "main", "exit when the main process exits (main), or keep supervising its background processes until they all exit (all)")
+	fs.StringVar(&o.workdir, "C", "", "project `dir`, writable without asking (default: current directory)")
+	fs.StringVar(&o.workdir, "workdir", "", "same as -C")
+	fs.Var(&o.allow, "allow", "`path` also writable without asking (repeatable)")
+	fs.Var(&o.deny, "deny", "`path` always denied (repeatable, wins over --allow)")
+	fs.BoolVar(&o.noImplicit, "no-implicit", false, "writable without asking: only the --allow paths (no project dir, $TMPDIR, devices or terminal)")
+	fs.BoolVar(&o.allowTTY, "allow-tty", true, "the session's own terminal (/dev/tty, its /dev/pts/N) is writable without asking; --no-implicit turns it off unless given explicitly")
+	fs.StringVar(&o.ask, "ask", "auto", "how to ask: auto | term | desktop | answer | deny | allow (allow and log: audit)")
+	fs.DurationVar(&o.timeout, "timeout", 30*time.Second, "deny unanswered prompts after `duration` (0: wait forever)")
+	fs.BoolVar(&o.allowUserns, "allow-userns", false, "let the sandbox create user/mount namespaces (weakens lite mode; always on in strict mode)")
+	fs.StringVar(&o.logPath, "log", "", "append one JSON line per mediated syscall to `file`")
+	fs.StringVar(&o.mode, "mode", "lite", "lite (seccomp only, no root needed) | strict (the kernel enforces the answers with BPF-LSM; root needed to load it)")
+	fs.StringVar(&o.escalate, "escalate", "", "strict mode, when not root: how to run the loader as root: "+strings.Join(privsep.Tools, " | ")+" (default: the saved choice, else ask on a terminal, else auto)")
+	fs.StringVar(&o.wait, "wait", "main", "exit when the main process exits (main), or keep supervising its background processes until they all exit (all)")
 	if err := fs.Parse(argv); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			return 0
+			return o, 0, false
 		}
-		return 2
+		return o, 2, false
 	}
-	if noImplicit {
+	if o.noImplicit {
 		explicit := false
 		fs.Visit(func(f *flag.Flag) { explicit = explicit || f.Name == "allow-tty" })
 		if !explicit {
-			allowTTY = false
+			o.allowTTY = false
 		}
 	}
-	if wait != "main" && wait != "all" {
-		return fail(fmt.Errorf("unknown --wait %q (want main or all)", wait))
+	if o.wait != "main" && o.wait != "all" {
+		return o, fail(fmt.Errorf("unknown --wait %q (want main or all)", o.wait)), false
 	}
-	if wait == "all" && !printPolicy && !kernelAtLeast(5, 9) {
-		return fail(errors.New("--wait=all needs Linux 5.9 or later (POLLHUP on the seccomp notify fd)"))
+	if o.wait == "all" && !printPolicy && !kernelAtLeast(5, 9) {
+		return o, fail(errors.New("--wait=all needs Linux 5.9 or later (POLLHUP on the seccomp notify fd)")), false
+	}
+	o.args = fs.Args()
+	if len(o.args) == 0 {
+		sh := os.Getenv("SHELL")
+		if sh == "" {
+			sh = "/bin/sh"
+		}
+		o.args = []string{sh}
+	}
+	return o, 0, true
+}
+
+// runMain runs a sandboxed command, or with printPolicy prints the rules
+// the same flags would give it.
+func runMain(argv []string, printPolicy bool) int {
+	o, code, ok := parseFlags(argv, printPolicy)
+	if !ok {
+		return code
 	}
 
 	cfgDir, err := config.Dir()
 	if err != nil {
 		return fail(err)
 	}
-
-	args := fs.Args()
-	if len(args) == 0 {
-		sh := os.Getenv("SHELL")
-		if sh == "" {
-			sh = "/bin/sh"
-		}
-		args = []string{sh}
-	}
-
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fail(err)
 	}
-	if workdir == "" {
-		if workdir, err = os.Getwd(); err != nil {
-			return fail(err)
-		}
-	}
-	if workdir, err = filepath.Abs(workdir); err != nil {
+	if err := o.resolvePaths(home, cfgDir); err != nil {
 		return fail(err)
 	}
-	if st, err := os.Stat(workdir); err != nil || !st.IsDir() {
-		return fail(fmt.Errorf("workdir %s: not a directory", workdir))
-	}
-	if filepath.Clean(workdir) == filepath.Clean(home) || workdir == "/" {
-		if !noImplicit {
-			return fail(fmt.Errorf("refusing to use %s as the workdir: everything under it would be writable", workdir))
-		}
-	}
-	for _, l := range []listFlag{allow, deny} {
-		for i, p := range l {
-			if l[i], err = filepath.Abs(p); err != nil {
-				return fail(err)
-			}
-		}
-	}
-
-	// The sandbox must not change what hallpass runs next time, outside it.
-	deny = append(deny, cfgDir)
-	// Nor overwrite the hallpass binary itself: a later strict run would
-	// execute the tampered copy as root, and any run would execute
-	// unsandboxing code. Deny it like the config, even when it sits inside
-	// the workdir (e.g. go build ./cmd/hallpass).
-	if exe, err := os.Executable(); err == nil {
-		if resolved, err := filepath.EvalSymlinks(exe); err == nil {
-			exe = resolved
-		}
-		deny = append(deny, exe)
-	}
-	granted, defaults := workdir, policy.DefaultAllows()
-	if noImplicit {
-		granted, defaults = "", nil
-	}
-	engine := policy.New(home, granted, append(defaults, allow...), deny)
+	engine := o.buildPolicy(home)
 	if printPolicy {
-		if !noImplicit {
-			engine.SetTmpdir(filepath.Join(os.TempDir(), "hallpass-*"))
-		}
-		if allowTTY {
-			for _, p := range policy.TTYAllows("/dev/pts/N") {
-				engine.AllowDevice(p)
-			}
-		}
-		for _, l := range engine.Describe() {
-			fmt.Println(l)
-		}
+		o.printRules(engine)
 		return 0
 	}
+
 	var env []string
-	if !noImplicit {
-		// A private $TMPDIR, so tools that honour it (mktemp, compilers,
-		// ...) work without asking and without sharing /tmp.
-		tmpdir, err := os.MkdirTemp("", "hallpass-")
+	if !o.noImplicit {
+		tmpdir, cleanup, err := privateTmpdir()
 		if err != nil {
 			return fail(err)
 		}
-		defer func() {
-			if err := os.Remove(tmpdir); err != nil && !errors.Is(err, os.ErrNotExist) {
-				fmt.Fprintf(os.Stderr, "hallpass: kept %s: not empty\n", tmpdir)
-			}
-		}()
+		defer cleanup()
 		engine.SetTmpdir(tmpdir)
 		env = append(env, "TMPDIR="+tmpdir)
 	}
 
-	var strict *lsm.LSM
-	switch mode {
-	case "lite":
-	case "strict":
-		// The supervisor runs as the sandbox's user: forbid it ptrace,
-		// pidfd_getfd, /proc/<pid>/mem and fd access to us, before any
-		// fd worth stealing exists. (Root keeps them, for the loader.)
-		if err := unix.Prctl(unix.PR_SET_DUMPABLE, 0, 0, 0, 0); err != nil {
-			return fail(fmt.Errorf("prctl(PR_SET_DUMPABLE): %w", err))
-		}
-		if err := lsm.Active(); err != nil {
-			return fail(err)
-		}
-		if os.Geteuid() != 0 {
-			if escalate, err = escalateTool(escalate, cfgDir); err != nil {
-				return fail(err)
-			}
-		}
-		if strict, err = privsep.Load(escalate, false); err != nil {
-			return fail(err)
-		}
+	strict, err := o.loadStrict(cfgDir)
+	if err != nil {
+		return fail(err)
+	}
+	if strict != nil {
 		defer strict.Close()
-		// The kernel enforces the rules, whatever namespaces the
-		// sandbox builds (e.g. an agent working on a container runtime).
-		allowUserns = true
-	default:
-		return fail(fmt.Errorf("unknown --mode %q (want lite or strict)", mode))
 	}
 
-	asker, pty, err := newAsker(ask, timeout)
+	asker, pty, err := newAsker(o.ask, o.timeout)
 	if err != nil {
 		return fail(err)
 	}
 	defer asker.Close()
-	if allowTTY {
-		// The program's own terminal is writable without asking; other
-		// /dev/pts/N (another session) stay asked.
-		pts := ""
-		if pty != nil {
-			pts = pty.SlavePath()
-		}
-		for _, p := range policy.TTYAllows(pts) {
-			engine.AllowDevice(p)
-		}
+	if o.allowTTY {
+		allowOwnTTY(engine, pty)
 	}
 
-	var logw io.Writer
-	if logPath != "" {
-		f, err := os.OpenFile(logPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
-		if err != nil {
-			return fail(err)
-		}
-		defer f.Close()
-		logw = f
+	logw, closeLog, err := openLog(o.logPath)
+	if err != nil {
+		return fail(err)
 	}
+	defer closeLog()
 
-	code, err := supervisor.Run(supervisor.Config{
-		Args:        args,
-		Dir:         workdir,
+	code, err = supervisor.Run(supervisor.Config{
+		Args:        o.args,
+		Dir:         o.workdir,
 		Policy:      engine,
 		Asker:       asker,
-		AllowUserns: allowUserns,
+		AllowUserns: o.allowUserns,
 		Log:         logw,
 		TTY:         pty,
 		LSM:         strict,
 		Env:         env,
-		WaitAll:     wait == "all",
+		WaitAll:     o.wait == "all",
 	})
 	if pty != nil {
 		pty.Close() // restore the terminal before printing anything
@@ -280,6 +206,148 @@ func runMain(argv []string, printPolicy bool) int {
 		}
 	}
 	return code
+}
+
+// resolvePaths makes the workdir, --allow and --deny absolute, checks the
+// workdir, and adds the paths always denied.
+func (o *options) resolvePaths(home, cfgDir string) error {
+	var err error
+	if o.workdir == "" {
+		if o.workdir, err = os.Getwd(); err != nil {
+			return err
+		}
+	}
+	if o.workdir, err = filepath.Abs(o.workdir); err != nil {
+		return err
+	}
+	if st, err := os.Stat(o.workdir); err != nil || !st.IsDir() {
+		return fmt.Errorf("workdir %s: not a directory", o.workdir)
+	}
+	if filepath.Clean(o.workdir) == filepath.Clean(home) || o.workdir == "/" {
+		if !o.noImplicit {
+			return fmt.Errorf("refusing to use %s as the workdir: everything under it would be writable", o.workdir)
+		}
+	}
+	for _, l := range []listFlag{o.allow, o.deny} {
+		for i, p := range l {
+			if l[i], err = filepath.Abs(p); err != nil {
+				return err
+			}
+		}
+	}
+
+	// The sandbox must not change what hallpass runs next time, outside it.
+	o.deny = append(o.deny, cfgDir)
+	// Nor overwrite the hallpass binary itself: a later strict run would
+	// execute the tampered copy as root, and any run would execute
+	// unsandboxing code. Deny it like the config, even when it sits inside
+	// the workdir (e.g. go build ./cmd/hallpass).
+	if exe, err := os.Executable(); err == nil {
+		if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+			exe = resolved
+		}
+		o.deny = append(o.deny, exe)
+	}
+	return nil
+}
+
+// buildPolicy returns the rules of o, before the session's own $TMPDIR and
+// terminal are known.
+func (o *options) buildPolicy(home string) *policy.Engine {
+	granted, defaults := o.workdir, policy.DefaultAllows()
+	if o.noImplicit {
+		granted, defaults = "", nil
+	}
+	return policy.New(home, granted, append(defaults, o.allow...), o.deny)
+}
+
+// printRules prints engine's rules, with placeholders for the $TMPDIR and
+// terminal a run would get.
+func (o *options) printRules(engine *policy.Engine) {
+	if !o.noImplicit {
+		engine.SetTmpdir(filepath.Join(os.TempDir(), "hallpass-*"))
+	}
+	if o.allowTTY {
+		for _, p := range policy.TTYAllows("/dev/pts/N") {
+			engine.AllowDevice(p)
+		}
+	}
+	for _, l := range engine.Describe() {
+		fmt.Println(l)
+	}
+}
+
+// privateTmpdir creates a private $TMPDIR, so tools that honour it (mktemp,
+// compilers, ...) work without asking and without sharing /tmp. cleanup
+// removes it if empty.
+func privateTmpdir() (dir string, cleanup func(), err error) {
+	dir, err = os.MkdirTemp("", "hallpass-")
+	if err != nil {
+		return "", nil, err
+	}
+	return dir, func() {
+		if err := os.Remove(dir); err != nil && !errors.Is(err, os.ErrNotExist) {
+			fmt.Fprintf(os.Stderr, "hallpass: kept %s: not empty\n", dir)
+		}
+	}, nil
+}
+
+// loadStrict loads the BPF-LSM programs in strict mode; nil in lite mode.
+func (o *options) loadStrict(cfgDir string) (*lsm.LSM, error) {
+	switch o.mode {
+	case "lite":
+		return nil, nil
+	case "strict":
+	default:
+		return nil, fmt.Errorf("unknown --mode %q (want lite or strict)", o.mode)
+	}
+	// The supervisor runs as the sandbox's user: forbid it ptrace,
+	// pidfd_getfd, /proc/<pid>/mem and fd access to us, before any
+	// fd worth stealing exists. (Root keeps them, for the loader.)
+	if err := unix.Prctl(unix.PR_SET_DUMPABLE, 0, 0, 0, 0); err != nil {
+		return nil, fmt.Errorf("prctl(PR_SET_DUMPABLE): %w", err)
+	}
+	if err := lsm.Active(); err != nil {
+		return nil, err
+	}
+	if os.Geteuid() != 0 {
+		var err error
+		if o.escalate, err = escalateTool(o.escalate, cfgDir); err != nil {
+			return nil, err
+		}
+	}
+	strict, err := privsep.Load(o.escalate, false)
+	if err != nil {
+		return nil, err
+	}
+	// The kernel enforces the rules, whatever namespaces the
+	// sandbox builds (e.g. an agent working on a container runtime).
+	o.allowUserns = true
+	return strict, nil
+}
+
+// allowOwnTTY makes the program's own terminal writable without asking;
+// other /dev/pts/N (another session) stay asked.
+func allowOwnTTY(engine *policy.Engine, pty *tty.Term) {
+	pts := ""
+	if pty != nil {
+		pts = pty.SlavePath()
+	}
+	for _, p := range policy.TTYAllows(pts) {
+		engine.AllowDevice(p)
+	}
+}
+
+// openLog opens the --log file for appending; a nil writer without one.
+func openLog(path string) (io.Writer, func(), error) {
+	if path == "" {
+		return nil, func() {}, nil
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	if err != nil {
+		return nil, nil, err
+	}
+	return f, func() { f.Close() }, nil
 }
 
 // kernelAtLeast reports whether the running kernel is at least major.minor;
