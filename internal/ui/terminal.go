@@ -28,18 +28,18 @@ func NewTerminal(t *tty.Term, timeout time.Duration) *Terminal {
 
 // Ask shows the overlay and waits for a key.
 func (a *Terminal) Ask(r Request) Answer {
-	head := fmt.Sprintf(" hallpass: %s (pid %d) wants to %s", baseName(r.Exe), r.PID, r.Op)
+	head := fmt.Sprintf(" hallpass: %s (pid %d) wants to %s", sanitize(baseName(r.Exe)), r.PID, r.Op)
 	if r.Waiting > 0 {
 		head += fmt.Sprintf("   (+%d waiting)", r.Waiting)
 	}
-	lines := []string{head, " " + r.Path}
+	lines := []string{head, " " + sanitize(r.Path)}
 	if o := r.Origin(); o != "" {
 		lines = append(lines, " by: "+o)
 	}
 	keys := " [o] allow once"
 	accept := "oOdDnN\x1b\x03"
 	if r.Scope != "" {
-		lines = append(lines, fmt.Sprintf(" [t] and [a] allow: %s", r.Scope))
+		lines = append(lines, fmt.Sprintf(" [t] and [a] allow: %s", sanitize(r.Scope)))
 		keys += fmt.Sprintf("  [t] for %v  [a] always", TempGrant)
 		accept += "tTaA"
 	}

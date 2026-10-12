@@ -246,6 +246,8 @@ func RunClient(path string, in *os.File, out *os.File) error {
 		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "PROMPT ")), &r); err != nil {
 			return err
 		}
+		// The agent chooses the paths: no terminal escapes.
+		r.Exe, r.Path, r.Scope, r.Never = sanitize(r.Exe), sanitize(r.Path), sanitize(r.Scope), sanitize(r.Never)
 		fmt.Fprintf(out, "\n%s (pid %d) wants to %s:\n  %s\n", baseName(r.Exe), r.PID, r.Op, r.Path)
 		if o := (Request{Cmdline: r.Cmdline, Parents: r.Parents}).Origin(); o != "" {
 			fmt.Fprintf(out, "  by: %s\n", o)

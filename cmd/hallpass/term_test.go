@@ -162,6 +162,27 @@ func TestTerminalPrompt(t *testing.T) {
 	}
 }
 
+// Paths come from the agent: escape sequences in them must not reach the
+// terminal, or they could redraw the prompt.
+func TestTerminalPromptEscapes(t *testing.T) {
+	e := newEnv(t)
+	m, scr, c, done := runTerm(t, e, `echo a > "$HOME/x$(printf '\033[2J')y" 2>/dev/null || echo denied`)
+
+	waitFor(t, func() bool { return strings.Contains(scr.rawText(), "wants to write") }, "prompt")
+	time.Sleep(600 * time.Millisecond) // past the type-ahead guard
+	if raw := scr.rawText(); strings.Contains(raw, "x\x1b[2Jy") {
+		t.Errorf("escape sequence from the path reached the terminal: %q", raw)
+	}
+	if got := scr.text(); !strings.Contains(got, "x?[2Jy") {
+		t.Errorf("overlay lacks the sanitized path:\n%s", got)
+	}
+	m.Write([]byte("d"))
+	if err := c.Wait(); err != nil {
+		t.Fatalf("hallpass: %v\n%s", err, scr.text())
+	}
+	<-done
+}
+
 // Output of other processes keeps showing above the overlay, and the
 // terminal ends as if the overlay had never been there.
 func TestTerminalPromptLiveOutput(t *testing.T) {

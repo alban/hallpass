@@ -77,7 +77,7 @@ func (d *Desktop) Ask(r Request) Answer {
 	d.drain()
 
 	body := fmt.Sprintf("<b>%s</b> (pid %d) wants to %s:\n%s",
-		html.EscapeString(baseName(r.Exe)), r.PID, r.Op, html.EscapeString(r.Path))
+		html.EscapeString(sanitize(baseName(r.Exe))), r.PID, r.Op, html.EscapeString(sanitize(r.Path)))
 	if o := r.Origin(); o != "" {
 		body += "\nby: " + html.EscapeString(o)
 	}
@@ -85,7 +85,7 @@ func (d *Desktop) Ask(r Request) Answer {
 	// the terminal or `hallpass answer`.
 	actions := []string{"once", "Allow once"}
 	if r.Scope != "" {
-		body += fmt.Sprintf("\n\nAllow for %v: %s", TempGrant, html.EscapeString(r.Scope))
+		body += fmt.Sprintf("\n\nAllow for %v: %s", TempGrant, html.EscapeString(sanitize(r.Scope)))
 		actions = append(actions, "temp", fmt.Sprintf("Allow %v", TempGrant))
 		actions = append(actions, "deny", "Deny")
 	} else {
