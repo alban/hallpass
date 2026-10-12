@@ -12,7 +12,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -222,98 +221,6 @@ func Run(cfg Config) (int, error) {
 	return code, nil
 }
 
-// waiter is --wait=all's state: active once the command has exited and
-// hallpass supervises its background processes; stop ends that early.
-type waiter struct {
-	active atomic.Bool
-	once   sync.Once
-	stop   chan struct{}
-}
-
-// Stop stops waiting for the background processes.
-func (w *waiter) Stop() { w.once.Do(func() { close(w.stop) }) }
-
-// waitAll returns once no process uses the seccomp filter any more (the
-// notify fd reports POLLHUP), or the user stops waiting. Meanwhile the
-// workers go on deciding, asking and logging.
-func (s *session) waitAll() {
-	hup := make(chan struct{})
-	go func() {
-		defer close(hup)
-		// No events requested: poll still reports POLLHUP and POLLERR,
-		// and does not wake up for pending notifications.
-		fds := []unix.PollFd{{Fd: int32(s.listener.FD())}}
-		for {
-			_, err := unix.Poll(fds, -1)
-			if err == unix.EINTR {
-				continue
-			}
-			if err != nil || fds[0].Revents != 0 {
-				return
-			}
-		}
-	}()
-	// Most commands leave nothing behind: say nothing in that case.
-	select {
-	case <-hup:
-		return
-	case <-time.After(200 * time.Millisecond):
-	}
-	s.wait.active.Store(true)
-	how := "SIGTERM"
-	if s.cfg.TTY != nil {
-		how = "Ctrl-] then s"
-	}
-	s.notice("hallpass: the command exited; still supervising its background processes (" + how + " to stop)")
-	select {
-	case <-hup:
-	case <-s.wait.stop:
-		s.notice("hallpass: stopped waiting; the remaining processes' writes now fail")
-	}
-}
-
-// notice prints a line for the user, outside any prompt.
-func (s *session) notice(msg string) {
-	s.promptMu.Lock()
-	defer s.promptMu.Unlock()
-	if s.cfg.TTY != nil {
-		// The terminal is in raw mode.
-		fmt.Fprint(os.Stderr, "\r\n"+msg+"\r\n")
-		return
-	}
-	fmt.Fprintln(os.Stderr, msg)
-}
-
-// reap reaps every child: the command (main, whose status goes to mainDone)
-// and the processes of the sandbox reparented to us as subreaper. It owns
-// waiting for children: nothing else may wait for them (no cmd.Wait).
-func reap(main int, sigchld <-chan os.Signal, mainDone chan<- unix.WaitStatus) {
-	for {
-		for {
-			var ws unix.WaitStatus
-			pid, err := unix.Wait4(-1, &ws, unix.WNOHANG, nil)
-			if err == unix.EINTR {
-				continue
-			}
-			if err != nil || pid <= 0 {
-				break
-			}
-			if pid == main {
-				mainDone <- ws
-			}
-		}
-		<-sigchld
-	}
-}
-
-// exitStatus is the shell's view of ws: the exit code, or 128+signal.
-func exitStatus(ws unix.WaitStatus) int {
-	if ws.Signaled() {
-		return 128 + int(ws.Signal())
-	}
-	return ws.ExitStatus()
-}
-
 type session struct {
 	cfg      Config
 	rules    []seccomp.Rule
@@ -342,136 +249,6 @@ type session struct {
 	wait     *waiter
 }
 
-// menu shows the session's rules over the program's screen (Ctrl-]), until
-// a key is pressed. Prompts wait meanwhile.
-func (s *session) menu() {
-	if !s.menuOpen.CompareAndSwap(false, true) {
-		return
-	}
-	defer s.menuOpen.Store(false)
-	s.promptMu.Lock()
-	defer s.promptMu.Unlock()
-	mode := "lite"
-	if s.cfg.LSM != nil {
-		mode = "strict"
-	}
-	deny, allow := s.cfg.Policy.Summary()
-	w := s.cfg.TTY.Width() - 1
-	lines := []string{fmt.Sprintf(" hallpass, %s mode: the rules of this session", mode)}
-	lines = append(lines, wrapList(" Denied:   ", deny, w)...)
-	lines = append(lines, wrapList(" Writable: ", allow, w)...)
-	if s.wait.active.Load() {
-		lines = append(lines, " The command exited; its background processes are still supervised.   [s] stop waiting")
-	}
-	lines = append(lines, " Anything else is asked. A folder covers everything below it.   [any key] close")
-	keys := make([]byte, 0, 255)
-	for k := 1; k < 256; k++ {
-		keys = append(keys, byte(k))
-	}
-	if s.cfg.TTY.Prompt(lines, string(keys), 0, 0) == 's' && s.wait.active.Load() {
-		s.wait.Stop()
-	}
-}
-
-// wrapList lays out items after prefix, comma-separated, in lines of at
-// most width columns, continuation lines indented like the first item.
-func wrapList(prefix string, items []string, width int) []string {
-	indent := strings.Repeat(" ", len(prefix))
-	var lines []string
-	line := prefix
-	for i, it := range items {
-		if i < len(items)-1 {
-			it += ","
-		}
-		if line != prefix && line != indent && len(line)+1+len(it) > width {
-			lines = append(lines, line)
-			line = indent
-		}
-		if line != prefix && line != indent {
-			line += " "
-		}
-		line += it
-	}
-	return append(lines, line)
-}
-
-// syncKernel pushes the policy's current rules and the pending "allow once"
-// answers to the kernel.
-func (s *session) syncKernel() error {
-	now := time.Now()
-	s.onceMu.Lock()
-	once := s.once[:0]
-	for _, r := range s.once {
-		if r.Expires.After(now) {
-			once = append(once, r)
-		}
-	}
-	s.once = once
-	onceProc := s.onceProc[:0]
-	for _, r := range s.onceProc {
-		if r.Expires.After(now) {
-			onceProc = append(onceProc, r)
-		}
-	}
-	s.onceProc = onceProc
-	rules := append([]lsm.Rule(nil), once...)
-	procs := append([]lsm.ProcRule(nil), onceProc...)
-	s.onceMu.Unlock()
-
-	for _, r := range s.cfg.Policy.Rules() {
-		rules = append(rules, lsm.Rule{Path: r.Path, Tree: r.Tree, Deny: r.Deny, Expires: r.Expires})
-	}
-	for _, r := range s.cfg.Policy.ProcRules() {
-		procs = append(procs, lsm.ProcRule{Name: r.Name, Comm: r.Comm, Deny: r.Deny, Expires: r.Expires})
-	}
-	return s.cfg.LSM.Sync(rules, procs)
-}
-
-func (s *session) syncOrWarn() {
-	if err := s.syncKernel(); err != nil {
-		fmt.Fprintf(os.Stderr, "hallpass: strict mode: updating the kernel's rules: %v\n", err)
-	}
-}
-
-func (s *session) periodicSync(done <-chan struct{}) {
-	t := time.NewTicker(syncPeriod)
-	defer t.Stop()
-	for {
-		select {
-		case <-done:
-			return
-		case <-t.C:
-			s.syncOrWarn()
-		}
-	}
-}
-
-// kernelEvents logs the decisions of the BPF programs: denials (also of
-// operations the seccomp filter does not see, e.g. through io_uring).
-func (s *session) kernelEvents() {
-	s.cfg.LSM.Events(func(e lsm.Event) {
-		d := "deny"
-		if e.Allowed {
-			d = "allow"
-		}
-		s.log(logEntry{PID: e.PID, Exe: e.Comm, Syscall: e.Op, Path: e.Path, Decision: d, Reason: "lsm"})
-	})
-}
-
-// allowOnce lets the kernel allow exactly path for a moment, for the
-// syscall about to be continued.
-func (s *session) allowOnce(path string) {
-	s.onceMu.Lock()
-	s.once = append(s.once, lsm.Rule{Path: path, Expires: time.Now().Add(onceTTL)})
-	s.onceMu.Unlock()
-}
-
-func (s *session) allowProcOnce(k policy.ProcKey) {
-	s.onceMu.Lock()
-	s.onceProc = append(s.onceProc, lsm.ProcRule{Name: k.Name, Comm: k.Comm, Expires: time.Now().Add(onceTTL)})
-	s.onceMu.Unlock()
-}
-
 type pending struct {
 	done    chan struct{}
 	allowed bool
@@ -485,26 +262,6 @@ func (s *session) worker() {
 		}
 		s.handle(n)
 	}
-}
-
-type logEntry struct {
-	Time     string `json:"time"`
-	PID      uint32 `json:"pid"`
-	Exe      string `json:"exe,omitempty"`
-	Syscall  string `json:"syscall"`
-	Path     string `json:"path,omitempty"`
-	Decision string `json:"decision"`
-	Reason   string `json:"reason"`
-}
-
-func (s *session) log(e logEntry) {
-	if s.logEnc == nil {
-		return
-	}
-	e.Time = time.Now().Format(time.RFC3339Nano)
-	s.logMu.Lock()
-	_ = s.logEnc.Encode(e)
-	s.logMu.Unlock()
 }
 
 // handle decides one intercepted syscall.
@@ -655,75 +412,6 @@ func followLast(rule seccomp.Rule, n seccomp.Notif, i int) bool {
 		return i == 0 && n.Args[4]&unix.AT_SYMLINK_FOLLOW != 0
 	}
 	return false
-}
-
-// subject is something the user is asked about: a file path, or a kind of
-// write to another process's /proc files.
-type subject struct {
-	key   string // coalesces concurrent identical requests
-	req   ui.Request
-	eval  func() policy.Decision
-	grant func(ttl time.Duration) // covers req.Scope; 0: rest of the session
-	never func()
-	once  func() // strict mode: let the kernel allow it this time
-	// unknown: the path could not be read (see unknownSubject).
-	unknown bool
-}
-
-func (s *session) fileSubject(path string) subject {
-	p := s.cfg.Policy
-	folder := p.FolderFor(path)
-	warn := p.Warn(path)
-	if warn != "" {
-		warn += " — secret store"
-	}
-	return subject{
-		key:   path,
-		req:   ui.Request{Path: path, Scope: folder, Never: "this path", Warn: warn},
-		eval:  func() policy.Decision { return p.Eval(path) },
-		grant: func(ttl time.Duration) { p.AllowFolderFor(folder, ttl) },
-		never: func() { p.DenyPath(path) },
-		once:  func() { s.allowOnce(path) },
-	}
-}
-
-func (s *session) procSubject(path string, k policy.ProcKey) subject {
-	p := s.cfg.Policy
-	what := fmt.Sprintf("%s of %q processes outside the sandbox", k.Name, k.Comm)
-	return subject{
-		key:   "\x00proc\x00" + k.Name + "\x00" + k.Comm,
-		req:   ui.Request{Path: path, Scope: what, Never: what},
-		eval:  func() policy.Decision { return p.EvalProc(k) },
-		grant: func(ttl time.Duration) { p.AllowProcFor(k, ttl) },
-		never: func() { p.DenyProc(k) },
-		once:  func() { s.allowProcOnce(k) },
-	}
-}
-
-// unknownSubject asks about a syscall whose path hallpass could not read.
-// Only lite mode gets here. Allowing it skips every rule, including the
-// denies, and a process can make its path unreadable on purpose: so only
-// "once" is offered, never a lasting grant, and the prompt is not shared
-// with other syscalls.
-func (s *session) unknownSubject(id uint64, err error) subject {
-	return subject{
-		key: fmt.Sprintf("\x00unknown\x00%d", id),
-		req: ui.Request{
-			Path:  "(unknown path)",
-			Never: "all unknown paths",
-			Warn:  "Unknown path — hallpass could not read it (" + err.Error() + ")",
-		},
-		eval: func() policy.Decision {
-			if s.neverUnknown.Load() {
-				return policy.Deny
-			}
-			return policy.Ask
-		},
-		grant:   func(time.Duration) {},
-		never:   func() { s.neverUnknown.Store(true) },
-		once:    func() {},
-		unknown: true,
-	}
 }
 
 // ask returns whether the user allows sub. Concurrent identical requests
