@@ -16,6 +16,7 @@ hallpass [flags] [--] [command [args...]]     # default command: $SHELL
                            (default: saved choice, else ask on a terminal, else auto)
 
 hallpass policy [flags]                       # print the rules these flags give, then exit
+hallpass answer [PID]                         # answer another session's prompts from this terminal
 ```
 
 ## Default policy
@@ -36,7 +37,7 @@ Run hallpass as your user; only loading the BPF programs needs root:
 hallpass --mode=strict -- copilot
 ```
 
-hallpass starts a short-lived copy of itself as root (`--escalate`: `auto` picks pkexec in a graphical session, else sudo, run0 or doas; `manual` prints the command for you to run as root and waits for Enter). Without `--escalate`, hallpass uses the choice saved in `~/.config/hallpass/config` (`escalate = sudo`), or else asks on the terminal which tool to use and whether to remember it; `--escalate=ask` asks again. The sandbox can never write `~/.config/hallpass`. The helper checks it was started for a hallpass of the invoking user, loads and attaches the programs, hands their file descriptors back to the supervisor and exits. The supervisor makes itself non-dumpable, and the LSM denies signals from the sandbox to it.
+hallpass starts a short-lived copy of itself as root (`--escalate`: `auto` picks pkexec in a graphical session, else sudo, run0 or doas; `manual` prints the command for you to run as root and waits for Enter). Without `--escalate`, hallpass uses the choice saved in `~/.config/hallpass/config` (`escalate = sudo`), or else asks on the terminal which tool to use and whether to remember it; `--escalate=ask` asks again. The config directory is `$XDG_CONFIG_HOME/hallpass` when that variable is set to an absolute path, otherwise `~/.config/hallpass`. The sandbox can never write it. The helper checks it was started for a hallpass of the invoking user, loads and attaches the programs, hands their file descriptors back to the supervisor and exits. The supervisor makes itself non-dumpable, and the LSM denies signals from the sandbox to it.
 
 ## Using hallpass with agent CLIs
 
@@ -80,7 +81,7 @@ hallpass answer                      # in another, to see prompts and reply
 
 - Linux with seccomp user notification (5.0+; `SECCOMP_USER_NOTIF_FLAG_CONTINUE` needs 5.5+). Check `/proc/sys/kernel/seccomp/actions_avail` contains `user_notif`.
 - arm64 or amd64.
-- Strict mode: BPF-LSM active, i.e. `bpf` listed in `/sys/kernel/security/lsm`. Fedora enables it by default; Ubuntu builds it but does not activate it (add `bpf` to the `lsm=` kernel parameter). The programs also need the `bpf_preempt_disable` kfunc (upstream 6.10); the verifier rejects them otherwise. Tested on 7.2.
+- Strict mode: BPF-LSM active, i.e. `bpf` listed in `/sys/kernel/security/lsm`. Fedora enables it by default; Ubuntu builds it but does not activate it (add `bpf` to the `lsm=` kernel parameter). The programs also need the `bpf_path_d_path` kfunc (upstream 6.12; they also use `bpf_preempt_disable` from 6.10); the verifier rejects them otherwise. Tested on 7.2.
 - Desktop prompts: a session D-Bus with an `org.freedesktop.Notifications` service supporting actions (GNOME, KDE, most notification daemons).
 
 ## Building
@@ -112,5 +113,5 @@ Strict mode:
 
 - The supervisor holds writable fds of the BPF maps, so the user running hallpass can put any process, including other users', under the policy or under signal protection. Choosing an escalation tool is the administrator's consent to that.
 - If the supervisor dies, the programs are detached. Seccomp then fails the sandbox's mediated syscalls closed, but nothing else is enforced on processes left behind.
-- With `--escalate=manual` from a root shell, the helper cannot tell which user invoked it and only checks that the target runs the same hallpass binary.
+- When the helper runs without a recognised escalation tool in its environment (`--escalate=manual`, or `su`, which clears `SUDO_UID`/`PKEXEC_UID`/`DOAS_USER`), it cannot tell which user invoked it and only checks that the target runs the same hallpass binary.
 - `kernel.yama.ptrace_scope=3` prevents the helper from fetching the socket (`pidfd_getfd`); run hallpass as root instead.
