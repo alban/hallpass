@@ -1,0 +1,50 @@
+site_name: hallpass
+site_description: Run an AI coding agent in your shell, and get asked before it writes outside your project.
+site_url: https://alban.github.io/hallpass/
+repo_url: https://github.com/alban/hallpass
+repo_name: alban/hallpass
+copyright: Apache License 2.0
+
+theme:
+  name: material
+  logo: logo.svg
+  favicon: logo.svg
+  icon:
+    repo: fontawesome/brands/github
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: deep purple
+      accent: deep purple
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: deep purple
+      accent: deep purple
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - toc.integrate
+
+nav:
+  - Home: index.md
+  - How it works: design.md
+  - Usage: usage.md
+
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/alban/hallpass

@@ -1,5 +1,8 @@
 /hallpass
 
+# MkDocs build output
+/site/
+
 # Editor files (vim/gvim swap files, backups)
 .*.sw[a-p]
 *~
