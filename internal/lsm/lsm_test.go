@@ -160,6 +160,11 @@ func TestEnforce(t *testing.T) {
 		{"member proc", "echo 0 > /proc/$$/oom_score_adj", true},
 		{"outsider proc", fmt.Sprintf("echo 0 > /proc/%d/oom_score_adj", outsider.Process.Pid), false},
 		{"own tmpfs", "unshare -m sh -c 'mount -t tmpfs none O/mnt && echo > O/mnt/f'", true},
+		// Overlay with a denied dir as upperdir: writing through the merged
+		// mount lands on the real protected inode, which must be denied.
+		{"overlay upper is denied", "unshare -Urm sh -c 'mkdir -p A/ovl/low A/ovl/work A/ovl/merged && mount -t overlay overlay -o lowerdir=A/ovl/low,upperdir=A/secret,workdir=A/ovl/work A/ovl/merged && echo > A/ovl/merged/f'", false},
+		// Overlay with an allowed dir as upperdir still works.
+		{"overlay upper is allowed", "unshare -Urm sh -c 'mkdir -p A/ov2/low A/ov2/up A/ov2/work A/ov2/merged && mount -t overlay overlay -o lowerdir=A/ov2/low,upperdir=A/ov2/up,workdir=A/ov2/work A/ov2/merged && echo > A/ov2/merged/f'", true},
 		{"read", "cat O/once >/dev/null", true},
 	}
 	var script strings.Builder
