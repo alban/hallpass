@@ -16,6 +16,8 @@ In practice lite mode is still useful, because that gap only matters against a p
 
 ## Strict mode: BPF-LSM
 
+Strict mode builds on lite mode rather than replacing it: the seccomp supervisor still pauses writes and asks you interactively, and the workload waits for your answer. The BPF-LSM program is an added enforcement layer, not a silent pre-configured policy.
+
 Strict mode exists to close the TOCTOU race that lite mode is inherently exposed to. With seccomp user notification the kernel re-executes the *allowed* syscall after the supervisor's check, resolving the path a second time. A malicious multi-threaded process can swap what the path points at in that window, so the file the supervisor approved is not the file the kernel acts on. No seccomp-based tool can fully close this; the check and the action are two separate steps.
 
 Strict mode adds an eBPF program on the kernel's LSM hooks, which run at the moment of the action, on the real file (inode) the kernel is about to modify — after any symlink, bind mount, mount-namespace or rename trick has already been resolved. There is no second resolution to race, so the same bypasses that defeat lite mode (symlink races, bind mounts, other mount namespaces, `io_uring`) do not apply. Your answers to the prompts are pushed to the kernel before the paused syscall continues, so the enforcement and the question stay in sync.

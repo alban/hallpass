@@ -88,6 +88,8 @@ By default, only `~/.config/hallpass` is denied (the sandbox must not change wha
 
 ### Strict mode
 
+Strict mode still pauses writes and asks you interactively like lite mode, and the workload waits for your answer; the BPF-LSM program is an added layer that enforces each answer in the kernel on the real file, not a silent pre-configured policy.
+
 Run hallpass as your user; only loading the BPF programs needs root:
 
 ```console

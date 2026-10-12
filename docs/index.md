@@ -16,7 +16,7 @@ hallpass is enforced by the kernel, from outside the agent, so it does not depen
 ## Two modes
 
 - **Lite mode** (default, no root) uses [seccomp user notification](design.md#lite-mode-seccomp-user-notification): the kernel pauses filesystem-modifying syscalls and lets hallpass ask you instead of just failing them.
-- **Strict mode** (`--mode=strict`, root only to load it) adds [BPF-LSM](design.md#strict-mode-bpf-lsm) enforcement on the real inode, closing the TOCTOU race that lite mode is inherently exposed to (symlink races, bind mounts, `io_uring`).
+- **Strict mode** (`--mode=strict`, root only to load it) still pauses writes and asks you interactively like lite mode, and adds [BPF-LSM](design.md#strict-mode-bpf-lsm) enforcement on the real inode, closing the TOCTOU race that lite mode is inherently exposed to (symlink races, bind mounts, `io_uring`).
 
 ## Get started
 
