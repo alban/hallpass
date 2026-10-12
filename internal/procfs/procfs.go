@@ -258,6 +258,32 @@ func Comm(tid int) string {
 	return strings.TrimSuffix(string(b), "\n")
 }
 
+// Cmdline returns the arguments of thread tid's process, or nil. The
+// process controls them: show them, do not trust them.
+func Cmdline(tid int) []string {
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", tid))
+	if err != nil || len(b) == 0 {
+		return nil
+	}
+	return strings.Split(strings.TrimSuffix(string(b), "\x00"), "\x00")
+}
+
+// Ancestors returns the command names of the processes above thread tid,
+// nearest first, up to and including root (or init if tid does not descend
+// from root), at most max of them. Racy like Descends: for display only.
+func Ancestors(tid, root, max int) []string {
+	var out []string
+	pid := statusField(tid, "Tgid:")
+	for len(out) < max && pid > 1 && pid != root {
+		pid = statusField(pid, "PPid:")
+		if pid <= 0 {
+			break
+		}
+		out = append(out, Comm(pid))
+	}
+	return out
+}
+
 // Descends reports whether thread tid belongs to root or one of its
 // descendants, following the parent chain. This is racy (a process can exit
 // and its pid be reused) and processes reparented to a subreaper or init no

@@ -78,6 +78,9 @@ func (d *Desktop) Ask(r Request) Answer {
 
 	body := fmt.Sprintf("<b>%s</b> (pid %d) wants to %s:\n%s",
 		html.EscapeString(baseName(r.Exe)), r.PID, r.Op, html.EscapeString(r.Path))
+	if o := r.Origin(); o != "" {
+		body += "\nby: " + html.EscapeString(o)
+	}
 	// GNOME Shell shows at most three buttons; "always" and "never" need
 	// the terminal or `hallpass answer`.
 	actions := []string{"once", "Allow once"}

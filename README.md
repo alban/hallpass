@@ -14,6 +14,7 @@ Everything the agent starts (shells, compilers, `git`, `npm`, scripts) inherits 
 ```
  hallpass: node (pid 41237) wants to write
  /home/me/.npm/_cacache/tmp/x
+ by: npm install ← bash ← copilot
  [t] and [a] allow: /home/me/.npm
  [o] allow once  [t] for 5m0s  [a] always  [d] deny  [n] never  [Esc] dismiss
 ```
@@ -26,6 +27,8 @@ Everything the agent starts (shells, compilers, `git`, `npm`, scripts) inherits 
 | `d` | deny this access; a retry asks again |
 | `n` | deny this path for the rest of the session, without asking again |
 | `Esc` | dismiss: deny, ask again next time |
+
+The `by:` line shows the command line of the process and the commands it was started from, up to the agent. The process can change both, so they help you understand the request but prove nothing.
 
 The desktop notification has room for three buttons only: Allow once, Allow 5 min and Deny (or Allow once, Deny and Never when there is no folder to offer).
 

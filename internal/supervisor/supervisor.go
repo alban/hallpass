@@ -53,6 +53,9 @@ const onceTTL = 2 * time.Second
 // mounts appearing or disappearing.
 const syncPeriod = 5 * time.Second
 
+// maxParents bounds the parent chain shown in prompts.
+const maxParents = 4
+
 // Run starts the command under the seccomp filter, mediates its syscalls until
 // it exits, and returns its exit status (128+signal when killed).
 func Run(cfg Config) (int, error) {
@@ -458,11 +461,15 @@ func (s *session) handle(n seccomp.Notif) {
 		}
 	}
 
+	var cmdline, parents []string
 	for _, sub := range ask {
 		if exe == "" {
 			exe = procfs.Exe(n.PID)
+			cmdline = procfs.Cmdline(int(n.PID))
+			parents = procfs.Ancestors(int(n.PID), s.root, maxParents)
 		}
 		sub.req.Exe, sub.req.PID, sub.req.Op = exe, n.PID, rule.Op
+		sub.req.Cmdline, sub.req.Parents = cmdline, parents
 		if !s.ask(sub) {
 			s.deny(n, rule, sub.req.Path, "user")
 			return

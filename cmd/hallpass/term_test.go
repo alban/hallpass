@@ -6,6 +6,7 @@ package main
 import (
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -178,11 +179,15 @@ func TestTerminalPromptLiveOutput(t *testing.T) {
 	if first == second {
 		t.Fatalf("screen frozen while the overlay is shown:\n%s", second)
 	}
+	if !strings.Contains(second, " by: ") {
+		t.Errorf("overlay lacks the command line:\n%s", second)
+	}
 	// The screen is full, so new lines appear under the overlay; the view
 	// scrolls to keep the cursor line (empty after a newline) right above
 	// it, with the newest output just before.
 	rows := strings.Split(second, "\n")
-	if len(rows) < 22 || !strings.HasPrefix(rows[19], "tick") || strings.TrimSpace(rows[20]) != "" {
+	top := slices.IndexFunc(rows, func(r string) bool { return strings.Contains(r, "wants to write") })
+	if top < 2 || !strings.HasPrefix(rows[top-2], "tick") || strings.TrimSpace(rows[top-1]) != "" {
 		t.Errorf("row above the overlay is not the latest tick:\n%s", second)
 	}
 	m.Write([]byte("o"))

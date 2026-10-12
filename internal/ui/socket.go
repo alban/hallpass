@@ -116,14 +116,16 @@ func checkPeer(c *net.UnixConn) error {
 // replies carrying a stale id (for a prompt that already timed out) are
 // ignored.
 type wireRequest struct {
-	ID      uint64 `json:"id"`
-	Exe     string `json:"exe"`
-	PID     uint32 `json:"pid"`
-	Op      string `json:"op"`
-	Path    string `json:"path"`
-	Scope   string `json:"scope,omitempty"`
-	Never   string `json:"never,omitempty"`
-	Waiting int    `json:"waiting,omitempty"`
+	ID      uint64   `json:"id"`
+	Exe     string   `json:"exe"`
+	PID     uint32   `json:"pid"`
+	Op      string   `json:"op"`
+	Path    string   `json:"path"`
+	Scope   string   `json:"scope,omitempty"`
+	Never   string   `json:"never,omitempty"`
+	Waiting int      `json:"waiting,omitempty"`
+	Cmdline []string `json:"cmdline,omitempty"`
+	Parents []string `json:"parents,omitempty"`
 }
 
 // Ask sends the request to the connected client, waiting for one to connect if
@@ -154,6 +156,7 @@ func (s *Socket) Ask(r Request) Answer {
 		}
 		line, _ := json.Marshal(wireRequest{
 			ID: id, Exe: r.Exe, PID: r.PID, Op: r.Op, Path: r.Path, Scope: r.Scope, Never: r.Never, Waiting: r.Waiting,
+			Cmdline: r.Cmdline, Parents: r.Parents,
 		})
 		_ = s.client.SetDeadline(deadline)
 		if _, err := fmt.Fprintf(s.client, "PROMPT %s\n", line); err != nil {
@@ -244,6 +247,9 @@ func RunClient(path string, in *os.File, out *os.File) error {
 			return err
 		}
 		fmt.Fprintf(out, "\n%s (pid %d) wants to %s:\n  %s\n", baseName(r.Exe), r.PID, r.Op, r.Path)
+		if o := (Request{Cmdline: r.Cmdline, Parents: r.Parents}).Origin(); o != "" {
+			fmt.Fprintf(out, "  by: %s\n", o)
+		}
 		if r.Waiting > 0 {
 			fmt.Fprintf(out, "  (%d more waiting)\n", r.Waiting)
 		}

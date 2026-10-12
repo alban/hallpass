@@ -5,9 +5,12 @@ package procfs
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"testing"
+	"time"
 )
 
 func TestResolve(t *testing.T) {
@@ -145,5 +148,34 @@ func TestDescends(t *testing.T) {
 	}
 	if Descends(os.Getppid(), os.Getpid()) {
 		t.Error("the parent descends from its child")
+	}
+}
+
+func TestCmdlineAncestors(t *testing.T) {
+	child := exec.Command("sleep", "60")
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = child.Process.Kill(); _ = child.Wait() }()
+	pid := child.Process.Pid
+
+	// Until the exec completes, the child's cmdline is the test binary's,
+	// then briefly empty.
+	got := Cmdline(pid)
+	for i := 0; i < 100 && !slices.Equal(got, []string{"sleep", "60"}); i++ {
+		time.Sleep(10 * time.Millisecond)
+		got = Cmdline(pid)
+	}
+	if !slices.Equal(got, []string{"sleep", "60"}) {
+		t.Errorf("Cmdline = %q", got)
+	}
+	if got, want := Ancestors(pid, os.Getpid(), 4), []string{Comm(os.Getpid())}; !slices.Equal(got, want) {
+		t.Errorf("Ancestors(child, self) = %q, want %q", got, want)
+	}
+	if got := Ancestors(os.Getpid(), os.Getpid(), 4); got != nil {
+		t.Errorf("Ancestors(self, self) = %q, want none", got)
+	}
+	if got := Ancestors(pid, os.Getpid(), 0); got != nil {
+		t.Errorf("Ancestors with max 0 = %q", got)
 	}
 }

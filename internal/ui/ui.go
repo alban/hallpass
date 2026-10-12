@@ -4,7 +4,12 @@
 // Package ui presents access prompts to the user and returns their answer.
 package ui
 
-import "time"
+import (
+	"strings"
+	"time"
+	"unicode"
+	"unicode/utf8"
+)
 
 // Answer is the user's response to a prompt.
 type Answer int
@@ -80,6 +85,75 @@ type Request struct {
 	// Never describes what AnswerNever covers.
 	Never   string
 	Waiting int // other requests queued behind this one
+	// Cmdline and Parents (command names, nearest first) describe the
+	// process. Both come from the process itself: display only.
+	Cmdline []string
+	Parents []string
+}
+
+// maxCommand bounds Command's output, so a prompt line stays readable.
+const maxCommand = 100
+
+// Command formats r's command line for display, quoted like a shell would
+// need it, with control characters replaced so the process cannot inject
+// terminal escapes. It returns "" when the command line is unknown.
+func (r Request) Command() string {
+	var b strings.Builder
+	for i, a := range r.Cmdline {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		b.WriteString(shellQuote(sanitize(a)))
+		if b.Len() > maxCommand {
+			break
+		}
+	}
+	s := b.String()
+	if len(s) > maxCommand {
+		s = strings.ToValidUTF8(s[:maxCommand], "") + "…"
+	}
+	return s
+}
+
+// Chain formats r's parents for display, e.g. "make ← node".
+func (r Request) Chain() string {
+	p := make([]string, len(r.Parents))
+	for i, c := range r.Parents {
+		p[i] = sanitize(c)
+	}
+	return strings.Join(p, " ← ")
+}
+
+// Origin formats the command and its parents on one line, e.g.
+// "sh -c 'echo x >> ~/.bashrc' ← make ← node", or "" if both are unknown.
+func (r Request) Origin() string {
+	parts := []string{}
+	if c := r.Command(); c != "" {
+		parts = append(parts, c)
+	}
+	if c := r.Chain(); c != "" {
+		parts = append(parts, c)
+	}
+	return strings.Join(parts, " ← ")
+}
+
+func sanitize(s string) string {
+	return strings.Map(func(c rune) rune {
+		if unicode.IsControl(c) || unicode.Is(unicode.Cf, c) || c == utf8.RuneError {
+			return '?'
+		}
+		return c
+	}, strings.ToValidUTF8(s, "?"))
+}
+
+func shellQuote(s string) string {
+	if s != "" && strings.Trim(s, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_./=:,+@%") == "" {
+		return s
+	}
+	if strings.Contains(s, "'") && !strings.ContainsAny(s, "\"$`\\!") {
+		return `"` + s + `"`
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // Valid reports whether a is a meaningful answer to r: the scoped grants

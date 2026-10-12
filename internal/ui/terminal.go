@@ -33,6 +33,9 @@ func (a *Terminal) Ask(r Request) Answer {
 		head += fmt.Sprintf("   (+%d waiting)", r.Waiting)
 	}
 	lines := []string{head, " " + r.Path}
+	if o := r.Origin(); o != "" {
+		lines = append(lines, " by: "+o)
+	}
 	keys := " [o] allow once"
 	accept := "oOdDnN\x1b\x03"
 	if r.Scope != "" {
