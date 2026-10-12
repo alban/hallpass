@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <title>hallpass</title>
+  <path d="M128 18 L216 50 V122 C216 180 178 220 128 240 C78 220 40 180 40 122 V50 Z" fill="#1a202c" stroke="#38a169" stroke-width="10" stroke-linejoin="round"/>
+  <path d="M84 98 L118 124 L84 150" fill="none" stroke="#68d391" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="128" y="142" width="44" height="12" rx="4" fill="#68d391"/>
+  <circle cx="184" cy="190" r="26" fill="#f6e05e" stroke="#1a202c" stroke-width="6"/>
+  <text x="184" y="203" text-anchor="middle" font-family="DejaVu Sans, Verdana, sans-serif" font-weight="bold" font-size="36" fill="#1a202c">?</text>
+</svg>

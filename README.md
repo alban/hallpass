@@ -1,5 +1,7 @@
 # hallpass
 
+<img src="docs/logo.svg" alt="hallpass logo" width="128" align="right">
+
 **Run an AI coding agent in your shell, and get asked before it writes outside your project.**
 
 ```console
