@@ -615,12 +615,13 @@ func (s *session) handle(n seccomp.Notif) {
 	}
 
 	reason := "policy"
-	if unknown {
-		reason = "user: unknown path"
-	} else if len(ask) > 0 {
+	if len(ask) > 0 {
 		reason = "user"
 		if _, ok := s.cfg.Asker.(ui.AutoAllow); ok {
 			reason = "audit" // would have been asked
+		}
+		if unknown {
+			reason += ": unknown path"
 		}
 	}
 	path := ""
