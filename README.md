@@ -2,6 +2,9 @@
 
 # hallpass
 
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![License: GPL v2](https://img.shields.io/badge/License-GPL%20v2-blue.svg)](bpf/hallpass.bpf.c)
+
 **Documentation: [alban.github.io/hallpass](https://alban.github.io/hallpass/)**
 
 **Run an AI coding agent in your shell, and get asked before it writes outside your project.**
@@ -144,4 +147,8 @@ Strict mode:
 
 ## License
 
-Apache License 2.0. See [LICENSE](LICENSE).
+The hallpass user-space components are licensed under the
+[Apache License, Version 2.0](LICENSE). The BPF programs in [bpf/](bpf/) are
+dual-licensed [GPL-2.0-only OR BSD-2-Clause](bpf/hallpass.bpf.c): the kernel
+requires a GPL-compatible license to load LSM programs, while the BSD option
+keeps them reusable.
