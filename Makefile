@@ -11,6 +11,25 @@ CI_KERNELS_IMAGE ?= ghcr.io/inspektor-gadget/ci-kernels:7.2.8-debug
 all:
 	go build -o hallpass ./cmd/hallpass
 
+# Run the tests in a VM booting ci-kernels:KERNEL_VERSION, which has BPF-LSM
+# active. Needs vimto (CGO_ENABLED=0 go install lmb.io/vimto@latest) and qemu.
+# Without /dev/kvm, qemu emulates the CPU: slower, but it works. Everything is
+# built on the host: vimto runs go test with -exec, and the e2e tests use the
+# binary from HALLPASS_BIN instead of building it in the VM. vimto -sudo runs
+# the tests as root in the VM only, so nothing on the host needs sudo.
+# HALLPASS_REQUIRE_LSM=1 makes the strict-mode tests fail rather than skip.
+VIMTO ?= vimto
+KERNEL_VERSION ?= 7.2.8
+TEST_VM_KERNEL ?= ghcr.io/inspektor-gadget/ci-kernels:$(KERNEL_VERSION)
+TEST_VM_PKGS ?= ./...
+TEST_VM_FLAGS ?=
+.PHONY: test-vm
+test-vm: all
+	$(if $(wildcard /dev/kvm),,VIMTO_DISABLE_KVM=1) CGO_ENABLED=0 \
+	HALLPASS_BIN=$(CURDIR)/hallpass \
+		$(VIMTO) -smp cpus=2 -sudo -kernel $(TEST_VM_KERNEL) -- \
+		go test -count=1 $(TEST_VM_FLAGS) $(TEST_VM_PKGS)
+
 # Rebuild the BPF objects (needs clang); they are committed.
 .PHONY: generate
 generate:

@@ -19,6 +19,12 @@ import (
 var hallpassBin string
 
 func TestMain(m *testing.M) {
+	// HALLPASS_BIN is a binary built beforehand, e.g. on the host by
+	// `make test-vm`, so that the VM does not have to run the linker.
+	if bin := os.Getenv("HALLPASS_BIN"); bin != "" {
+		hallpassBin = bin
+		os.Exit(m.Run())
+	}
 	dir, err := os.MkdirTemp("", "hallpass-bin")
 	if err != nil {
 		panic(err)
