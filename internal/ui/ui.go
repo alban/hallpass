@@ -182,6 +182,16 @@ func (AutoDeny) Ask(Request) Answer { return AnswerDismissed }
 // Close is a no-op.
 func (AutoDeny) Close() error { return nil }
 
+// AutoAllow answers every prompt with "allow once", for --ask=allow: an
+// audit run that lets the program write and logs what it would have asked.
+type AutoAllow struct{}
+
+// Ask always allows, once.
+func (AutoAllow) Ask(Request) Answer { return AnswerAllowOnce }
+
+// Close is a no-op.
+func (AutoAllow) Close() error { return nil }
+
 func baseName(p string) string {
 	for i := len(p) - 1; i >= 0; i-- {
 		if p[i] == '/' {

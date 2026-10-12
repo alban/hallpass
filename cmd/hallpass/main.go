@@ -75,22 +75,41 @@ func runMain(argv []string, printPolicy bool) int {
 		logPath     string
 		mode        string
 		escalate    string
+		noImplicit  bool
+		allowTTY    bool
+		wait        string
 	)
 	fs.StringVar(&workdir, "C", "", "project `dir`, writable without asking (default: current directory)")
 	fs.StringVar(&workdir, "workdir", "", "same as -C")
 	fs.Var(&allow, "allow", "`path` also writable without asking (repeatable)")
 	fs.Var(&deny, "deny", "`path` always denied (repeatable, wins over --allow)")
-	fs.StringVar(&ask, "ask", "auto", "how to ask: auto | term | desktop | answer | deny")
+	fs.BoolVar(&noImplicit, "no-implicit", false, "writable without asking: only the --allow paths (no project dir, $TMPDIR, devices or terminal)")
+	fs.BoolVar(&allowTTY, "allow-tty", true, "the session's own terminal (/dev/tty, its /dev/pts/N) is writable without asking; --no-implicit turns it off unless given explicitly")
+	fs.StringVar(&ask, "ask", "auto", "how to ask: auto | term | desktop | answer | deny | allow (allow and log: audit)")
 	fs.DurationVar(&timeout, "timeout", 30*time.Second, "deny unanswered prompts after `duration` (0: wait forever)")
 	fs.BoolVar(&allowUserns, "allow-userns", false, "let the sandbox create user/mount namespaces (weakens lite mode; always on in strict mode)")
 	fs.StringVar(&logPath, "log", "", "append one JSON line per mediated syscall to `file`")
 	fs.StringVar(&mode, "mode", "lite", "lite (seccomp only, no root needed) | strict (the kernel enforces the answers with BPF-LSM; root needed to load it)")
 	fs.StringVar(&escalate, "escalate", "", "strict mode, when not root: how to run the loader as root: "+strings.Join(privsep.Tools, " | ")+" (default: the saved choice, else ask on a terminal, else auto)")
+	fs.StringVar(&wait, "wait", "main", "exit when the main process exits (main), or keep supervising its background processes until they all exit (all)")
 	if err := fs.Parse(argv); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
 		return 2
+	}
+	if noImplicit {
+		explicit := false
+		fs.Visit(func(f *flag.Flag) { explicit = explicit || f.Name == "allow-tty" })
+		if !explicit {
+			allowTTY = false
+		}
+	}
+	if wait != "main" && wait != "all" {
+		return fail(fmt.Errorf("unknown --wait %q (want main or all)", wait))
+	}
+	if wait == "all" && !printPolicy && !kernelAtLeast(5, 9) {
+		return fail(errors.New("--wait=all needs Linux 5.9 or later (POLLHUP on the seccomp notify fd)"))
 	}
 
 	cfgDir, err := config.Dir()
@@ -123,7 +142,9 @@ func runMain(argv []string, printPolicy bool) int {
 		return fail(fmt.Errorf("workdir %s: not a directory", workdir))
 	}
 	if filepath.Clean(workdir) == filepath.Clean(home) || workdir == "/" {
-		return fail(fmt.Errorf("refusing to use %s as the workdir: everything under it would be writable", workdir))
+		if !noImplicit {
+			return fail(fmt.Errorf("refusing to use %s as the workdir: everything under it would be writable", workdir))
+		}
 	}
 	for _, l := range []listFlag{allow, deny} {
 		for i, p := range l {
@@ -145,28 +166,41 @@ func runMain(argv []string, printPolicy bool) int {
 		}
 		deny = append(deny, exe)
 	}
-	engine := policy.New(home, workdir,
-		append(policy.DefaultAllows(), allow...),
-		deny)
+	granted, defaults := workdir, policy.DefaultAllows()
+	if noImplicit {
+		granted, defaults = "", nil
+	}
+	engine := policy.New(home, granted, append(defaults, allow...), deny)
 	if printPolicy {
-		engine.SetTmpdir(filepath.Join(os.TempDir(), "hallpass-*"))
+		if !noImplicit {
+			engine.SetTmpdir(filepath.Join(os.TempDir(), "hallpass-*"))
+		}
+		if allowTTY {
+			for _, p := range policy.TTYAllows("/dev/pts/N") {
+				engine.AllowDevice(p)
+			}
+		}
 		for _, l := range engine.Describe() {
 			fmt.Println(l)
 		}
 		return 0
 	}
-	// A private $TMPDIR, so tools that honour it (mktemp, compilers, ...)
-	// work without asking and without sharing /tmp.
-	tmpdir, err := os.MkdirTemp("", "hallpass-")
-	if err != nil {
-		return fail(err)
-	}
-	defer func() {
-		if err := os.Remove(tmpdir); err != nil && !errors.Is(err, os.ErrNotExist) {
-			fmt.Fprintf(os.Stderr, "hallpass: kept %s: not empty\n", tmpdir)
+	var env []string
+	if !noImplicit {
+		// A private $TMPDIR, so tools that honour it (mktemp, compilers,
+		// ...) work without asking and without sharing /tmp.
+		tmpdir, err := os.MkdirTemp("", "hallpass-")
+		if err != nil {
+			return fail(err)
 		}
-	}()
-	engine.SetTmpdir(tmpdir)
+		defer func() {
+			if err := os.Remove(tmpdir); err != nil && !errors.Is(err, os.ErrNotExist) {
+				fmt.Fprintf(os.Stderr, "hallpass: kept %s: not empty\n", tmpdir)
+			}
+		}()
+		engine.SetTmpdir(tmpdir)
+		env = append(env, "TMPDIR="+tmpdir)
+	}
 
 	var strict *lsm.LSM
 	switch mode {
@@ -202,10 +236,16 @@ func runMain(argv []string, printPolicy bool) int {
 		return fail(err)
 	}
 	defer asker.Close()
-	if pty != nil {
+	if allowTTY {
 		// The program's own terminal is writable without asking; other
 		// /dev/pts/N (another session) stay asked.
-		engine.AllowDevice(pty.SlavePath())
+		pts := ""
+		if pty != nil {
+			pts = pty.SlavePath()
+		}
+		for _, p := range policy.TTYAllows(pts) {
+			engine.AllowDevice(p)
+		}
 	}
 
 	var logw io.Writer
@@ -227,7 +267,8 @@ func runMain(argv []string, printPolicy bool) int {
 		Log:         logw,
 		TTY:         pty,
 		LSM:         strict,
-		Env:         []string{"TMPDIR=" + tmpdir},
+		Env:         env,
+		WaitAll:     wait == "all",
 	})
 	if pty != nil {
 		pty.Close() // restore the terminal before printing anything
@@ -241,6 +282,20 @@ func runMain(argv []string, printPolicy bool) int {
 	return code
 }
 
+// kernelAtLeast reports whether the running kernel is at least major.minor;
+// true when the release cannot be parsed, to not refuse unknown kernels.
+func kernelAtLeast(major, minor int) bool {
+	var u unix.Utsname
+	if err := unix.Uname(&u); err != nil {
+		return true
+	}
+	var ma, mi int
+	if _, err := fmt.Sscanf(unix.ByteSliceToString(u.Release[:]), "%d.%d", &ma, &mi); err != nil {
+		return true
+	}
+	return ma > major || (ma == major && mi >= minor)
+}
+
 // newAsker picks how to ask. "auto" prefers the terminal overlay (works
 // locally and over ssh, and keeps the question next to the agent), then the
 // desktop, then `hallpass answer`.
@@ -248,6 +303,8 @@ func newAsker(mode string, timeout time.Duration) (ui.Asker, *tty.Term, error) {
 	switch mode {
 	case "deny":
 		return ui.AutoDeny{}, nil, nil
+	case "allow":
+		return ui.AutoAllow{}, nil, nil
 	case "term":
 		return newTermAsker(timeout)
 	case "desktop":

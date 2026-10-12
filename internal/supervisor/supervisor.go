@@ -43,6 +43,10 @@ type Config struct {
 	LSM *lsm.LSM
 	// Env is added to the sandbox's environment (KEY=value).
 	Env []string
+	// WaitAll keeps supervising after the command exits, until every
+	// process of the sandbox has exited (the notify fd reports POLLHUP,
+	// Linux 5.9+) or the user stops waiting.
+	WaitAll bool
 }
 
 // onceTTL is how long the kernel allows a path after "allow once": long
@@ -99,12 +103,18 @@ func Run(cfg Config) (int, error) {
 	// Ctrl-C and Ctrl-\ are for the sandboxed program, which shares our
 	// process group and terminal: catch and drop them here. (signal.Ignore
 	// would be inherited across exec; caught signals are reset to default.)
-	// Termination requests are forwarded.
+	// Termination requests are forwarded. Once the command has exited and
+	// only its background processes are left (--wait=all), Ctrl-C and
+	// termination requests stop the waiting instead.
+	wt := &waiter{stop: make(chan struct{})}
 	drop := make(chan os.Signal, 4)
 	signal.Notify(drop, syscall.SIGINT, syscall.SIGQUIT)
 	defer signal.Stop(drop)
 	go func() {
-		for range drop {
+		for sig := range drop {
+			if sig == syscall.SIGINT && wt.active.Load() {
+				wt.Stop()
+			}
 		}
 	}()
 	fwd := make(chan os.Signal, 4)
@@ -158,6 +168,7 @@ func Run(cfg Config) (int, error) {
 		listener: seccomp.NewListener(listenerFD),
 		inflight: map[string]*pending{},
 		root:     cmd.Process.Pid,
+		wait:     wt,
 	}
 	if cfg.Log != nil {
 		s.logEnc = json.NewEncoder(cfg.Log)
@@ -194,14 +205,83 @@ func Run(cfg Config) (int, error) {
 
 	go func() {
 		for sig := range fwd {
+			if wt.active.Load() {
+				wt.Stop()
+				continue
+			}
 			_ = cmd.Process.Signal(sig)
 		}
 	}()
 
 	code := waitMain()
+	if cfg.WaitAll {
+		s.waitAll()
+	}
 	// Background processes left by the command keep the filter; once we
 	// exit, their mediated syscalls fail with ENOSYS (fail closed).
 	return code, nil
+}
+
+// waiter is --wait=all's state: active once the command has exited and
+// hallpass supervises its background processes; stop ends that early.
+type waiter struct {
+	active atomic.Bool
+	once   sync.Once
+	stop   chan struct{}
+}
+
+// Stop stops waiting for the background processes.
+func (w *waiter) Stop() { w.once.Do(func() { close(w.stop) }) }
+
+// waitAll returns once no process uses the seccomp filter any more (the
+// notify fd reports POLLHUP), or the user stops waiting. Meanwhile the
+// workers go on deciding, asking and logging.
+func (s *session) waitAll() {
+	hup := make(chan struct{})
+	go func() {
+		defer close(hup)
+		// No events requested: poll still reports POLLHUP and POLLERR,
+		// and does not wake up for pending notifications.
+		fds := []unix.PollFd{{Fd: int32(s.listener.FD())}}
+		for {
+			_, err := unix.Poll(fds, -1)
+			if err == unix.EINTR {
+				continue
+			}
+			if err != nil || fds[0].Revents != 0 {
+				return
+			}
+		}
+	}()
+	// Most commands leave nothing behind: say nothing in that case.
+	select {
+	case <-hup:
+		return
+	case <-time.After(200 * time.Millisecond):
+	}
+	s.wait.active.Store(true)
+	how := "SIGTERM"
+	if s.cfg.TTY != nil {
+		how = "Ctrl-] then s"
+	}
+	s.notice("hallpass: the command exited; still supervising its background processes (" + how + " to stop)")
+	select {
+	case <-hup:
+	case <-s.wait.stop:
+		s.notice("hallpass: stopped waiting; the remaining processes' writes now fail")
+	}
+}
+
+// notice prints a line for the user, outside any prompt.
+func (s *session) notice(msg string) {
+	s.promptMu.Lock()
+	defer s.promptMu.Unlock()
+	if s.cfg.TTY != nil {
+		// The terminal is in raw mode.
+		fmt.Fprint(os.Stderr, "\r\n"+msg+"\r\n")
+		return
+	}
+	fmt.Fprintln(os.Stderr, msg)
 }
 
 // reap reaps every child: the command (main, whose status goes to mainDone)
@@ -259,6 +339,7 @@ type session struct {
 	neverUnknown atomic.Bool
 
 	menuOpen atomic.Bool
+	wait     *waiter
 }
 
 // menu shows the session's rules over the program's screen (Ctrl-]), until
@@ -279,12 +360,17 @@ func (s *session) menu() {
 	lines := []string{fmt.Sprintf(" hallpass, %s mode: the rules of this session", mode)}
 	lines = append(lines, wrapList(" Denied:   ", deny, w)...)
 	lines = append(lines, wrapList(" Writable: ", allow, w)...)
+	if s.wait.active.Load() {
+		lines = append(lines, " The command exited; its background processes are still supervised.   [s] stop waiting")
+	}
 	lines = append(lines, " Anything else is asked. A folder covers everything below it.   [any key] close")
 	keys := make([]byte, 0, 255)
 	for k := 1; k < 256; k++ {
 		keys = append(keys, byte(k))
 	}
-	s.cfg.TTY.Prompt(lines, string(keys), 0, 0)
+	if s.cfg.TTY.Prompt(lines, string(keys), 0, 0) == 's' && s.wait.active.Load() {
+		s.wait.Stop()
+	}
 }
 
 // wrapList lays out items after prefix, comma-separated, in lines of at
@@ -533,6 +619,9 @@ func (s *session) handle(n seccomp.Notif) {
 		reason = "user: unknown path"
 	} else if len(ask) > 0 {
 		reason = "user"
+		if _, ok := s.cfg.Asker.(ui.AutoAllow); ok {
+			reason = "audit" // would have been asked
+		}
 	}
 	path := ""
 	if len(targets) > 0 {

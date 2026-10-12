@@ -204,6 +204,14 @@ func (t *Term) inputLoop() {
 				continue
 			}
 		}
+		select {
+		case <-t.outDone:
+			// Every copy of the slave is closed: nothing reads the
+			// input any more, but the menu and prompts still need
+			// the keys (hallpass --wait=all).
+			continue
+		default:
+		}
 		if _, err := t.master.Write(buf[:n]); err != nil {
 			return
 		}

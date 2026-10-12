@@ -84,12 +84,16 @@ type grant struct {
 }
 
 // New builds an engine. All paths must be absolute; they are cleaned and, when
-// they exist, symlink-resolved so they compare equal to resolved targets.
+// they exist, symlink-resolved so they compare equal to resolved targets. An
+// empty workdir grants no project directory (--no-implicit).
 func New(home, workdir string, allow, deny []string) *Engine {
 	home = canon(home)
+	if workdir != "" {
+		workdir = canon(workdir)
+	}
 	return &Engine{
 		home:          home,
-		workdir:       canon(workdir),
+		workdir:       workdir,
 		allow:         canonAll(allow),
 		deny:          canonAll(deny),
 		warn:          sensitiveLocations(home),
@@ -158,12 +162,23 @@ func (e *Engine) Warn(path string) string {
 // /dev/shm) is not in it: other programs read it too, so the user decides.
 // /dev/pts as a whole is not in it either: /dev/pts/N is another session's
 // terminal, writable for escape-sequence injection or fake prompts. The
-// session's own terminal is allowed separately (see Engine.AllowDevice).
+// session's own terminal is allowed separately (see TTYAllows).
 func DefaultAllows() []string {
 	return []string{
 		"/dev/null", "/dev/zero", "/dev/full", "/dev/random", "/dev/urandom",
-		"/dev/tty", "/dev/ptmx",
+		"/dev/ptmx",
 	}
+}
+
+// TTYAllows returns the session's own terminal: /dev/tty, which always
+// names the opener's controlling terminal, and pts, the program's
+// /dev/pts/N (empty when hallpass gives it no terminal).
+func TTYAllows(pts string) []string {
+	out := []string{"/dev/tty"}
+	if pts != "" {
+		out = append(out, pts)
+	}
+	return out
 }
 
 // Eval returns the decision for writing path.
@@ -180,7 +195,7 @@ func (e *Engine) Eval(path string) Decision {
 	if denied {
 		return Deny
 	}
-	if under(path, e.workdir) {
+	if e.workdir != "" && under(path, e.workdir) {
 		return Allow
 	}
 	for _, a := range e.allow {
@@ -288,7 +303,9 @@ func (e *Engine) Rules() []Rule {
 	for _, d := range e.deny {
 		rs = append(rs, Rule{Path: d, Tree: true, Deny: true})
 	}
-	rs = append(rs, Rule{Path: e.workdir, Tree: true})
+	if e.workdir != "" {
+		rs = append(rs, Rule{Path: e.workdir, Tree: true})
+	}
 	for _, a := range e.allow {
 		rs = append(rs, Rule{Path: a, Tree: true})
 	}

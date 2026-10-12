@@ -304,3 +304,124 @@ for i in range(3):
 		t.Errorf("output %q, want %q", out.String(), want)
 	}
 }
+
+type logLine struct {
+	Path, Decision, Reason string
+}
+
+func readLog(t *testing.T, file string) []logLine {
+	t.Helper()
+	b, err := os.ReadFile(file)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	var out []logLine
+	for _, l := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		if l == "" {
+			continue
+		}
+		var e logLine
+		if err := json.Unmarshal([]byte(l), &e); err != nil {
+			t.Fatalf("log line %q: %v", l, err)
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+func findLog(lines []logLine, path string) (logLine, bool) {
+	for _, l := range lines {
+		if l.Path == path {
+			return l, true
+		}
+	}
+	return logLine{}, false
+}
+
+func TestNoImplicit(t *testing.T) {
+	e := newEnv(t)
+	if err := os.Mkdir(e.proj+"/out", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	script := `
+check() { name=$1; shift; if "$@" 2>/dev/null; then echo "$name=allowed"; else echo "$name=denied"; fi; }
+check workdir sh -c 'echo x > inside'
+check out     sh -c 'echo x > out/f'
+echo "TMPDIR=$TMPDIR"
+`
+	c := e.cmd(script, "--no-implicit", "--ask=deny", "--allow="+e.proj+"/out", "--allow=/dev/null")
+	c.Env = append(c.Env, "TMPDIR=")
+	out, err := c.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	for _, want := range []string{"workdir=denied", "out=allowed", "TMPDIR=\n"} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("output lacks %q", want)
+		}
+	}
+	if t.Failed() {
+		t.Logf("output:\n%s", out)
+	}
+}
+
+func TestAuditMode(t *testing.T) {
+	e := newEnv(t)
+	logf := e.root + "/log.jsonl"
+	c := e.cmd(`echo x > inside && echo x > "$HOME/outside"`, "--no-implicit", "--ask=allow", "--log="+logf)
+	if out, err := c.CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	lines := readLog(t, logf)
+	for _, p := range []string{e.proj + "/inside", e.home + "/outside"} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("%s not written: %v", p, err)
+		}
+		if l, ok := findLog(lines, p); !ok || l.Decision != "allow" || l.Reason != "audit" {
+			t.Errorf("log for %s: %+v (found %v), want allow/audit", p, l, ok)
+		}
+	}
+}
+
+// TestWait checks that a write by a process left behind by the command is
+// still mediated and logged with --wait=all, and not with --wait=main.
+func TestWait(t *testing.T) {
+	for _, wait := range []string{"main", "all"} {
+		t.Run(wait, func(t *testing.T) {
+			e := newEnv(t)
+			logf := e.root + "/log.jsonl"
+			script := `(sleep 1; echo x > "$HOME/late") </dev/null >/dev/null 2>&1 & exit 3`
+			c := e.cmd(script, "--ask=deny", "--wait="+wait, "--log="+logf)
+			start := time.Now()
+			out, err := c.CombinedOutput()
+			if ee, ok := err.(*exec.ExitError); !ok || ee.ExitCode() != 3 {
+				t.Fatalf("exit: %v (want 3)\n%s", err, out)
+			}
+			took := time.Since(start)
+			time.Sleep(1500 * time.Millisecond) // let a --wait=main orphan try
+			l, logged := findLog(readLog(t, logf), e.home+"/late")
+			switch wait {
+			case "main":
+				if took > 900*time.Millisecond {
+					t.Errorf("--wait=main took %v: waited for the background process", took)
+				}
+				if logged {
+					t.Errorf("--wait=main logged the background write: %+v", l)
+				}
+			case "all":
+				if took < time.Second {
+					t.Errorf("--wait=all returned after %v, before the background process", took)
+				}
+				if !logged || l.Decision != "deny" {
+					t.Errorf("background write: %+v (logged %v), want a deny", l, logged)
+				}
+				if !strings.Contains(string(out), "still supervising") {
+					t.Errorf("no waiting notice in output:\n%s", out)
+				}
+			}
+			if _, err := os.Stat(e.home + "/late"); err == nil {
+				t.Error("background write went through")
+			}
+		})
+	}
+}

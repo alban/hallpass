@@ -78,6 +78,28 @@ func TestAllowDevice(t *testing.T) {
 	}
 }
 
+func TestNoWorkdir(t *testing.T) {
+	e := New("/home/u", "", []string{"/home/u/out"}, nil)
+	for _, tc := range []struct {
+		path string
+		want Decision
+	}{
+		{"/home/u/src/proj/f", Ask},
+		{"/x", Ask},
+		{"/dev/null", Ask},
+		{"/home/u/out/f", Allow},
+	} {
+		if got := e.Eval(tc.path); got != tc.want {
+			t.Errorf("Eval(%s) = %v, want %v", tc.path, got, tc.want)
+		}
+	}
+	for _, r := range e.Rules() {
+		if r.Path == "" {
+			t.Errorf("rule with an empty path: %+v", r)
+		}
+	}
+}
+
 func TestDenyWinsOverWorkdir(t *testing.T) {
 	e := New("/home/u", "/home/u/secret", nil, []string{"/home/u/secret"})
 	if got := e.Eval("/home/u/secret/config"); got != Deny {
