@@ -143,10 +143,20 @@ func TestDescends(t *testing.T) {
 	if !Descends(os.Getpid(), os.Getpid()) {
 		t.Error("a process descends from itself")
 	}
-	if !Descends(os.Getpid(), os.Getppid()) {
+	// Spawn the child rather than using our own parent: Descends stops at
+	// init, which is our parent in a vimto VM.
+	child := exec.Command("sleep", "60")
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		child.Process.Kill()
+		child.Wait()
+	}()
+	if !Descends(child.Process.Pid, os.Getpid()) {
 		t.Error("a process descends from its parent")
 	}
-	if Descends(os.Getppid(), os.Getpid()) {
+	if Descends(os.Getpid(), child.Process.Pid) {
 		t.Error("the parent descends from its child")
 	}
 }
