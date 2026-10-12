@@ -6,10 +6,15 @@ package ui
 import (
 	"fmt"
 	"html"
+	"net/url"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/godbus/dbus/v5"
+
+	"github.com/alban/hallpass"
 )
 
 const (
@@ -26,9 +31,26 @@ type Desktop struct {
 	conn    *dbus.Conn
 	timeout time.Duration
 	signals chan *dbus.Signal
+	icon    string
 
 	mu      sync.Mutex
 	replace uint32
+}
+
+// logoIcon writes the logo where the notification service can read it and
+// returns its URI, or a themed icon name if that fails.
+func logoIcon() string {
+	dir, err := os.UserCacheDir()
+	if err == nil {
+		dir = filepath.Join(dir, "hallpass")
+		p := filepath.Join(dir, "logo.svg")
+		if err = os.MkdirAll(dir, 0o700); err == nil {
+			if err = os.WriteFile(p, hallpass.Logo, 0o644); err == nil {
+				return (&url.URL{Scheme: "file", Path: p}).String()
+			}
+		}
+	}
+	return "dialog-question"
 }
 
 // NewDesktop connects to the session bus. It fails if no notification service
@@ -55,7 +77,7 @@ func NewDesktop(timeout time.Duration) (*Desktop, error) {
 		return nil, fmt.Errorf("notification service does not support actions")
 	}
 
-	d := &Desktop{conn: conn, timeout: timeout, signals: make(chan *dbus.Signal, 64)}
+	d := &Desktop{conn: conn, timeout: timeout, signals: make(chan *dbus.Signal, 64), icon: logoIcon()}
 	if err := conn.AddMatchSignal(
 		dbus.WithMatchObjectPath(notifPath),
 		dbus.WithMatchInterface(notifIfc),
@@ -102,7 +124,7 @@ func (d *Desktop) Ask(r Request) Answer {
 	var id uint32
 	err := d.conn.Object(notifDest, notifPath).Call(
 		notifIfc+".Notify", 0,
-		"hallpass", d.replace, "dialog-question", "hallpass", body, actions, hints, int32(0),
+		"hallpass", d.replace, d.icon, "hallpass", body, actions, hints, int32(0),
 	).Store(&id)
 	if err != nil {
 		return AnswerDismissed
