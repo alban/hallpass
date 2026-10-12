@@ -3,9 +3,9 @@
 `hallpass.gif` is recorded with [VHS](https://github.com/charmbracelet/vhs) from `hallpass.tape`. It shows two scenarios:
 
 1. A shell in the sandbox: writing in the project goes through, appending to `~/.bashrc` is asked and denied, and Ctrl-] shows the session's rules.
-2. `copilot --yolo` asked to "Build the project" in [`example/`](example), whose Makefile appends to `~/.bashrc`. hallpass shows the command and who started it; the write is denied, and copilot reports the bad line.
+2. `copilot --yolo` asked to "Build and install the project" in [`example/`](example). The `install` step copies the built binary into `~/.local/bin`, outside the project, so hallpass asks and the write is denied. A fast model (`--model claude-haiku-4.5`) keeps the agent's turn short.
 
-The Makefile only appends a comment, so a demo gone wrong does no harm.
+Title cards and `#` comments typed in the shell explain each step.
 
 ## Recording
 
@@ -15,8 +15,8 @@ The tape copies `example/` to `/tmp/hallpass-demo`, outside any git repository, 
 
 ```console
 $ cp -r demos/example /tmp/hallpass-demo && (cd /tmp/hallpass-demo && copilot)   # trust the folder, then /exit
-$ go build -o hallpass ./cmd/hallpass
-$ vhs demos/hallpass.tape
+$ make -C demos validate       # check the tape
+$ make -C demos hallpass.gif   # build hallpass and record, about 2 minutes
 ```
 
-The agent's answers vary from run to run: check the result before committing it.
+`vhs` is looked up in `$PATH` (`go install` puts it in `~/go/bin`); override with `make VHS=/path/to/vhs`. The agent's answers vary from run to run: check the result before committing it.
