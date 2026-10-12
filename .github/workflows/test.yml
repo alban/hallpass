@@ -1,0 +1,74 @@
+name: Test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+    - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version-file: go.mod
+    - name: gofmt
+      run: |
+        out=$(gofmt -l .)
+        if [[ -n "$out" ]]; then echo "not gofmt'ed:"; echo "$out"; exit 1; fi
+    - name: go vet
+      run: go vet ./...
+    - name: go test
+      run: go test -count=1 ./...
+
+  kernel:
+    name: Tests on kernel ${{ matrix.kernel }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        # Strict mode needs bpf_path_d_path (6.12): make its tests fail
+        # rather than skip there. Older kernels only run lite mode.
+        - kernel: "7.2"
+          require-lsm: "1"
+        - kernel: "6.18"
+          require-lsm: "1"
+        - kernel: "6.12"
+          require-lsm: "1"
+        - kernel: "6.6"
+          require-lsm: ""
+        - kernel: "6.1"
+          require-lsm: ""
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+    - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version-file: go.mod
+    - name: Set up QEMU
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y qemu-system-x86
+        sudo chmod 666 /dev/kvm
+    - name: Install vimto
+      run: |
+        CGO_ENABLED=0 GOBIN=$(go env GOPATH)/bin go install lmb.io/vimto@fc25e09ed4cd35afaa77eb340cc5879397aa484d # v0.4.0
+    - name: Run the tests in a VM
+      env:
+        KERNEL_VERSION: ${{ matrix.kernel }}
+        HALLPASS_REQUIRE_LSM: ${{ matrix.require-lsm }}
+      run: |
+        make test-vm VIMTO=$(go env GOPATH)/bin/vimto KERNEL_VERSION="$KERNEL_VERSION" TEST_VM_FLAGS=-v
