@@ -364,11 +364,16 @@ func (t *Term) drawOverlay() string {
 			break
 		}
 		l = ansi.Truncate(l, t.cols-1, "…")
-		// Bold white on blue, erased to the end of line in that colour.
-		fmt.Fprintf(&b, "\x1b[%d;1H\x1b[0;1;37;44m\x1b[2K%s", top+i+1, l)
-		t.barX = ansi.StringWidth(l) + 1
+		w := ansi.StringWidth(l)
+		// Bold reverse video: the terminal's own foreground and background
+		// swapped, readable in any colour theme (white on blue was not, in
+		// pastel ones). Erasing does not apply reverse video, so pad with
+		// spaces to the last column; the cursor waits there without wrapping.
+		fmt.Fprintf(&b, "\x1b[%d;1H\x1b[0m\x1b[2K\x1b[1;7m%s%s", top+i+1, l, strings.Repeat(" ", t.cols-w))
+		t.barX = w + 1
 	}
 	b.WriteString("\x1b[0m")
+	fmt.Fprintf(&b, "\x1b[%d;%dH", t.rows, min(t.barX, t.cols))
 	return b.String()
 }
 
