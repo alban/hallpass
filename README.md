@@ -6,8 +6,10 @@
 
 ```console
 $ cd ~/src/myproject
-$ hallpass -- copilot        # or: claude, codex, gemini, agy, aider, ... or just `hallpass` for a shell
+$ hallpass -allow ~/.copilot -allow ~/.cache/copilot -- copilot
 ```
+
+Agents keep their own state (sessions, logs, caches) outside the project: the `-allow` flags let copilot write it without asking. They are optional: without them, hallpass asks you when copilot writes there, which is a good way to see what an agent touches. Other agents (claude, codex, gemini, agy, aider, ...) work the same, with their own directories; plain `hallpass` starts a shell.
 
 ![hallpass denying a shell, then a Makefile run by copilot, writing to ~/.bashrc](demos/hallpass.gif)
 
