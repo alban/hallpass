@@ -12,7 +12,9 @@ Lite mode is unprivileged. A seccomp filter pauses the syscalls that modify the 
 
 This is what lets hallpass *ask* instead of just failing the call. It is best effort: because the allowed syscall is re-executed by the kernel, a malicious multi-threaded process can change the path between the check and the kernel acting on it (a TOCTOU race). Strict mode closes that.
 
-In practice lite mode is still useful, because that gap only matters against a process *deliberately* racing the check. Most agent escapes are accidents — a wrong path, an overeager script, a command run in the wrong directory — not adversarial races, and lite mode catches those reliably. Strict mode is for when you also need to hold against a malicious or compromised agent.
+In practice lite mode is still useful, because that gap only matters against a process *deliberately* racing the check. Most agent escapes are accidents — a wrong path, an overeager script, a command run in the wrong directory — not adversarial races, and lite mode catches those reliably. Strict mode closes the TOCTOU race so filesystem enforcement also holds against a deliberate racer.
+
+Neither mode contains a hostile agent today: `execve` and `connect` are not mediated, so a sandboxed process can still ask a service outside the sandbox (`systemd-run --user`, a container daemon, the systemd or D-Bus socket) to write for it. See [Limitations](usage.md#limitations).
 
 ## Strict mode: BPF-LSM
 

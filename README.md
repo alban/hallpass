@@ -132,13 +132,22 @@ go build ./cmd/hallpass
 
 ## Limitations
 
+hallpass is a proof of concept. It mediates filesystem writes; it does not yet mediate
+`execve` or `connect`, in either mode. A sandboxed process can therefore reach
+a service that acts on its behalf *outside* the sandbox, and so write anywhere
+that service can, without a prompt. For example `systemd-run --user`, or
+`docker`/`podman run` talking to a daemon, or a process connecting directly to
+the systemd or D-Bus session socket. These are trivial, known escapes until
+`connect`/`execve` policy exists; treat the current build as "ask me about
+honest mistakes", not "contain a hostile agent".
+
 Lite mode is best effort:
 
 - Only writes are mediated (write-intent `open`, create, delete, rename, link, `truncate`, `mknod`). Reading secrets is not blocked in lite mode.
 - Allowed syscalls continue with `SECCOMP_USER_NOTIF_FLAG_CONTINUE`, so a malicious multi-threaded process can change the path between the check and the kernel acting on it (TOCTOU). Strict mode (BPF-LSM) closes this.
 - Pre-existing hard links to protected files are not detected.
 - `chmod`, `chown`, extended attributes and timestamps are not mediated yet.
-- Network and `execve` policy are not implemented yet.
+- Network and `execve` policy are not implemented yet (see above).
 
 Strict mode:
 

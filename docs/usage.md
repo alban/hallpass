@@ -74,6 +74,8 @@ hallpass answer                      # in another, to see prompts and reply
 
 `hallpass answer` connects to the running session's socket, shows each pending request (path, the `by:` command line and its parents) and lets you allow once, allow temporarily, allow always, deny or refuse forever.
 
+`hallpass answer` is mainly a testing and debugging aid, and a fallback for the headless case above; the terminal overlay is the normal way to answer. The socket only accepts a client of the same user that is not itself sandboxed (it rejects any peer running under a seccomp filter), so the sandbox cannot answer its own prompts through it.
+
 ## Requirements
 
 - Linux with seccomp user notification (5.0+; `SECCOMP_USER_NOTIF_FLAG_CONTINUE` needs 5.5+). Check `/proc/sys/kernel/seccomp/actions_avail` contains `user_notif`.
@@ -89,13 +91,22 @@ go build ./cmd/hallpass
 
 ## Limitations
 
+hallpass is a proof of concept. It mediates filesystem writes; it does not yet mediate
+`execve` or `connect`, in either mode. A sandboxed process can therefore reach
+a service that acts on its behalf *outside* the sandbox, and so write anywhere
+that service can, without a prompt. For example `systemd-run --user`, or
+`docker`/`podman run` talking to a daemon, or a process connecting directly to
+the systemd or D-Bus session socket. These are trivial, known escapes until
+`connect`/`execve` policy exists; treat the current build as "ask me about
+honest mistakes", not "contain a hostile agent".
+
 Lite mode is best effort:
 
 - Only writes are mediated (write-intent `open`, create, delete, rename, link, `truncate`, `mknod`). Reading secrets is not blocked in lite mode.
 - Allowed syscalls continue with `SECCOMP_USER_NOTIF_FLAG_CONTINUE`, so a malicious multi-threaded process can change the path between the check and the kernel acting on it (TOCTOU). Strict mode (BPF-LSM) closes this.
 - Pre-existing hard links to protected files are not detected.
 - `chmod`, `chown`, extended attributes and timestamps are not mediated yet.
-- Network and `execve` policy are not implemented yet.
+- Network and `execve` policy are not implemented yet (see above).
 
 Strict mode:
 
