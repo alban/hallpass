@@ -105,6 +105,14 @@ func (e *Engine) SetTmpdir(dir string) {
 	e.allow = append(e.allow, e.tmpdir)
 }
 
+// AllowDevice makes a device path (e.g. the session's own terminal, /dev/pts/N)
+// writable without asking. Call it before the engine is shared.
+func (e *Engine) AllowDevice(path string) {
+	if path != "" {
+		e.allow = append(e.allow, canon(path))
+	}
+}
+
 // sensitiveLabels maps a location under home to a human name for its secrets.
 // Writes there are asked about like anywhere else, but the prompt is flagged
 // so an "allow" is a deliberate choice, not a reflex. They are not denied
@@ -148,10 +156,13 @@ func (e *Engine) Warn(path string) string {
 // DefaultAllows returns devices that ordinary programs write to constantly
 // and that hold nothing to protect. Shared scratch space (/tmp, /var/tmp,
 // /dev/shm) is not in it: other programs read it too, so the user decides.
+// /dev/pts as a whole is not in it either: /dev/pts/N is another session's
+// terminal, writable for escape-sequence injection or fake prompts. The
+// session's own terminal is allowed separately (see Engine.AllowDevice).
 func DefaultAllows() []string {
 	return []string{
 		"/dev/null", "/dev/zero", "/dev/full", "/dev/random", "/dev/urandom",
-		"/dev/tty", "/dev/ptmx", "/dev/pts",
+		"/dev/tty", "/dev/ptmx",
 	}
 }
 

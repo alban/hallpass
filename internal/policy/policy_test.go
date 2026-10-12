@@ -30,6 +30,8 @@ func TestEval(t *testing.T) {
 		{"/dev/shm/x", Ask},
 		{"/home/u/tmp/hallpass-1/x", Allow},
 		{"/dev/null", Allow},
+		{"/dev/ptmx", Allow},
+		{"/dev/pts/3", Ask}, // another session's terminal
 		{"/home/u/.ssh/authorized_keys", Ask},
 		{"/home/u/.ssh", Ask},
 		{"/home/u/.sshx", Ask},
@@ -59,6 +61,20 @@ func TestWarn(t *testing.T) {
 		if got := e.Warn(tc.path); got != tc.want {
 			t.Errorf("Warn(%s) = %q, want %q", tc.path, got, tc.want)
 		}
+	}
+}
+
+func TestAllowDevice(t *testing.T) {
+	e := newTestEngine()
+	if got := e.Eval("/dev/pts/7"); got != Ask {
+		t.Errorf("before AllowDevice: %v, want Ask", got)
+	}
+	e.AllowDevice("/dev/pts/7")
+	if got := e.Eval("/dev/pts/7"); got != Allow {
+		t.Errorf("after AllowDevice: %v, want Allow", got)
+	}
+	if got := e.Eval("/dev/pts/8"); got != Ask {
+		t.Errorf("other terminal: %v, want Ask", got)
 	}
 }
 

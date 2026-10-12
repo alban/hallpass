@@ -136,6 +136,16 @@ func Open() (*Term, error) {
 // controlling terminal.
 func (t *Term) Slave() *os.File { return t.slave }
 
+// SlavePath returns the device path of the program's terminal (/dev/pts/N),
+// so the policy can allow writes to it without asking, or "" if unknown.
+func (t *Term) SlavePath() string {
+	n, err := unix.IoctlGetInt(int(t.master.Fd()), unix.TIOCGPTN)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("/dev/pts/%d", n)
+}
+
 // Start puts the user's terminal in raw mode and starts relaying. Call it
 // before starting the program, then CloseSlave once the program started.
 func (t *Term) Start() error {

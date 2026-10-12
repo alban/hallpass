@@ -135,6 +135,16 @@ func runMain(argv []string, printPolicy bool) int {
 
 	// The sandbox must not change what hallpass runs next time, outside it.
 	deny = append(deny, cfgDir)
+	// Nor overwrite the hallpass binary itself: a later strict run would
+	// execute the tampered copy as root, and any run would execute
+	// unsandboxing code. Deny it like the config, even when it sits inside
+	// the workdir (e.g. go build ./cmd/hallpass).
+	if exe, err := os.Executable(); err == nil {
+		if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+			exe = resolved
+		}
+		deny = append(deny, exe)
+	}
 	engine := policy.New(home, workdir,
 		append(policy.DefaultAllows(), allow...),
 		deny)
@@ -192,6 +202,11 @@ func runMain(argv []string, printPolicy bool) int {
 		return fail(err)
 	}
 	defer asker.Close()
+	if pty != nil {
+		// The program's own terminal is writable without asking; other
+		// /dev/pts/N (another session) stay asked.
+		engine.AllowDevice(pty.SlavePath())
+	}
 
 	var logw io.Writer
 	if logPath != "" {
