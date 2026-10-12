@@ -25,6 +25,6 @@ $ go build ./cmd/hallpass
 $ ./hallpass -- copilot
 ```
 
-See [How it works](design.md) for the design, and [Usage](usage.md) for the flags, the default policy and running with agent CLIs.
+See [How it works](design.md) for the design, [Usage](usage.md) for the flags, the default policy and running with agent CLIs, and [Use cases](use-cases.md) for auditing, checking a tool's declared paths, CI and more.
 
 The user-space code is Apache-2.0 licensed; the BPF programs are GPL-2.0-only OR BSD-2-Clause. The source is on [GitHub](https://github.com/alban/hallpass).

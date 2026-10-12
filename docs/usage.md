@@ -6,10 +6,14 @@ hallpass [flags] [--] [command [args...]]     # default command: $SHELL
   -C, --workdir DIR        project dir, writable without asking (default: cwd)
       --allow PATH         also writable without asking (repeatable)
       --deny PATH          always denied (repeatable, wins over --allow)
-      --ask MODE           auto | term | desktop | answer | deny   (default: auto = term if on a terminal, else desktop, else answer)
+      --no-implicit        only --allow paths are writable: no project dir, $TMPDIR, devices or terminal
+      --allow-tty          the session's own terminal is writable (default true; off with --no-implicit unless given)
+      --ask MODE           auto | term | desktop | answer | deny | allow   (default: auto = term if on a terminal, else desktop, else answer;
+                           allow = audit: allow everything, log it with --log)
       --timeout DUR        unanswered prompt is denied after DUR (default 30s; 0 = wait forever)
       --allow-userns       let the sandbox create user/mount namespaces (weakens lite mode; always on in strict mode)
       --log FILE           append one JSON line per mediated syscall to FILE
+      --wait WHAT          main (default): exit with the command | all: keep supervising its background processes (Linux 5.9+)
       --mode MODE          lite (default, no root) | strict (BPF-LSM enforcement)
       --escalate TOOL      strict mode as a regular user: how to run the loader as root:
                            auto | ask | pkexec | sudo | run0 | doas | su | manual | none
@@ -24,6 +28,18 @@ hallpass answer [PID]                         # answer another session's prompts
 By default, only `~/.config/hallpass` is denied (the sandbox must not change what hallpass runs next time); the project, a private `$TMPDIR` for the session (removed at exit if empty) and the usual `/dev` nodes are writable; anything else is asked, including the shared `/tmp`, `/var/tmp` and `/dev/shm` (answer "always" to allow them). Writes to known secret stores (`~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.config/gh`, `~/.kube`, `~/.docker`, `~/.netrc`, `~/.git-credentials`) are asked too, with a red warning label like "SSH keys — secret store".
 
 Press Ctrl-] inside a session to see its current rules, including answers given so far; any key closes the overlay.
+
+With `--no-implicit`, nothing is writable unless you `--allow` it: not the project, not a `$TMPDIR`, not even `/dev/null`. The session's own terminal stays off too, unless you also pass `--allow-tty` (its `/dev/pts/N` is only known once hallpass starts). See [use cases](use-cases.md) for examples.
+
+## Background processes
+
+Processes the command leaves behind (daemons, `nohup`, double forks) stay under hallpass: it becomes their subreaper, so their writes are asked about like any other.
+
+By default (`--wait=main`), hallpass exits with the command. The processes left behind keep the seccomp filter but lose their supervisor: their mediated syscalls then fail (fail closed). With `--wait=all`, hallpass keeps supervising, asking and logging until the last of them exits; the prompts keep working in the terminal. Press Ctrl-] then `s`, or send SIGTERM, to stop waiting early. `--wait=all` needs Linux 5.9.
+
+## Unreadable paths
+
+Sometimes hallpass cannot read the path a syscall passes, for example when the pointer is invalid. In lite mode, hallpass asks with a red "Unknown path" warning, and only offers "once", "deny" and "never" ("never" denies every unknown path for the rest of the session): allowing such a write skips every rule, so it is never granted for good. In strict mode, the kernel's rules decide on the real file, without asking.
 
 ## Strict mode
 

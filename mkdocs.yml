@@ -36,6 +36,7 @@ nav:
   - Home: index.md
   - How it works: design.md
   - Usage: usage.md
+  - Use cases: use-cases.md
 
 markdown_extensions:
   - admonition
