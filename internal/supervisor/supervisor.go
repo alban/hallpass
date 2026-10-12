@@ -118,11 +118,27 @@ func Run(cfg Config) (int, error) {
 			return 0, fmt.Errorf("terminal: %w", err)
 		}
 	}
+	// Processes of the sandbox whose parent exits are reparented to us,
+	// not to init: we stay their ancestor, which Yama's default
+	// ptrace_scope=1 requires for reading their syscall arguments from
+	// /proc/<pid>/mem. Without it, every write of a daemonized process was
+	// denied as unreadable. We reap them, and the command, in reap.
+	if err := unix.Prctl(unix.PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0); err != nil {
+		childSock.Close()
+		unix.Close(parentSock)
+		return 0, fmt.Errorf("prctl(PR_SET_CHILD_SUBREAPER): %w", err)
+	}
+	sigchld := make(chan os.Signal, 1)
+	signal.Notify(sigchld, syscall.SIGCHLD)
+	defer signal.Stop(sigchld)
 	if err := cmd.Start(); err != nil {
 		childSock.Close()
 		unix.Close(parentSock)
 		return 0, err
 	}
+	mainDone := make(chan unix.WaitStatus, 1)
+	go reap(cmd.Process.Pid, sigchld, mainDone)
+	waitMain := func() int { return exitStatus(<-mainDone) }
 	childSock.Close()
 	if cfg.TTY != nil {
 		cfg.TTY.CloseSlave()
@@ -132,8 +148,7 @@ func Run(cfg Config) (int, error) {
 	if err != nil {
 		unix.Close(parentSock)
 		// The child printed why it failed before exiting.
-		_ = cmd.Wait()
-		return exitCode(cmd.ProcessState), fmt.Errorf("sandbox setup failed")
+		return waitMain(), fmt.Errorf("sandbox setup failed")
 	}
 	unix.SetNonblock(listenerFD, false)
 
@@ -162,7 +177,7 @@ func Run(cfg Config) (int, error) {
 		if err != nil {
 			unix.Close(parentSock)
 			_ = cmd.Process.Kill()
-			_ = cmd.Wait()
+			waitMain()
 			return 1, fmt.Errorf("strict mode: %w", err)
 		}
 		done := make(chan struct{})
@@ -183,20 +198,40 @@ func Run(cfg Config) (int, error) {
 		}
 	}()
 
-	_ = cmd.Wait()
+	code := waitMain()
 	// Background processes left by the command keep the filter; once we
 	// exit, their mediated syscalls fail with ENOSYS (fail closed).
-	return exitCode(cmd.ProcessState), nil
+	return code, nil
 }
 
-func exitCode(ps *os.ProcessState) int {
-	if ps == nil {
-		return 1
+// reap reaps every child: the command (main, whose status goes to mainDone)
+// and the processes of the sandbox reparented to us as subreaper. It owns
+// waiting for children: nothing else may wait for them (no cmd.Wait).
+func reap(main int, sigchld <-chan os.Signal, mainDone chan<- unix.WaitStatus) {
+	for {
+		for {
+			var ws unix.WaitStatus
+			pid, err := unix.Wait4(-1, &ws, unix.WNOHANG, nil)
+			if err == unix.EINTR {
+				continue
+			}
+			if err != nil || pid <= 0 {
+				break
+			}
+			if pid == main {
+				mainDone <- ws
+			}
+		}
+		<-sigchld
 	}
-	if ws, ok := ps.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+}
+
+// exitStatus is the shell's view of ws: the exit code, or 128+signal.
+func exitStatus(ws unix.WaitStatus) int {
+	if ws.Signaled() {
 		return 128 + int(ws.Signal())
 	}
-	return ps.ExitCode()
+	return ws.ExitStatus()
 }
 
 type session struct {

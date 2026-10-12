@@ -142,6 +142,18 @@ exit 7
 	}
 }
 
+// TestOrphan checks that a process whose parent exited is still mediated:
+// under Yama's ptrace_scope=1, reading its syscall arguments needs hallpass
+// to stay its ancestor, as subreaper.
+func TestOrphan(t *testing.T) {
+	e := newEnv(t)
+	script := `(sh -c 'sleep 0.3; echo x > inside' &); sleep 1; test -f inside && echo orphan=allowed`
+	out, err := e.cmd(script, "--ask=deny").CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "orphan=allowed") {
+		t.Errorf("orphan write in the project: %v\n%s", err, out)
+	}
+}
+
 func TestAnswerSocket(t *testing.T) {
 	e := newEnv(t)
 	if err := os.MkdirAll(e.home+"/.m2/r", 0o700); err != nil {
