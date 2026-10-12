@@ -9,6 +9,8 @@ $ cd ~/src/myproject
 $ hallpass -- copilot        # or: claude, codex, gemini, agy, aider, ... or just `hallpass` for a shell
 ```
 
+![hallpass denying a shell, then a Makefile run by copilot, writing to ~/.bashrc](demos/hallpass.gif)
+
 Everything the agent starts (shells, compilers, `git`, `npm`, scripts) inherits the sandbox. Writes inside the project directory go through without asking. Writes anywhere else make hallpass pause the process and ask you in a bar drawn over the bottom of your terminal, like a tmux status line:
 
 ```
