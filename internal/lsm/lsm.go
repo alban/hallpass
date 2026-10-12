@@ -64,9 +64,37 @@ type Event struct {
 
 var opNames = [...]string{1: "open", "create", "mkdir", "rmdir", "unlink", "symlink", "link", "rename", "truncate"}
 
-// Active reports whether BPF-LSM programs run on this kernel: bpf must be in
-// the active LSM list, otherwise programs attach but are never called.
+// kfuncs are the kernel functions bpf/hallpass.bpf.c calls. The programs do
+// not load without them.
+var kfuncs = []string{"bpf_path_d_path", "bpf_preempt_disable", "bpf_preempt_enable", "bpf_task_from_pid", "bpf_task_release"}
+
+// Supported reports whether the programs can load on this kernel: its BTF
+// must have every kfunc they call.
+func Supported() error {
+	spec, err := btf.LoadKernelSpec()
+	if err != nil {
+		return fmt.Errorf("cannot read the kernel BTF: %w", err)
+	}
+	var missing []string
+	for _, name := range kfuncs {
+		var fn *btf.Func
+		if err := spec.TypeByName(name, &fn); err != nil {
+			missing = append(missing, name)
+		}
+	}
+	if missing != nil {
+		return fmt.Errorf("the kernel lacks the kfuncs %s, needed by strict mode (Linux 6.12 has them)", strings.Join(missing, ", "))
+	}
+	return nil
+}
+
+// Active reports whether BPF-LSM programs load and run on this kernel: they
+// must be supported, and bpf must be in the active LSM list, otherwise
+// programs attach but are never called.
 func Active() error {
+	if err := Supported(); err != nil {
+		return err
+	}
 	b, err := os.ReadFile("/sys/kernel/security/lsm")
 	if err != nil {
 		return fmt.Errorf("cannot read the active LSMs: %w", err)

@@ -18,14 +18,28 @@ import (
 func needRoot(t *testing.T) {
 	t.Helper()
 	if os.Geteuid() != 0 {
-		t.Skip("needs root (go test -exec sudo)")
+		skip(t, "needs root (go test -exec sudo)")
 	}
+}
+
+// skip skips the test, or fails it under HALLPASS_REQUIRE_LSM=1, which CI
+// sets on the kernels where strict mode must work, so that a test that
+// cannot run does not pass silently.
+func skip(t *testing.T, args ...any) {
+	t.Helper()
+	if os.Getenv("HALLPASS_REQUIRE_LSM") == "1" {
+		t.Fatal(append([]any{"HALLPASS_REQUIRE_LSM=1:"}, args...)...)
+	}
+	t.Skip(args...)
 }
 
 // TestLoad runs the verifier and attaches, which works even where BPF-LSM is
 // built but not active.
 func TestLoad(t *testing.T) {
 	needRoot(t)
+	if err := Supported(); err != nil {
+		skip(t, err)
+	}
 	l, err := Load(true)
 	if err != nil {
 		t.Fatal(err)
@@ -38,6 +52,9 @@ func TestLoad(t *testing.T) {
 
 func TestFromFDs(t *testing.T) {
 	needRoot(t)
+	if err := Supported(); err != nil {
+		skip(t, err)
+	}
 	l, err := Load(false)
 	if err != nil {
 		t.Fatal(err)
@@ -82,7 +99,7 @@ func TestFromFDs(t *testing.T) {
 func TestEnforce(t *testing.T) {
 	needRoot(t)
 	if err := Active(); err != nil {
-		t.Skip(err)
+		skip(t, err)
 	}
 	base := t.TempDir()
 	allowed, other := filepath.Join(base, "allowed"), filepath.Join(base, "other")
