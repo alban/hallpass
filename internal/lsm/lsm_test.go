@@ -112,6 +112,9 @@ func TestEnforce(t *testing.T) {
 	if err := os.WriteFile(other+"/plain", nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(allowed+"/secret/victim", nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	// Mounted before Sync, below an allowed folder: covered by its rule.
 	if err := unix.Mount(nested, allowed+"/nested", "", unix.MS_BIND, ""); err != nil {
 		t.Fatal(err)
@@ -160,11 +163,11 @@ func TestEnforce(t *testing.T) {
 		{"member proc", "echo 0 > /proc/$$/oom_score_adj", true},
 		{"outsider proc", fmt.Sprintf("echo 0 > /proc/%d/oom_score_adj", outsider.Process.Pid), false},
 		{"own tmpfs", "unshare -m sh -c 'mount -t tmpfs none O/mnt && echo > O/mnt/f'", true},
-		// Overlay with a denied dir as upperdir: writing through the merged
-		// mount lands on the real protected inode, which must be denied.
-		{"overlay upper is denied", "unshare -Urm sh -c 'mkdir -p A/ovl/low A/ovl/work A/ovl/merged && mount -t overlay overlay -o lowerdir=A/ovl/low,upperdir=A/secret,workdir=A/ovl/work A/ovl/merged && echo > A/ovl/merged/f'", false},
-		// Overlay with an allowed dir as upperdir still works.
-		{"overlay upper is allowed", "unshare -Urm sh -c 'mkdir -p A/ov2/low A/ov2/up A/ov2/work A/ov2/merged && mount -t overlay overlay -o lowerdir=A/ov2/low,upperdir=A/ov2/up,workdir=A/ov2/work A/ov2/merged && echo > A/ov2/merged/f'", true},
+		// Overlayfs writes to its layers with internal vfs_* calls, which
+		// skip the path hooks, so members may not mount it.
+		{"overlay mount", "unshare -Urm sh -c 'mkdir -p A/ov2/low A/ov2/up A/ov2/work A/ov2/merged && mount -t overlay overlay -o lowerdir=A/ov2/low,upperdir=A/ov2/up,workdir=A/ov2/work A/ov2/merged'", false},
+		{"unlink via overlay upper", "unshare -Urm sh -c 'mkdir -p A/ov3/low A/ov3/work A/ov3/merged && mount -t overlay overlay -o lowerdir=A/ov3/low,upperdir=A/secret,workdir=A/ov3/work A/ov3/merged && rm A/ov3/merged/victim'", false},
+		{"copy-up into overlay upper", "unshare -Urm sh -c 'mkdir -p A/ov4/low A/ov4/work A/ov4/merged && echo planted > A/ov4/low/planted && mount -t overlay overlay -o lowerdir=A/ov4/low,upperdir=A/secret,workdir=A/ov4/work A/ov4/merged && touch A/ov4/merged/planted'", false},
 		{"read", "cat O/once >/dev/null", true},
 	}
 	var script strings.Builder
@@ -197,6 +200,12 @@ func TestEnforce(t *testing.T) {
 		if 2*i+1 >= len(got) || got[2*i+1] != want {
 			t.Errorf("%s (%s): want %s\n%s", c.name, c.cmd, want, out.String())
 		}
+	}
+	if _, err := os.Stat(allowed + "/secret/victim"); err != nil {
+		t.Errorf("victim: %v", err)
+	}
+	if _, err := os.Stat(allowed + "/secret/planted"); err == nil {
+		t.Error("planted file in the denied dir")
 	}
 	time.Sleep(100 * time.Millisecond) // let the events be logged
 }

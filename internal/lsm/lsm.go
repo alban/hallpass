@@ -144,7 +144,7 @@ func newLSM() *LSM {
 // also the order of their link fds in FDs. task_alloc comes first, so no
 // member can fork unmarked once the others run.
 var attachOrder = []string{
-	"hp_task_alloc", "hp_sb_alloc", "hp_sb_free", "hp_task_kill", "hp_file_send_sigiotask",
+	"hp_task_alloc", "hp_sb_alloc", "hp_sb_free", "hp_sb_kern_mount", "hp_task_kill", "hp_file_send_sigiotask",
 	"hp_file_open", "hp_path_mknod", "hp_path_mkdir", "hp_path_rmdir", "hp_path_unlink",
 	"hp_path_symlink", "hp_path_link", "hp_path_rename", "hp_path_truncate",
 }
@@ -152,8 +152,9 @@ var attachOrder = []string{
 func programsByName(p *hallpassPrograms) map[string]*ebpf.Program {
 	return map[string]*ebpf.Program{
 		"hp_task_alloc": p.HpTaskAlloc, "hp_sb_alloc": p.HpSbAlloc, "hp_sb_free": p.HpSbFree,
-		"hp_task_kill": p.HpTaskKill, "hp_file_send_sigiotask": p.HpFileSendSigiotask,
-		"hp_file_open": p.HpFileOpen, "hp_path_mknod": p.HpPathMknod, "hp_path_mkdir": p.HpPathMkdir,
+		"hp_sb_kern_mount": p.HpSbKernMount, "hp_task_kill": p.HpTaskKill,
+		"hp_file_send_sigiotask": p.HpFileSendSigiotask, "hp_file_open": p.HpFileOpen,
+		"hp_path_mknod": p.HpPathMknod, "hp_path_mkdir": p.HpPathMkdir,
 		"hp_path_rmdir": p.HpPathRmdir, "hp_path_unlink": p.HpPathUnlink,
 		"hp_path_symlink": p.HpPathSymlink, "hp_path_link": p.HpPathLink,
 		"hp_path_rename": p.HpPathRename, "hp_path_truncate": p.HpPathTruncate,

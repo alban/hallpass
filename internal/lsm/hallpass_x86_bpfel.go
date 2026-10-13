@@ -85,6 +85,7 @@ const (
 	hallpassProgHpPathUnlink        = "hp_path_unlink"
 	hallpassProgHpSbAlloc           = "hp_sb_alloc"
 	hallpassProgHpSbFree            = "hp_sb_free"
+	hallpassProgHpSbKernMount       = "hp_sb_kern_mount"
 	hallpassProgHpTaskAlloc         = "hp_task_alloc"
 	hallpassProgHpTaskKill          = "hp_task_kill"
 	hallpassVarLogAllowed           = "log_allowed"
@@ -145,6 +146,7 @@ type hallpassProgramSpecs struct {
 	HpPathUnlink        *ebpf.ProgramSpec `ebpf:"hp_path_unlink"`
 	HpSbAlloc           *ebpf.ProgramSpec `ebpf:"hp_sb_alloc"`
 	HpSbFree            *ebpf.ProgramSpec `ebpf:"hp_sb_free"`
+	HpSbKernMount       *ebpf.ProgramSpec `ebpf:"hp_sb_kern_mount"`
 	HpTaskAlloc         *ebpf.ProgramSpec `ebpf:"hp_task_alloc"`
 	HpTaskKill          *ebpf.ProgramSpec `ebpf:"hp_task_kill"`
 }
@@ -235,6 +237,7 @@ type hallpassPrograms struct {
 	HpPathUnlink        *ebpf.Program `ebpf:"hp_path_unlink"`
 	HpSbAlloc           *ebpf.Program `ebpf:"hp_sb_alloc"`
 	HpSbFree            *ebpf.Program `ebpf:"hp_sb_free"`
+	HpSbKernMount       *ebpf.Program `ebpf:"hp_sb_kern_mount"`
 	HpTaskAlloc         *ebpf.Program `ebpf:"hp_task_alloc"`
 	HpTaskKill          *ebpf.Program `ebpf:"hp_task_kill"`
 }
@@ -253,6 +256,7 @@ func (p *hallpassPrograms) Close() error {
 		p.HpPathUnlink,
 		p.HpSbAlloc,
 		p.HpSbFree,
+		p.HpSbKernMount,
 		p.HpTaskAlloc,
 		p.HpTaskKill,
 	)
