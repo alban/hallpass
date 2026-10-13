@@ -51,6 +51,10 @@ type Term struct {
 	mu         sync.Mutex
 	emu        *vt.Emulator
 	esc        escTracker // parser state of the user's terminal
+	title      titleFilter
+	fgPgid     int  // the program's foreground process group
+	titleDirty bool // the title suffix changed but was not sent yet
+	closed     bool
 	rows, cols int
 
 	// While a prompt is shown:
@@ -153,20 +157,63 @@ func (t *Term) SlavePath() string {
 
 // Start puts the user's terminal in raw mode and starts relaying. Call it
 // before starting the program, then CloseSlave once the program started.
-func (t *Term) Start() error {
+// Until Close, the window title starts with TitlePrefix, followed by name
+// until the program sets a title.
+func (t *Term) Start(name string) error {
 	st, err := term.MakeRaw(int(t.in.Fd()))
 	if err != nil {
 		return err
 	}
 	t.saved = st
 	t.syncCursor()
+	_, _ = t.out.WriteString(t.title.titleStart(name))
 	t.winch = make(chan os.Signal, 1)
 	signal.Notify(t.winch, syscall.SIGWINCH)
 	go t.resizeLoop()
 	go t.inputLoop()
 	go t.outputLoop()
 	go t.paintLoop()
+	go t.fgLoop()
 	return nil
+}
+
+// fgLoop keeps the title's suffix up to date with the program's foreground
+// command, also when it prints nothing (sleep) or replaces itself (exec).
+func (t *Term) fgLoop() {
+	tick := time.NewTicker(500 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case <-t.outDone:
+			return
+		case <-tick.C:
+			t.mu.Lock()
+			t.updateFG(true)
+			t.mu.Unlock()
+		}
+	}
+}
+
+// updateFG looks up the program's foreground process group and, if it changed
+// or recheck is set, its command line, then sends the title with the new
+// suffix if it changed and the user's terminal is between sequences. Call
+// with mu held.
+func (t *Term) updateFG(recheck bool) {
+	pg, err := unix.IoctlGetInt(int(t.master.Fd()), unix.TIOCGPGRP)
+	if err != nil {
+		return
+	}
+	if pg != t.fgPgid || recheck {
+		t.fgPgid = pg
+		if s := fgSuffix(pg); s != t.title.suffix {
+			t.title.suffix = s
+			t.titleDirty = true
+		}
+	}
+	if t.titleDirty && t.ov == nil && !t.closed && t.esc.ground() {
+		t.write(t.title.current())
+		t.titleDirty = false
+	}
 }
 
 // syncCursor asks the user's terminal where its cursor is (DSR) and moves the
@@ -288,6 +335,10 @@ func (t *Term) Close() error {
 		signal.Stop(t.winch)
 	}
 	if t.saved != nil {
+		t.mu.Lock()
+		t.closed = true
+		t.write(t.title.titleEnd())
+		t.mu.Unlock()
 		_ = term.Restore(int(t.in.Fd()), t.saved)
 	}
 	return nil
@@ -337,12 +388,14 @@ func (t *Term) outputLoop() {
 		n, err := t.master.Read(buf)
 		if n > 0 {
 			t.mu.Lock()
+			p := t.title.filter(buf[:n])
 			if t.ov == nil {
-				t.emit(buf[:n])
+				t.emit(p)
+				t.updateFG(false)
 				t.mu.Unlock()
 			} else {
-				t.held = append(t.held, buf[:n]...)
-				_, _ = t.emu.Write(buf[:n])
+				t.held = append(t.held, p...)
+				_, _ = t.emu.Write(p)
 				select {
 				case t.dirty <- struct{}{}:
 				default:

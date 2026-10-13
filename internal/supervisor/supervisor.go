@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -121,7 +122,7 @@ func Run(cfg Config) (int, error) {
 	defer signal.Stop(fwd)
 
 	if cfg.TTY != nil {
-		if err := cfg.TTY.Start(); err != nil {
+		if err := cfg.TTY.Start(filepath.Base(cfg.Args[0])); err != nil {
 			childSock.Close()
 			unix.Close(parentSock)
 			return 0, fmt.Errorf("terminal: %w", err)

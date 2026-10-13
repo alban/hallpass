@@ -131,6 +131,29 @@ func runTermAfter(t *testing.T, e env, pre, script string) (m *os.File, scr *scr
 	return m, scr, c, done
 }
 
+func TestTerminalTitle(t *testing.T) {
+	e := newEnv(t)
+	_, scr, c, done := runTerm(t, e, `printf '\033]2;mytitle\033\\'; printf '\033[23;0t'; echo end; exec sleep 1.2`)
+	if err := c.Wait(); err != nil {
+		t.Fatalf("hallpass: %v\n%s", err, scr.text())
+	}
+	<-done
+	raw := scr.rawText()
+	for _, want := range []string{
+		"\x1b[22;0t\x1b]0;[hallpass] sh\x07",        // pushed the user's title, then set ours
+		"\x1b]2;[hallpass] mytitle\x1b\\",           // the program's title, prefixed
+		"\x1b]2;[hallpass] mytitle — sleep 1.2\x07", // then the foreground command
+	} {
+		if !strings.Contains(raw, want) {
+			t.Errorf("output lacks %q:\n%q", want, raw)
+		}
+	}
+	// The program's unbalanced pop is dropped; hallpass pops once at exit.
+	if n := strings.Count(raw, "\x1b[23;0t"); n != 1 || !strings.HasSuffix(raw, "\x1b[23;0t") {
+		t.Errorf("want a single title pop, at the end:\n%q", raw)
+	}
+}
+
 func TestTerminalPrompt(t *testing.T) {
 	e := newEnv(t)
 	// 30 coloured lines fill and scroll the 24-row screen, so the overlay
