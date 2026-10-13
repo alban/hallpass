@@ -13,7 +13,9 @@
 // closes the screen as it was when the prompt opened is repainted, the cursor
 // restored, and the kept output replayed, so the user's terminal ends in
 // exactly the state the program put it in (modes, colours, scrollback). The
-// program's terminal is never resized.
+// program's terminal is never resized. What was on the screen before hallpass
+// started is not in the emulator, so it is never painted over: the prompt
+// first scrolls it up, out of its way, if needed.
 package tty
 
 import (
@@ -21,6 +23,8 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -54,6 +58,7 @@ type Term struct {
 	barX    int           // cursor column after drawing the overlay
 	held    []byte        // program output, replayed when the overlay closes
 	snap    []string      // rendered rows when the overlay opened
+	unknown []bool        // rows of snap showing what was there before hallpass
 	painted []string      // rendered rows currently above the overlay
 	exact   bool          // false after a resize: snap is stale, cannot replay
 	resume  chan struct{} // closed when the overlay closes
@@ -154,6 +159,7 @@ func (t *Term) Start() error {
 		return err
 	}
 	t.saved = st
+	t.syncCursor()
 	t.winch = make(chan os.Signal, 1)
 	signal.Notify(t.winch, syscall.SIGWINCH)
 	go t.resizeLoop()
@@ -161,6 +167,112 @@ func (t *Term) Start() error {
 	go t.outputLoop()
 	go t.paintLoop()
 	return nil
+}
+
+// syncCursor asks the user's terminal where its cursor is (DSR) and moves the
+// emulator's cursor there, so that the emulator's rows match the screen's.
+// The rows above, and the start of the cursor's row, show what was there
+// before hallpass started, which the emulator does not know: they are marked
+// unknown. Keys typed meanwhile go to the program. Call before the input loop
+// starts.
+func (t *Term) syncCursor() {
+	if _, err := t.out.WriteString("\x1b[6n"); err != nil {
+		return
+	}
+	var buf []byte
+	tmp := make([]byte, 256)
+	deadline := time.Now().Add(time.Second)
+	for {
+		if i := cprReply.FindSubmatchIndex(buf); i != nil {
+			row, _ := strconv.Atoi(string(buf[i[2]:i[3]]))
+			col, _ := strconv.Atoi(string(buf[i[4]:i[5]]))
+			t.markUnknown(row-1, col-1)
+			buf = append(buf[:i[0]], buf[i[1]:]...)
+			break
+		}
+		left := time.Until(deadline)
+		if left <= 0 {
+			break
+		}
+		fds := []unix.PollFd{{Fd: int32(t.in.Fd()), Events: unix.POLLIN}}
+		if n, err := unix.Poll(fds, int(left.Milliseconds())+1); err != nil && err != unix.EINTR || n == 0 {
+			break
+		}
+		n, err := unix.Read(int(t.in.Fd()), tmp)
+		if err != nil || n == 0 {
+			break
+		}
+		buf = append(buf, tmp[:n]...)
+	}
+	if len(buf) > 0 {
+		_, _ = t.master.Write(buf)
+	}
+}
+
+// cprReply matches the terminal's answer to DSR 6: ESC [ row ; col R.
+var cprReply = regexp.MustCompile(`\x1b\[(\d+);(\d+)R`)
+
+// unknownCell marks the emulator's cells holding what was on the screen
+// before hallpass started. They scroll and get overwritten like any cell, so
+// a row is unknown as long as one of them is left on it.
+const unknownCell = "\uE000"
+
+// markUnknown moves the emulator's cursor to row, col (0-based) and marks the
+// cells before it unknown.
+func (t *Term) markUnknown(row, col int) {
+	row, col = min(max(row, 0), t.rows-1), min(max(col, 0), t.cols-1)
+	c := &uv.Cell{Content: unknownCell, Width: 1}
+	for y := 0; y <= row; y++ {
+		for x := 0; x < t.cols && (y < row || x < col); x++ {
+			t.emu.SetCell(x, y, c)
+		}
+	}
+	fmt.Fprintf(t.emu, "\x1b[%d;%dH", row+1, col+1)
+}
+
+func (t *Term) rowUnknown(y int) bool {
+	for x := range t.cols {
+		if c := t.emu.CellAt(x, y); c != nil && c.Content == unknownCell {
+			return true
+		}
+	}
+	return false
+}
+
+// makeRoom scrolls the screen up, in the user's terminal and the emulator
+// alike, when the overlay would cover unknown rows, so that the program's
+// cursor line ends right above the overlay: the overlay never erases what
+// hallpass could not repaint. The scrolled lines go to the terminal's
+// scrollback, and the program's text stays that much higher afterwards.
+// Call with mu held, before the overlay is drawn.
+func (t *Term) makeRoom() {
+	if t.emu.IsAltScreen() {
+		return
+	}
+	top := t.overlayTop()
+	covered := false
+	for y := top; y < t.rows; y++ {
+		covered = covered || t.rowUnknown(y)
+	}
+	if !covered {
+		return
+	}
+	cy := t.emu.CursorPosition().Y
+	n := min(cy-top+1, cy)
+	for y := cy + 1; y < t.rows; y++ {
+		if t.rowUnknown(y) {
+			n = max(n, y-top+1)
+		}
+	}
+	if n <= 0 {
+		return
+	}
+	// Scroll with line feeds on the last row, keeping the program's
+	// attributes (DECSC/DECRC) but scrolling in blank lines (SGR 0), then
+	// move the cursor up by as much.
+	s := fmt.Sprintf("\x1b7\x1b[0m\x1b[%d;1H%s\x1b8\x1b[%dA", t.rows, strings.Repeat("\n", n), n)
+	t.write(s)
+	_, _ = t.emu.WriteString(s)
 }
 
 // CloseSlave closes hallpass's copy of the program's side.
@@ -329,9 +441,12 @@ func (t *Term) Prompt(lines []string, accept string, guard, timeout time.Duratio
 	t.ov = lines
 	t.exact = true
 	t.resume = make(chan struct{})
+	t.makeRoom()
 	t.snap = make([]string, t.rows)
+	t.unknown = make([]bool, t.rows)
 	for y := range t.snap {
 		t.snap[y] = t.renderRow(y)
+		t.unknown[y] = t.rowUnknown(y)
 	}
 	t.painted = append([]string(nil), t.snap[:t.overlayTop()]...)
 	// DECSC saves cursor, attributes and charset for closeOverlay.
@@ -396,11 +511,12 @@ func (t *Term) drawOverlay() string {
 	return b.String()
 }
 
-// renderRow returns row y of the emulator's screen as styled text.
+// renderRow returns row y of the emulator's screen as styled text, with
+// unknown cells blank.
 func (t *Term) renderRow(y int) string {
 	line := make(uv.Line, t.cols)
 	for x := range line {
-		if c := t.emu.CellAt(x, y); c != nil {
+		if c := t.emu.CellAt(x, y); c != nil && c.Content != unknownCell {
 			line[x] = *c
 		}
 	}
@@ -413,12 +529,17 @@ func paintRow(b *strings.Builder, y int, line string) {
 
 // paint returns the sequence updating the rows above the overlay from the
 // emulator, scrolled so that the program's cursor line stays visible. Only
-// rows that changed are rewritten. Call with mu held.
+// rows that changed are rewritten, and never rows that showed unknown content
+// when the overlay opened: they keep it until the overlay closes. Call with
+// mu held.
 func (t *Term) paint() string {
 	top := t.overlayTop()
 	off := max(0, t.emu.CursorPosition().Y-top+1)
 	var b strings.Builder
 	for y := 0; y < top && y < len(t.painted); y++ {
+		if y < len(t.unknown) && t.unknown[y] && t.exact {
+			continue
+		}
 		line := t.renderRow(y + off)
 		if line != t.painted[y] {
 			paintRow(&b, y, line)
@@ -460,6 +581,6 @@ func (t *Term) closeOverlay() {
 		fmt.Fprintf(&b, "\x1b8\x1b[%d;%dH", p.Y+1, p.X+1)
 	}
 	t.write(b.String())
-	t.ov, t.held, t.snap, t.painted = nil, nil, nil, nil
+	t.ov, t.held, t.snap, t.unknown, t.painted = nil, nil, nil, nil, nil
 	close(t.resume)
 }

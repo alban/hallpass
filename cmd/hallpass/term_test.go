@@ -4,6 +4,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"slices"
@@ -80,8 +81,30 @@ func waitFor(t *testing.T, cond func() bool, what string) {
 // output into a screen. done is closed when the output ends.
 func runTerm(t *testing.T, e env, script string) (m *os.File, scr *screen, c *exec.Cmd, done chan struct{}) {
 	t.Helper()
+	return runTermAfter(t, e, "", script)
+}
+
+// runTermAfter is runTerm on a screen already showing pre, as when hallpass
+// is started from a shell.
+func runTermAfter(t *testing.T, e env, pre, script string) (m *os.File, scr *screen, c *exec.Cmd, done chan struct{}) {
+	t.Helper()
 	m, s := openPTY(t)
 	t.Cleanup(func() { m.Close() })
+
+	scr = &screen{emu: vt.NewEmulator(100, 24)}
+	scr.Write([]byte(pre))
+	// Answers to terminal queries (hallpass asks where the cursor is) go
+	// back as input, as from a real terminal.
+	go func() {
+		buf := make([]byte, 64)
+		for {
+			n, err := scr.emu.Read(buf)
+			if err != nil {
+				return
+			}
+			_, _ = m.Write(buf[:n])
+		}
+	}()
 
 	c = e.cmd(script, "--ask=term", "--timeout=20s")
 	c.Stdin, c.Stdout, c.Stderr = s, s, s
@@ -91,15 +114,6 @@ func runTerm(t *testing.T, e env, script string) (m *os.File, scr *screen, c *ex
 	}
 	s.Close()
 
-	scr = &screen{emu: vt.NewEmulator(100, 24)}
-	go func() {
-		buf := make([]byte, 64)
-		for {
-			if _, err := scr.emu.Read(buf); err != nil {
-				return
-			}
-		}
-	}()
 	done = make(chan struct{})
 	go func() {
 		defer close(done)
@@ -159,6 +173,38 @@ func TestTerminalPrompt(t *testing.T) {
 	}
 	if t.Failed() {
 		t.Logf("screen:\n%s", got)
+	}
+}
+
+// Lines on the screen before hallpass started are not in its emulator; the
+// rows under the overlay must still come back when it closes.
+func TestTerminalPromptKeepsEarlierLines(t *testing.T) {
+	e := newEnv(t)
+	var pre strings.Builder
+	for i := 1; i <= 23; i++ {
+		fmt.Fprintf(&pre, "pre%d\r\n", i)
+	}
+	m, scr, c, done := runTermAfter(t, e, pre.String(), `echo a > "$HOME/a" && echo a=ok`)
+
+	waitFor(t, func() bool { return strings.Contains(scr.rawText(), "wants to write") }, "prompt")
+	time.Sleep(600 * time.Millisecond) // past the type-ahead guard
+	// The prompt scrolled the earlier lines up instead of covering them.
+	if during := scr.text(); !strings.Contains(during, "pre23\n") {
+		t.Errorf("earlier lines not visible above the prompt:\n%s", during)
+	}
+	m.Write([]byte("o"))
+	if err := c.Wait(); err != nil {
+		t.Fatalf("hallpass: %v\n%s", err, scr.text())
+	}
+	<-done
+	got := scr.text()
+	for _, want := range []string{"pre21\n", "pre22\n", "pre23\n", "a=ok"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("screen lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "wants to write") {
+		t.Errorf("overlay left on screen:\n%s", got)
 	}
 }
 
