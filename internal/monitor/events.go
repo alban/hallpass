@@ -21,6 +21,7 @@ type subscriber struct {
 	decided bool
 	ch      chan []Event
 	wake    chan struct{}
+	stop    chan struct{} // closed by EventOptions.Done: deliver nothing more
 
 	mu      sync.Mutex
 	queue   []Event
@@ -30,7 +31,7 @@ type subscriber struct {
 }
 
 func newSubscriber(decided bool) *subscriber {
-	return &subscriber{decided: decided, ch: make(chan []Event), wake: make(chan struct{}, 1)}
+	return &subscriber{decided: decided, ch: make(chan []Event), wake: make(chan struct{}, 1), stop: make(chan struct{})}
 }
 
 // push queues ev. It never blocks: the monitor's lock may be held.
@@ -85,7 +86,11 @@ func (s *subscriber) run() {
 	defer close(s.ch)
 	quietUntil := time.Time{} // batching until then
 	for {
-		<-s.wake
+		select {
+		case <-s.wake:
+		case <-s.stop:
+			return
+		}
 		if time.Now().After(quietUntil) {
 			// First event after a quiet period: at once.
 		} else {
@@ -104,6 +109,9 @@ func (s *subscriber) run() {
 				select {
 				case <-s.wake:
 					t.Stop()
+				case <-s.stop:
+					t.Stop()
+					return
 				case <-t.C:
 					break hold
 				}
@@ -111,7 +119,11 @@ func (s *subscriber) run() {
 		}
 		evs, done := s.take()
 		if len(evs) > 0 {
-			s.ch <- evs
+			select {
+			case s.ch <- evs:
+			case <-s.stop:
+				return
+			}
 		}
 		if done {
 			return

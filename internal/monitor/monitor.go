@@ -154,6 +154,9 @@ const (
 type EventOptions struct {
 	// Decided also delivers the decided accesses (for logs, tracers).
 	Decided bool
+	// Done, when closed, ends the subscription: the channel is closed,
+	// events not yet received are dropped.
+	Done <-chan struct{}
 }
 
 // pollPeriod is how often pending requests are checked for a dead task.
@@ -509,7 +512,7 @@ func (m *Monitor) emitLocked(ev Event) {
 // batched: the first after a quiet period is sent at once; later ones are
 // held until 500 ms without new events, at most 2 s. All events are flushed
 // before the channel is closed, when the workload is gone (all listeners
-// hung up) or the monitor closed.
+// hung up) or the monitor closed, or dropped when opts.Done is closed.
 func (m *Monitor) Events(opts EventOptions) <-chan []Event {
 	s := newSubscriber(opts.Decided)
 	go s.run()
@@ -523,5 +526,27 @@ func (m *Monitor) Events(opts EventOptions) <-chan []Event {
 		}
 	}
 	m.mu.Unlock()
+	if opts.Done != nil {
+		go func() {
+			<-opts.Done
+			m.unsubscribe(s)
+		}()
+	}
 	return s.ch
+}
+
+// unsubscribe stops delivering events to s.
+func (m *Monitor) unsubscribe(s *subscriber) {
+	m.mu.Lock()
+	for i, x := range m.subs {
+		if x == s {
+			m.subs = append(m.subs[:i:i], m.subs[i+1:]...)
+			if s.decided {
+				m.decided--
+			}
+			break
+		}
+	}
+	m.mu.Unlock()
+	close(s.stop)
 }

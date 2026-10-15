@@ -261,6 +261,34 @@ func TestAskVerdict(t *testing.T) {
 	}
 }
 
+// TestEventsDone checks that closing EventOptions.Done ends a subscription
+// that is not read, and stops the Decided events it asked for.
+func TestEventsDone(t *testing.T) {
+	fx := setup(t, nil, false)
+	done := make(chan struct{})
+	evs := fx.m.Events(EventOptions{Decided: true, Done: done})
+	fx.f.mkdir(filepath.Join(fx.dir, "x"))
+	fx.next(t, opened)
+	close(done)
+	timeout := time.After(5 * time.Second)
+	for {
+		select {
+		case _, ok := <-evs:
+			if !ok {
+				fx.m.mu.Lock()
+				n, d := len(fx.m.subs), fx.m.decided
+				fx.m.mu.Unlock()
+				if n != 1 || d != 0 {
+					t.Fatalf("after Done: %d subscribers (want 1), %d with Decided (want 0)", n, d)
+				}
+				return
+			}
+		case <-timeout:
+			t.Fatal("channel not closed after Done")
+		}
+	}
+}
+
 func TestCoalesce(t *testing.T) {
 	fx := setup(t, nil, false)
 	p := filepath.Join(fx.dir, "x")
