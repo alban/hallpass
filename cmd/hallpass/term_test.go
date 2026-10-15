@@ -131,6 +131,28 @@ func runTermAfter(t *testing.T, e env, pre, script string) (m *os.File, scr *scr
 	return m, scr, c, done
 }
 
+// TestTerminalPromptAnsweredRemotely checks that an answer from another
+// client takes the terminal prompt down.
+func TestTerminalPromptAnsweredRemotely(t *testing.T) {
+	e := newEnv(t)
+	_, scr, c, done := runTerm(t, e, `echo a > "$HOME/a" && echo a=ok; sleep 0.5; echo after`)
+	waitFor(t, func() bool { return strings.Contains(scr.text(), "wants to write") }, "prompt")
+	p := dialPrompts(t, e, c)
+	id, path, err := p.next(time.Second)
+	if err != nil || !strings.HasSuffix(path, "/a") {
+		t.Fatalf("prompt %q: %v", path, err)
+	}
+	p.answer(id, "once")
+	waitFor(t, func() bool { return !strings.Contains(scr.text(), "[o] allow once") }, "prompt taken down")
+	if err := c.Wait(); err != nil {
+		t.Fatalf("hallpass: %v\n%s", err, scr.text())
+	}
+	<-done
+	if got := scr.text(); !strings.Contains(got, "a=ok") || !strings.Contains(got, "after") {
+		t.Errorf("screen:\n%s", got)
+	}
+}
+
 func TestTerminalTitle(t *testing.T) {
 	e := newEnv(t)
 	_, scr, c, done := runTerm(t, e, `printf '\033]2;mytitle\033\\'; printf '\033[23;0t'; echo end; exec sleep 1.2`)

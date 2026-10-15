@@ -97,9 +97,9 @@ hallpass --ask=answer -- copilot     # in one terminal
 hallpass answer                      # in another, to see prompts and reply
 ```
 
-`hallpass answer` connects to the running session's socket, shows each pending request (path, the `by:` command line and its parents) and lets you allow once, allow temporarily, allow always, deny or refuse forever.
+`hallpass answer` connects to the running session's socket, shows each pending request (path, the `by:` command line and its parents) and lets you allow once, allow temporarily, allow always, deny or refuse forever. Every client answers the same requests: the first answer wins, and the others take their prompt down, the terminal overlay included.
 
-`hallpass answer` is mainly a testing and debugging aid, and a fallback for the headless case above; the terminal overlay is the normal way to answer. The socket only accepts a client of the same user that is not itself sandboxed (it rejects any peer running under a seccomp filter), so the sandbox cannot answer its own prompts through it.
+`hallpass answer` is mainly a testing and debugging aid, and a fallback for the headless case above; the terminal overlay is the normal way to answer. The socket serves a gRPC API (`internal/sessionpb/session.proto`) to follow and answer the session. It only accepts a client of the same user that is not itself sandboxed (it rejects any peer running under a seccomp filter), so the sandbox cannot answer its own prompts through it.
 
 ## Requirements
 
@@ -113,6 +113,8 @@ hallpass answer                      # in another, to see prompts and reply
 ```console
 go build ./cmd/hallpass
 ```
+
+`make` adds the `grpcnotrace` build tag, which leaves gRPC's debug tracing out of the binary (4 MB smaller).
 
 ## Limitations
 

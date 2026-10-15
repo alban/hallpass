@@ -195,6 +195,7 @@ func runMain(argv []string, printPolicy bool) int {
 		LSM:         strict,
 		Env:         env,
 		WaitAll:     o.wait == "all",
+		Timeout:     o.timeout,
 	})
 	if pty != nil {
 		pty.Close() // restore the terminal before printing anything
@@ -379,8 +380,7 @@ func newAsker(mode string, timeout time.Duration) (ui.Asker, *tty.Term, error) {
 		d, err := ui.NewDesktop(timeout)
 		return d, nil, err
 	case "answer":
-		s, err := newSocketAsker(timeout)
-		return s, nil, err
+		return newRemoteAsker(timeout), nil, nil
 	case "auto":
 		if tty.Available() {
 			return newTermAsker(timeout)
@@ -388,8 +388,7 @@ func newAsker(mode string, timeout time.Duration) (ui.Asker, *tty.Term, error) {
 		if d, err := ui.NewDesktop(timeout); err == nil {
 			return d, nil, nil
 		}
-		s, err := newSocketAsker(timeout)
-		return s, nil, err
+		return newRemoteAsker(timeout), nil, nil
 	}
 	return nil, nil, fmt.Errorf("unknown --ask mode %q", mode)
 }
@@ -405,41 +404,10 @@ func newTermAsker(timeout time.Duration) (ui.Asker, *tty.Term, error) {
 	return ui.NewTerminal(t, timeout), t, nil
 }
 
-func newSocketAsker(timeout time.Duration) (ui.Asker, error) {
-	s, err := ui.NewSocket(timeout)
-	if err != nil {
-		return nil, err
-	}
-	fmt.Fprintf(os.Stderr, "hallpass: no desktop prompt; answer from another terminal with: hallpass answer %d\n", os.Getpid())
-	return s, nil
-}
-
-func answerMain(argv []string) int {
-	var path string
-	switch len(argv) {
-	case 0:
-		matches, _ := filepath.Glob(filepath.Join(ui.SocketDir(), "*.sock"))
-		switch len(matches) {
-		case 0:
-			return fail(errors.New("no hallpass session is waiting for answers"))
-		case 1:
-			path = matches[0]
-		default:
-			return fail(fmt.Errorf("several sessions; pick one: hallpass answer PID (%s)", strings.Join(matches, " ")))
-		}
-	case 1:
-		var pid int
-		if _, err := fmt.Sscanf(argv[0], "%d", &pid); err != nil {
-			return fail(fmt.Errorf("bad PID %q", argv[0]))
-		}
-		path = ui.SocketPath(pid)
-	default:
-		return fail(errors.New("usage: hallpass answer [PID]"))
-	}
-	if err := ui.RunClient(path, os.Stdin, os.Stdout); err != nil {
-		return fail(err)
-	}
-	return 0
+// newRemoteAsker shows nothing: `hallpass answer` or `hallpass web` answer
+// on the session socket (runSession prints how).
+func newRemoteAsker(timeout time.Duration) ui.Asker {
+	return ui.Remote{Timeout: timeout}
 }
 
 // escalateTool resolves --escalate: the flag, else the saved choice, else

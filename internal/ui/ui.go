@@ -6,6 +6,7 @@ package ui
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 	"unicode"
@@ -219,6 +220,35 @@ func (r Remote) Ask(ctx context.Context, _ Request) Answer {
 
 // Close is a no-op.
 func (Remote) Close() error { return nil }
+
+// Text formats r for a line-based client such as `hallpass answer`: the
+// request, then the choices ending with ": ", and the keys they accept.
+// The agent chooses the paths, so they are sanitized: no terminal escapes.
+func (r Request) Text() (string, map[string]Answer) {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s (pid %d) wants to %s:\n  %s\n", sanitize(baseName(r.Exe)), r.PID, sanitize(r.Op), sanitize(r.Path))
+	if r.Warn != "" {
+		fmt.Fprintf(&b, "  [!] %s\n", sanitize(r.Warn))
+	}
+	if o := r.Origin(); o != "" {
+		fmt.Fprintf(&b, "  by: %s\n", o)
+	}
+	if r.Waiting > 0 {
+		fmt.Fprintf(&b, "  (%d more waiting)\n", r.Waiting)
+	}
+	keys := map[string]Answer{"o": AnswerAllowOnce, "d": AnswerDenyOnce, "n": AnswerNever}
+	b.WriteString("[o] allow once  ")
+	if r.Scope != "" {
+		fmt.Fprintf(&b, "[t] allow %s for %v  [a] always  ", sanitize(r.Scope), TempGrant)
+		keys["t"], keys["a"] = AnswerAllowTemp, AnswerAllowAlways
+	}
+	b.WriteString("[d] deny  [n] never")
+	if r.Never != "" {
+		fmt.Fprintf(&b, " (%s)", sanitize(r.Never))
+	}
+	b.WriteString(": ")
+	return b.String(), keys
+}
 
 func baseName(p string) string {
 	for i := len(p) - 1; i >= 0; i-- {

@@ -19,6 +19,7 @@ import (
 	"github.com/alban/hallpass/internal/launch"
 	"github.com/alban/hallpass/internal/lsm"
 	"github.com/alban/hallpass/internal/monitor"
+	"github.com/alban/hallpass/internal/sessionapi"
 	"github.com/alban/hallpass/internal/tty"
 	"github.com/alban/hallpass/internal/ui"
 	"golang.org/x/sys/unix"
@@ -44,13 +45,17 @@ type sessionConfig struct {
 	// process of the sandbox has exited (the notify fd reports POLLHUP,
 	// Linux 5.9+) or the user stops waiting.
 	WaitAll bool
+	// Timeout is how long a request waits for an answer (0: forever),
+	// reported to the session's clients.
+	Timeout time.Duration
 }
 
 // session is hallpass as a client of the monitor: it asks the user about
 // the requests and logs the decisions.
 type session struct {
-	cfg sessionConfig
-	m   *monitor.Monitor
+	cfg   sessionConfig
+	m     *monitor.Monitor
+	start time.Time
 
 	// promptMu serializes what is shown to the user: prompts, the menu,
 	// notices.
@@ -80,7 +85,17 @@ func runSession(cfg sessionConfig) (int, error) {
 	if _, err := m.Apply(monitor.Decision{AddRules: cfg.Defaults.Rules(), Client: "hallpass"}); err != nil {
 		return 0, err
 	}
-	s := &session{cfg: cfg, m: m, wait: &waiter{stop: make(chan struct{})}}
+	s := &session{cfg: cfg, m: m, start: time.Now(), wait: &waiter{stop: make(chan struct{})}}
+	// Other clients (`hallpass answer`, `hallpass web`) follow and answer
+	// on the session's socket.
+	srv, err := sessionapi.Listen(m, s)
+	if err != nil {
+		return 0, fmt.Errorf("session socket: %w", err)
+	}
+	defer srv.Close()
+	if _, remote := cfg.Asker.(ui.Remote); remote {
+		fmt.Fprintf(os.Stderr, "hallpass: answer from another terminal with: hallpass answer %d\n", os.Getpid())
+	}
 
 	spec := launch.ProcSpec{
 		Args:        cfg.Args,

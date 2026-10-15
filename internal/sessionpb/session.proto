@@ -1,0 +1,240 @@
+// Copyright The hallpass Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// The API of a hallpass session, served on its unix socket
+// ($XDG_RUNTIME_DIR/hallpass/<pid>.sock): the monitor API (see
+// docs/devel/monitor.md), plus Info and Answer. Regenerate with
+// `go generate ./internal/sessionpb`.
+
+syntax = "proto3";
+
+package hallpass.session.v1;
+
+option go_package = "github.com/alban/hallpass/internal/sessionpb";
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+service Session {
+  // Info describes the session.
+  rpc Info(InfoRequest) returns (SessionInfo);
+  // Snapshot returns the pending requests and the rules; then follow
+  // Events.
+  rpc Snapshot(SnapshotRequest) returns (SnapshotReply);
+  // Events streams the monitor's events, in batches, until the workload is
+  // gone.
+  rpc Events(EventsRequest) returns (stream EventBatch);
+  // Apply is monitor.Apply. Errors: FAILED_PRECONDITION for ErrStale,
+  // NOT_FOUND for ErrClosed, INVALID_ARGUMENT for ErrUnsupported and
+  // invalid rules.
+  rpc Apply(Decision) returns (ApplyReply);
+  // Answer answers a pending request like the terminal prompt does, with
+  // the session's policy (the folder of a grant, "never" as an exact
+  // deny). NOT_FOUND if the request is no longer pending.
+  rpc Answer(AnswerRequest) returns (AnswerReply);
+}
+
+message InfoRequest {}
+
+message SessionInfo {
+  int32 pid = 1;                  // the supervisor
+  repeated string command = 2;
+  string workdir = 3;
+  string mode = 4;                // "lite" or "strict"
+  google.protobuf.Timestamp start_time = 5;
+  // Unanswered requests are dismissed (denied) after it; 0: never.
+  google.protobuf.Duration prompt_timeout = 6;
+  map<string, string> labels = 7;
+}
+
+message SnapshotRequest {}
+
+message SnapshotReply {
+  repeated Request pending = 1;
+  repeated Rule rules = 2;
+  uint64 generation = 3;
+}
+
+message EventsRequest {
+  bool decided = 1; // also the decided accesses
+  // First send the snapshot, taken after subscribing: no event is lost
+  // between the two.
+  bool snapshot = 2;
+}
+
+message EventBatch {
+  repeated Event events = 1;
+  SnapshotReply snapshot = 2; // in the first batch, with EventsRequest.snapshot
+}
+
+message Event {
+  oneof kind {
+    Request opened = 1;
+    Closed closed = 2;
+    uint64 rules = 3; // the rule set changed: its new generation
+    Decided decided = 4;
+    string warning = 5;
+    uint64 dropped = 6;
+  }
+}
+
+message Request {
+  uint64 id = 1;
+  string syscall = 2;
+  uint32 op = 3; // rules.Op bits
+  repeated Object objects = 4;
+  Subject subject = 5;
+  repeated Fact facts = 6;
+  Prompt prompt = 7;
+}
+
+// Prompt is what the session's terminal prompt shows about a request.
+message Prompt {
+  string op = 1;     // e.g. "write", "create directory"
+  string path = 2;
+  string exe = 3;
+  uint32 pid = 4;
+  repeated string cmdline = 5;
+  repeated string parents = 6; // command names, nearest first
+  // What the "temp" and "always" answers cover, e.g. a folder; empty:
+  // only once, deny and never.
+  string scope = 7;
+  string never = 8;  // what "never" covers
+  string warn = 9;   // e.g. "SSH keys — secret store"
+}
+
+message Object {
+  oneof kind {
+    PathObject path = 1;
+    ProcObject proc = 2;
+    string unknown = 3; // why the path could not be read
+  }
+}
+
+message PathObject {
+  string path = 1;
+  uint64 dev = 2;
+  uint64 ino = 3;
+}
+
+message ProcObject {
+  string name = 1;
+  Subject target = 2;
+}
+
+message Subject {
+  repeated Task chain = 1; // the requesting thread, then its parents
+}
+
+message Task {
+  int32 pid = 1;
+  int32 tid = 2;
+  uint64 start_time = 3;
+  string comm = 4;
+  string exe = 5;
+  uint64 exe_dev = 6;
+  uint64 exe_ino = 7;
+  repeated string cmdline = 8;
+  string cwd = 9;
+}
+
+enum Trust {
+  TRUST_KERNEL = 0;
+  TRUST_RACY = 1;
+  TRUST_CLAIMED = 2;
+}
+
+message Fact {
+  string kind = 1;
+  string value = 2;
+  Trust trust = 3;
+}
+
+message Closed {
+  uint64 id = 1;
+  Reason why = 2;
+}
+
+message Reason {
+  string client = 1;
+  uint64 rule = 2;
+  string builtin = 3;
+  bool died = 4;
+}
+
+enum Source {
+  SOURCE_SECCOMP = 0;
+  SOURCE_LSM = 1;
+}
+
+message Decided {
+  google.protobuf.Timestamp time = 1;
+  string syscall = 2;
+  uint32 op = 3;
+  repeated Object objects = 4;
+  Subject subject = 5;
+  bool allowed = 6;
+  repeated Reason why = 7;
+  Source source = 8;
+}
+
+message Decision {
+  repeated Verdict verdicts = 1;
+  repeated Rule add_rules = 2;
+  repeated uint64 remove_rules = 3;
+  repeated string remove_sets = 4;
+  uint64 if_generation = 5;
+  string client = 6;
+}
+
+message Verdict {
+  uint64 request = 1;
+  bool allow = 2;
+}
+
+message ApplyReply {
+  uint64 generation = 1;
+}
+
+enum RuleVerdict {
+  ALLOW = 0;
+  DENY = 1;
+  ASK = 2;
+}
+
+message Rule {
+  uint64 id = 1;
+  uint32 ops = 2;
+  ObjectMatch object = 3;
+  RuleVerdict verdict = 4;
+  string label = 5;
+  google.protobuf.Timestamp expires = 6; // unset: until removed
+  string set = 7;
+}
+
+message ObjectMatch {
+  oneof kind {
+    PathMatch path = 1;
+    ProcMatch proc = 2;
+    bool unknown = 3;
+  }
+}
+
+message PathMatch {
+  string path = 1;
+  bool tree = 2;
+}
+
+message ProcMatch {
+  string name = 1;
+  string comm = 2;
+}
+
+message AnswerRequest {
+  uint64 request = 1;
+  // once, temp, always, deny, never; temp and always need a scope.
+  string answer = 2;
+  string client = 3; // reported in Reason.client
+}
+
+message AnswerReply {}

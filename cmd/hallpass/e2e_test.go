@@ -4,10 +4,10 @@
 package main
 
 import (
-	"bufio"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,7 +15,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/x/vt"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/alban/hallpass/internal/lsm"
+	"github.com/alban/hallpass/internal/sessionapi"
+	pb "github.com/alban/hallpass/internal/sessionpb"
 )
 
 var hallpassBin string
@@ -183,21 +189,7 @@ check out2 sh -c "echo $v > /proc/$PPID/oom_score_adj"
 	if err := c.Start(); err != nil {
 		t.Fatal(err)
 	}
-	sock := fmt.Sprintf("%s/hallpass/%d.sock", e.runtime, c.Process.Pid)
-	var conn net.Conn
-	var err error
-	for i := 0; i < 100; i++ {
-		if conn, err = net.Dial("unix", sock); err == nil {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	if err != nil {
-		c.Process.Kill()
-		t.Fatalf("dial %s: %v", sock, err)
-	}
-	defer conn.Close()
-	rd := bufio.NewReader(conn)
+	p := dialPrompts(t, e, c)
 	// "temp" on ~/.m2/a grants ~/.m2 for 5 minutes, so a2 goes through
 	// without prompting. Writes to the sandbox's own /proc files are
 	// silent. "deny" is not remembered (b2 asks again), "never" is (b3
@@ -210,24 +202,19 @@ check out2 sh -c "echo $v > /proc/$PPID/oom_score_adj"
 		{"/oom_score_adj", `oom_score_adj of "hallpass" processes outside the sandbox`, "always"},
 	}
 	for _, st := range steps {
-		line, err := rd.ReadString('\n')
+		req, err := p.nextRequest(10 * time.Second)
 		if err != nil {
 			t.Fatalf("read prompt: %v\n%s", err, out.String())
 		}
-		var req struct {
-			ID    uint64
-			Path  string
-			Scope string
+		if path, scope := req.Prompt.GetPath(), req.Prompt.GetScope(); !strings.HasSuffix(path, st.suffix) || !strings.HasSuffix(scope, st.scope) {
+			t.Errorf("prompt for %q (scope %q), want *%s (scope *%s)", path, scope, st.suffix, st.scope)
 		}
-		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "PROMPT ")), &req); err != nil {
-			t.Fatalf("bad prompt %q: %v", line, err)
+		// A stale answer must be refused.
+		_, err = p.c.Answer(context.Background(), &pb.AnswerRequest{Request: req.Id + 1000, Answer: "once"})
+		if status.Code(err) != codes.NotFound {
+			t.Errorf("stale answer: %v, want NotFound", err)
 		}
-		if !strings.HasSuffix(req.Path, st.suffix) || !strings.HasSuffix(req.Scope, st.scope) {
-			t.Errorf("prompt for %q (scope %q), want *%s (scope *%s)", req.Path, req.Scope, st.suffix, st.scope)
-		}
-		// A stale answer must be ignored.
-		fmt.Fprintf(conn, "%d once\n", req.ID+1000)
-		fmt.Fprintf(conn, "%d %s\n", req.ID, st.reply)
+		p.answer(req.Id, st.reply)
 	}
 	if err := c.Wait(); err != nil {
 		t.Fatalf("hallpass: %v\n%s", err, out.String())
@@ -267,39 +254,16 @@ for i in range(3):
 	if err := c.Start(); err != nil {
 		t.Fatal(err)
 	}
-	sock := fmt.Sprintf("%s/hallpass/%d.sock", e.runtime, c.Process.Pid)
-	var conn net.Conn
-	var err error
-	for i := 0; i < 100; i++ {
-		if conn, err = net.Dial("unix", sock); err == nil {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	if err != nil {
-		c.Process.Kill()
-		t.Fatalf("dial %s: %v", sock, err)
-	}
-	defer conn.Close()
-	rd := bufio.NewReader(conn)
+	p := dialPrompts(t, e, c)
 	for _, reply := range []string{"once", "never"} {
-		line, err := rd.ReadString('\n')
+		req, err := p.nextRequest(10 * time.Second)
 		if err != nil {
 			t.Fatalf("read prompt: %v\n%s", err, out.String())
 		}
-		var req struct {
-			ID    uint64
-			Path  string
-			Scope string
-			Warn  string
+		if pr := req.Prompt; pr.GetScope() != "" || !strings.HasPrefix(pr.GetWarn(), "Unknown path") {
+			t.Errorf("prompt %v: want no scope and an unknown-path warning", pr)
 		}
-		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "PROMPT ")), &req); err != nil {
-			t.Fatalf("bad prompt %q: %v", line, err)
-		}
-		if req.Scope != "" || !strings.HasPrefix(req.Warn, "Unknown path") {
-			t.Errorf("prompt %+v: want no scope and an unknown-path warning", req)
-		}
-		fmt.Fprintf(conn, "%d %s\n", req.ID, reply)
+		p.answer(req.Id, reply)
 	}
 	if err := c.Wait(); err != nil {
 		t.Fatalf("hallpass: %v\n%s", err, out.String())
@@ -314,19 +278,68 @@ type logLine struct {
 	Path, Decision, Reason string
 }
 
-// prompter answers the prompts of a hallpass run with --ask=answer.
+// TestAnswerCommand runs `hallpass answer` against a session.
+func TestAnswerCommand(t *testing.T) {
+	e := newEnv(t)
+	script := `
+check() { name=$1; shift; if "$@" 2>/dev/null; then echo "$name=ok"; else echo "$name=denied"; fi; }
+check a sh -c 'echo a > "$HOME/a"'
+check b sh -c 'echo b > "$HOME/b"'
+`
+	c := e.cmd(script, "--ask=answer", "--timeout=20s")
+	var out strings.Builder
+	c.Stdout, c.Stderr = &out, &out
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	dialPrompts(t, e, c) // waits for the socket
+	a := exec.Command(hallpassBin, "answer")
+	a.Env = append(os.Environ(), "XDG_RUNTIME_DIR="+e.runtime)
+	in, err := a.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	scr := &screen{emu: vt.NewEmulator(100, 24)}
+	a.Stdout, a.Stderr = scr, scr
+	if err := a.Start(); err != nil {
+		t.Fatal(err)
+	}
+	for i, key := range []string{"o", "d"} {
+		waitFor(t, func() bool { return strings.Count(scr.rawText(), "wants to write") > i }, "prompt")
+		fmt.Fprintln(in, key)
+	}
+	if err := c.Wait(); err != nil {
+		t.Fatalf("hallpass: %v\n%s", err, out.String())
+	}
+	if err := a.Wait(); err != nil {
+		t.Errorf("hallpass answer: %v", err)
+	}
+	if got := out.String(); !strings.Contains(got, "a=ok\n") || !strings.Contains(got, "b=denied\n") {
+		t.Errorf("output:\n%s", got)
+	}
+	if got := scr.rawText(); !strings.HasSuffix(got, "Session ended.\n") {
+		t.Errorf("hallpass answer output:\n%s", got)
+	}
+}
+
+// prompter answers the prompts of a hallpass run with --ask=answer, over
+// the session's gRPC socket.
 type prompter struct {
-	conn net.Conn
-	rd   *bufio.Reader
+	t *testing.T
+	c pb.SessionClient
 }
 
 func dialPrompts(t *testing.T, e env, c *exec.Cmd) prompter {
 	t.Helper()
 	sock := fmt.Sprintf("%s/hallpass/%d.sock", e.runtime, c.Process.Pid)
 	for i := 0; i < 100; i++ {
-		if conn, err := net.Dial("unix", sock); err == nil {
+		if _, err := os.Stat(sock); err == nil {
+			conn, client, err := sessionapi.Dial(sock)
+			if err != nil {
+				break
+			}
 			t.Cleanup(func() { conn.Close() })
-			return prompter{conn, bufio.NewReader(conn)}
+			return prompter{t, client}
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -335,19 +348,47 @@ func dialPrompts(t *testing.T, e env, c *exec.Cmd) prompter {
 	return prompter{}
 }
 
+// nextRequest returns the oldest pending request, waiting at most d. It
+// polls Snapshot, which reflects answers as soon as Answer returns, so a
+// request settled by the previous answer is never returned.
+func (p prompter) nextRequest(d time.Duration) (*pb.Request, error) {
+	deadline := time.Now().Add(d)
+	for {
+		s, err := p.c.Snapshot(context.Background(), &pb.SnapshotRequest{})
+		if err != nil {
+			return nil, err
+		}
+		if len(s.Pending) > 0 {
+			oldest := s.Pending[0]
+			for _, r := range s.Pending {
+				if r.Id < oldest.Id {
+					oldest = r
+				}
+			}
+			return oldest, nil
+		}
+		if time.Now().After(deadline) {
+			return nil, errors.New("no prompt")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 // next returns the ID and path of the next prompt, waiting at most d.
 func (p prompter) next(d time.Duration) (uint64, string, error) {
-	p.conn.SetReadDeadline(time.Now().Add(d))
-	line, err := p.rd.ReadString('\n')
+	r, err := p.nextRequest(d)
 	if err != nil {
 		return 0, "", err
 	}
-	var req struct {
-		ID   uint64
-		Path string
+	return r.Id, r.Prompt.GetPath(), nil
+}
+
+// answer answers request id, failing the test on error.
+func (p prompter) answer(id uint64, reply string) {
+	p.t.Helper()
+	if _, err := p.c.Answer(context.Background(), &pb.AnswerRequest{Request: id, Answer: reply, Client: "test"}); err != nil {
+		p.t.Errorf("answer %d %s: %v", id, reply, err)
 	}
-	err = json.Unmarshal([]byte(strings.TrimPrefix(line, "PROMPT ")), &req)
-	return req.ID, req.Path, err
 }
 
 // TestSignalWhilePrompting checks that a signal caught by the sandboxed
@@ -368,7 +409,7 @@ func TestSignalWhilePrompting(t *testing.T) {
 		t.Fatalf("prompt %q: %v", path, err)
 	}
 	time.Sleep(time.Second) // the signal is sent meanwhile
-	fmt.Fprintf(p.conn, "%d once\n", id)
+	p.answer(id, "once")
 	if _, path, err := p.next(time.Second); err == nil {
 		t.Errorf("asked again, for %q", path)
 	}
@@ -405,7 +446,7 @@ wait
 		t.Fatalf("prompt %q: %v\n%s", path, err, out.String())
 	}
 	time.Sleep(500 * time.Millisecond) // the other writes queue up
-	fmt.Fprintf(p.conn, "%d temp\n", id)
+	p.answer(id, "temp")
 	if _, path, err := p.next(time.Second); err == nil {
 		t.Errorf("asked again, for %q", path)
 	}
@@ -442,7 +483,7 @@ func TestRenamePerPath(t *testing.T) {
 		if err != nil || !strings.HasSuffix(path, st.suffix) {
 			t.Fatalf("prompt %q, want *%s: %v\n%s", path, st.suffix, err, out.String())
 		}
-		fmt.Fprintf(p.conn, "%d %s\n", id, st.reply)
+		p.answer(id, st.reply)
 	}
 	if err := c.Wait(); err != nil {
 		t.Fatalf("hallpass: %v\n%s", err, out.String())
@@ -482,7 +523,7 @@ check again sh -c 'echo x > "$HOME/once"'
 		if err != nil || !strings.HasSuffix(path, "/once") {
 			t.Fatalf("prompt %q: %v\n%s", path, err, out.String())
 		}
-		fmt.Fprintf(p.conn, "%d %s\n", id, reply)
+		p.answer(id, reply)
 	}
 	if err := c.Wait(); err != nil {
 		t.Fatalf("hallpass: %v\n%s", err, out.String())

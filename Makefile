@@ -7,9 +7,12 @@ SHELL := /bin/bash
 # (github.com/inspektor-gadget/ci-kernels). Pin a patch release, not a moving tag.
 CI_KERNELS_IMAGE ?= ghcr.io/inspektor-gadget/ci-kernels:7.2.8-debug
 
+# grpcnotrace drops gRPC's golang.org/x/net/trace (and html/template): 4 MB.
+GO_TAGS ?= grpcnotrace
+
 .PHONY: all
 all:
-	go build -o hallpass ./cmd/hallpass
+	go build -tags '$(GO_TAGS)' -o hallpass ./cmd/hallpass
 
 # Run the tests in a VM booting ci-kernels:KERNEL_VERSION, which has BPF-LSM
 # active. Needs vimto (CGO_ENABLED=0 go install lmb.io/vimto@latest) and qemu.

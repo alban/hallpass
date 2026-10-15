@@ -1,0 +1,65 @@
+// Copyright The hallpass Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package main
+
+import (
+	"fmt"
+	"os"
+
+	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
+	"github.com/alban/hallpass/internal/monitor"
+	"github.com/alban/hallpass/internal/sessionapi"
+	pb "github.com/alban/hallpass/internal/sessionpb"
+	"github.com/alban/hallpass/internal/ui"
+)
+
+// remoteClient is the Reason.Client of answers from the socket that name
+// no client.
+const remoteClient = "remote"
+
+// Info implements sessionapi.Session.
+func (s *session) Info() *pb.SessionInfo {
+	mode := "lite"
+	if s.cfg.LSM != nil {
+		mode = "strict"
+	}
+	return &pb.SessionInfo{
+		Pid:           int32(os.Getpid()),
+		Command:       s.cfg.Args,
+		Workdir:       s.cfg.Dir,
+		Mode:          mode,
+		StartTime:     timestamppb.New(s.start),
+		PromptTimeout: durationpb.New(s.cfg.Timeout),
+	}
+}
+
+// Prompt implements sessionapi.Session.
+func (s *session) Prompt(req *monitor.Request) *pb.Prompt {
+	r := s.uiRequest(req, 0)
+	return &pb.Prompt{
+		Op: r.Op, Path: r.Path, Exe: r.Exe, Pid: r.PID,
+		Cmdline: r.Cmdline, Parents: r.Parents,
+		Scope: r.Scope, Never: r.Never, Warn: r.Warn,
+	}
+}
+
+// Answer implements sessionapi.Session.
+func (s *session) Answer(id uint64, answer, who string) error {
+	a := ui.ParseAnswer(answer)
+	if a == ui.AnswerDismissed && answer != ui.AnswerDismissed.String() {
+		return fmt.Errorf("%w %q", sessionapi.ErrBadAnswer, answer)
+	}
+	if who == "" {
+		who = remoteClient
+	}
+	pending, rs, _ := s.m.Snapshot()
+	for _, r := range pending {
+		if r.ID == id {
+			return s.answer(r, a, rs, who)
+		}
+	}
+	return fmt.Errorf("request %d: %w", id, monitor.ErrClosed)
+}
