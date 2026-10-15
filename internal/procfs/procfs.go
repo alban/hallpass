@@ -284,6 +284,12 @@ func Ancestors(tid, root, max int) []string {
 	return out
 }
 
+// Tgid returns the process id of thread tid, or -1.
+func Tgid(tid int) int { return statusField(tid, "Tgid:") }
+
+// Parent returns the parent process id of pid, or -1.
+func Parent(pid int) int { return statusField(pid, "PPid:") }
+
 // Descends reports whether thread tid belongs to root or one of its
 // descendants, following the parent chain. This is racy (a process can exit
 // and its pid be reused) and processes reparented to a subreaper or init no
