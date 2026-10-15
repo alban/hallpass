@@ -82,7 +82,7 @@ func TestFromFDs(t *testing.T) {
 		t.Error(err)
 	}
 	l2.Close()
-	for _, swap := range []int{4, 6} { // a map as a link; two links swapped
+	for _, swap := range []int{5, 7, len(l.FDs()) - 2} { // a map as a link; two links swapped; sys_exit as LSM
 		if l3, err := FromFDs(dup(swap)); err == nil {
 			l3.Close()
 			t.Errorf("swap at %d accepted", swap)
@@ -90,8 +90,64 @@ func TestFromFDs(t *testing.T) {
 			t.Logf("swap at %d: %v", swap, err)
 		}
 	}
-	if _, err := FromFDs(dup(0)[:6]); err == nil {
+	if _, err := FromFDs(dup(0)[:7]); err == nil {
 		t.Error("missing links accepted")
+	}
+	if _, err := FromFDs(dup(0)[:len(l.FDs())-1]); err == nil {
+		t.Error("missing sys_exit link accepted")
+	}
+}
+
+// TestGrantOnce checks that a grant only lasts until the syscall the thread
+// is in returns: here a read, so the write after it is denied.
+func TestGrantOnce(t *testing.T) {
+	needRoot(t)
+	if err := Active(); err != nil {
+		skip(t, err)
+	}
+	dir := t.TempDir()
+	l, err := Load(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	if err := l.Sync(nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	go l.Events(func(e Event) { t.Logf("event: %+v", e) })
+
+	sh := exec.Command("sh", "-c", `read go; if echo > "$0/f"; then echo ok; else echo fail; fi`, dir)
+	stdin, _ := sh.StdinPipe()
+	var out strings.Builder
+	sh.Stdout = &out
+	if err := sh.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.AddMember(sh.Process.Pid); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond) // blocked in read
+	if err := l.GrantOnce(sh.Process.Pid, []string{dir + "/f"}, ProcRule{}); err != nil {
+		t.Fatal(err)
+	}
+	l.mu.Lock()
+	if len(l.once) != 1 {
+		t.Errorf("%d grants pending, want 1", len(l.once))
+	}
+	l.mu.Unlock()
+	stdin.Write([]byte("go\n"))
+	stdin.Close()
+	if err := sh.Wait(); err != nil {
+		t.Fatalf("sh: %v", err)
+	}
+	if got := strings.TrimSpace(out.String()); got != "fail" {
+		t.Errorf("write after the granted syscall: %s, want fail", got)
+	}
+	if err := l.Sync(nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(l.once) != 0 || len(l.nodes) != 0 {
+		t.Errorf("used grant not forgotten: %d grants, %d nodes", len(l.once), len(l.nodes))
 	}
 }
 

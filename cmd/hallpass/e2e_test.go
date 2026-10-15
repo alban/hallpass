@@ -375,6 +375,54 @@ func TestSignalWhilePrompting(t *testing.T) {
 	}
 }
 
+// TestStrictOnce checks "allow once" in strict mode: the kernel allows the
+// syscall that was asked about, and not the same write afterwards.
+func TestStrictOnce(t *testing.T) {
+	if os.Geteuid() != 0 {
+		strictSkip(t, "needs root (go test -exec sudo)")
+	}
+	if b, err := os.ReadFile("/sys/kernel/security/lsm"); err != nil || !strings.Contains(","+strings.TrimSpace(string(b))+",", ",bpf,") {
+		strictSkip(t, "BPF-LSM is not active")
+	}
+	e := newEnv(t)
+	script := `
+check() { name=$1; shift; if "$@" 2>/dev/null; then echo "$name=ok"; else echo "$name=denied"; fi; }
+check once  sh -c 'echo x > "$HOME/once"'
+check again sh -c 'echo x > "$HOME/once"'
+`
+	c := e.cmd(script, "--mode=strict", "--ask=answer", "--timeout=20s")
+	var out strings.Builder
+	c.Stdout, c.Stderr = &out, &out
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	p := dialPrompts(t, e, c)
+	for _, reply := range []string{"once", "deny"} {
+		id, path, err := p.next(10 * time.Second)
+		if err != nil || !strings.HasSuffix(path, "/once") {
+			t.Fatalf("prompt %q: %v\n%s", path, err, out.String())
+		}
+		fmt.Fprintf(p.conn, "%d %s\n", id, reply)
+	}
+	if err := c.Wait(); err != nil {
+		t.Fatalf("hallpass: %v\n%s", err, out.String())
+	}
+	for _, want := range []string{"once=ok", "again=denied"} {
+		if !strings.Contains(out.String(), want+"\n") {
+			t.Errorf("output lacks %q:\n%s", want, out.String())
+		}
+	}
+}
+
+// strictSkip skips, or fails under HALLPASS_REQUIRE_LSM=1 (see make test-vm).
+func strictSkip(t *testing.T, why string) {
+	t.Helper()
+	if os.Getenv("HALLPASS_REQUIRE_LSM") == "1" {
+		t.Fatal("HALLPASS_REQUIRE_LSM=1: " + why)
+	}
+	t.Skip(why)
+}
+
 func readLog(t *testing.T, file string) []logLine {
 	t.Helper()
 	b, err := os.ReadFile(file)

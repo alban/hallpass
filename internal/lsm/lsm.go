@@ -114,7 +114,7 @@ type nodeKey struct {
 
 // LSM is a loaded and attached set of programs, with its rules.
 type LSM struct {
-	members, protected, rules, proc, events *ebpf.Map
+	members, protected, grants, rules, proc, events *ebpf.Map
 	// links keep the programs attached; closing them detaches.
 	links []io.Closer
 	// linkFDs are the links' fds, for handing them to another process.
@@ -128,6 +128,20 @@ type LSM struct {
 	next    uint64
 	nodes   map[nodeKey]hallpassRuleVal
 	procs   map[hallpassProcKey]hallpassProcVal
+	// The last rules given to Sync, for re-syncing in GrantOnce.
+	lastRules []Rule
+	lastProcs []ProcRule
+	// once are the grants (see GrantOnce) that may still be in use.
+	once []*grant
+	seq  uint64
+}
+
+// grant is one GrantOnce: its paths keep their rule nodes, so their cookies
+// stay valid, until the grant is used up.
+type grant struct {
+	pidfd int
+	seq   uint64
+	paths []string
 }
 
 func newLSM() *LSM {
@@ -183,7 +197,7 @@ func Load(logAllowed bool) (*LSM, error) {
 	defer objs.hallpassPrograms.Close()
 	l := newLSM()
 	m := &objs.hallpassMaps
-	l.members, l.protected, l.rules, l.proc, l.events = m.Members, m.Protected, m.Rules, m.Proc, m.Events
+	l.members, l.protected, l.grants, l.rules, l.proc, l.events = m.Members, m.Protected, m.Grants, m.Rules, m.Proc, m.Events
 	m.OwnedSbs.Close()
 	progs := programsByName(&objs.hallpassPrograms)
 	for _, name := range attachOrder {
@@ -202,6 +216,16 @@ func Load(logAllowed bool) (*LSM, error) {
 			l.linkFDs = append(l.linkFDs, f.FD())
 		}
 	}
+	// Removes each grant (GrantOnce) when its syscall returns.
+	lk, err := link.AttachTracing(link.TracingOptions{Program: objs.HpSysExit})
+	if err != nil {
+		l.Close()
+		return nil, fmt.Errorf("attach %s: %w", objs.HpSysExit, err)
+	}
+	l.links = append(l.links, lk)
+	if f, ok := lk.(interface{ FD() int }); ok {
+		l.linkFDs = append(l.linkFDs, f.FD())
+	}
 	if err := l.start(); err != nil {
 		l.Close()
 		return nil, err
@@ -215,7 +239,11 @@ func (l *LSM) start() error {
 	return err
 }
 
-// hookIDs returns the kernel BTF IDs of the LSM hooks of attachOrder.
+// sysExitHook names the link of hp_sys_exit, after those of attachOrder.
+const sysExitHook = "sys_exit"
+
+// hookIDs returns the kernel BTF IDs of the LSM hooks of attachOrder, then
+// of the sys_exit tracepoint.
 func hookIDs() ([]btf.TypeID, []string, error) {
 	spec, err := loadHallpass()
 	if err != nil {
@@ -225,8 +253,8 @@ func hookIDs() ([]btf.TypeID, []string, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("kernel BTF: %w", err)
 	}
-	ids := make([]btf.TypeID, len(attachOrder))
-	hooks := make([]string, len(attachOrder))
+	ids := make([]btf.TypeID, len(attachOrder)+1)
+	hooks := make([]string, len(attachOrder)+1)
 	for i, name := range attachOrder {
 		ps := spec.Programs[name]
 		if ps == nil {
@@ -241,20 +269,35 @@ func hookIDs() ([]btf.TypeID, []string, error) {
 		}
 		hooks[i] = ps.AttachTo
 	}
+	tp, err := kernel.AnyTypeByName("btf_trace_" + sysExitHook)
+	if err != nil {
+		return nil, nil, fmt.Errorf("tracepoint %s: %w", sysExitHook, err)
+	}
+	if ids[len(attachOrder)], err = kernel.TypeID(tp); err != nil {
+		return nil, nil, err
+	}
+	hooks[len(attachOrder)] = sysExitHook
 	return ids, hooks, nil
 }
 
-// checkLink makes sure lk attaches a BPF-LSM program to hook (BTF ID id), so
-// a helper cannot hand over a link that enforces nothing. It only needs the
-// link fd, no privileges.
+// checkLink makes sure lk attaches a BPF-LSM program to hook (BTF ID id), or
+// a program to the sys_exit tracepoint, so a helper cannot hand over a link
+// that enforces nothing. It only needs the link fd, no privileges.
 func checkLink(lk link.Link, hook string, id btf.TypeID) error {
 	info, err := lk.Info()
 	if err != nil {
 		return fmt.Errorf("link for %s: %w", hook, err)
 	}
+	want := ebpf.AttachLSMMac
+	if hook == sysExitHook {
+		if rt := info.RawTracepoint(); info.Type != link.RawTracepointType || rt == nil || rt.Name != sysExitHook {
+			return fmt.Errorf("link is not attached to %s", hook)
+		}
+		return nil
+	}
 	t := info.Tracing()
-	if info.Type != link.TracingType || t == nil || uint32(t.AttachType) != uint32(ebpf.AttachLSMMac) || btf.TypeID(t.TargetBtfId) != id {
-		return fmt.Errorf("link is not attached to LSM hook %s", hook)
+	if info.Type != link.TracingType || t == nil || uint32(t.AttachType) != uint32(want) || btf.TypeID(t.TargetBtfId) != id {
+		return fmt.Errorf("link is not attached to %s", hook)
 	}
 	return nil
 }
@@ -262,7 +305,7 @@ func checkLink(lk link.Link, hook string, id btf.TypeID) error {
 // FDs returns the fds that make up l, in the order FromFDs expects: the
 // maps, then the links. They stay owned by l.
 func (l *LSM) FDs() []int {
-	fds := []int{l.members.FD(), l.protected.FD(), l.rules.FD(), l.proc.FD(), l.events.FD()}
+	fds := []int{l.members.FD(), l.protected.FD(), l.grants.FD(), l.rules.FD(), l.proc.FD(), l.events.FD()}
 	return append(fds, l.linkFDs...)
 }
 
@@ -270,15 +313,15 @@ func (l *LSM) FDs() []int {
 // (see FDs) and takes ownership of them. It needs no privilege: updating a
 // BPF map only needs a writable fd to it.
 func FromFDs(fds []int) (*LSM, error) {
-	want := []ebpf.MapType{ebpf.TaskStorage, ebpf.TaskStorage, ebpf.Hash, ebpf.Hash, ebpf.RingBuf}
-	if len(fds) != len(want)+len(attachOrder) {
+	want := []ebpf.MapType{ebpf.TaskStorage, ebpf.TaskStorage, ebpf.TaskStorage, ebpf.Hash, ebpf.Hash, ebpf.RingBuf}
+	if len(fds) != len(want)+len(attachOrder)+1 {
 		for _, fd := range fds {
 			unix.Close(fd)
 		}
-		return nil, fmt.Errorf("got %d fds, want %d", len(fds), len(want)+len(attachOrder))
+		return nil, fmt.Errorf("got %d fds, want %d", len(fds), len(want)+len(attachOrder)+1)
 	}
 	l := newLSM()
-	maps := []**ebpf.Map{&l.members, &l.protected, &l.rules, &l.proc, &l.events}
+	maps := []**ebpf.Map{&l.members, &l.protected, &l.grants, &l.rules, &l.proc, &l.events}
 	ids, hooks, err := hookIDs()
 	for i, fd := range fds {
 		if err != nil {
@@ -326,11 +369,15 @@ func (l *LSM) Close() error {
 	for _, lk := range l.links {
 		lk.Close()
 	}
-	for _, m := range []*ebpf.Map{l.members, l.protected, l.rules, l.proc, l.events} {
+	for _, m := range []*ebpf.Map{l.members, l.protected, l.grants, l.rules, l.proc, l.events} {
 		if m != nil {
 			m.Close()
 		}
 	}
+	for _, g := range l.once {
+		unix.Close(g.pidfd)
+	}
+	l.once = nil
 	return nil
 }
 
@@ -394,9 +441,21 @@ func cstr(b []int8) string {
 // Sync makes the kernel's rules match these, translating paths with the
 // current mounts. Expired rules are dropped.
 func (l *LSM) Sync(rules []Rule, procs []ProcRule) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.lastRules, l.lastProcs = rules, procs
+	l.pruneOnce()
+	_, err := l.sync()
+	return err
+}
+
+// sync pushes lastRules and lastProcs, with nodes for the paths of the
+// grants, and returns the mounts it used. l.mu must be held.
+func (l *LSM) sync() ([]mount, error) {
+	rules, procs := l.lastRules, l.lastProcs
 	mounts, err := readMounts(l.mountinfo)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	now := time.Now()
 	mono := monotonic()
@@ -409,9 +468,6 @@ func (l *LSM) Sync(rules []Rule, procs []ProcRule) error {
 		}
 		return mono + uint64(t.Sub(now))
 	}
-
-	l.mu.Lock()
-	defer l.mu.Unlock()
 
 	nodes := map[nodeKey]hallpassRuleVal{}
 	for _, r := range rules {
@@ -438,18 +494,26 @@ func (l *LSM) Sync(rules []Rule, procs []ProcRule) error {
 			nodes[k] = v
 		}
 	}
+	// The grants' nodes: they allow nothing by themselves.
+	for _, g := range l.once {
+		for _, p := range g.paths {
+			for _, lc := range locate(mounts, p, false, mountID(p)) {
+				l.node(nodes, lc)
+			}
+		}
+	}
 	for k, v := range nodes {
 		if old, ok := l.nodes[k]; ok && old == v {
 			continue
 		}
 		if err := l.rules.Update(ruleKey(k), v, ebpf.UpdateAny); err != nil {
-			return fmt.Errorf("update rule %q: %w", k.name, err)
+			return nil, fmt.Errorf("update rule %q: %w", k.name, err)
 		}
 	}
 	for k := range l.nodes {
 		if _, ok := nodes[k]; !ok {
 			if err := l.rules.Delete(ruleKey(k)); err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
-				return err
+				return nil, err
 			}
 		}
 	}
@@ -477,7 +541,7 @@ func (l *LSM) Sync(rules []Rule, procs []ProcRule) error {
 			continue
 		}
 		if err := l.proc.Update(k, v, ebpf.UpdateAny); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	for k := range l.procs {
@@ -486,7 +550,79 @@ func (l *LSM) Sync(rules []Rule, procs []ProcRule) error {
 		}
 	}
 	l.procs = pm
-	return nil
+	return mounts, nil
+}
+
+// GrantOnce lets thread tid, blocked in a syscall that seccomp handed to the
+// supervisor, write paths (exactly), and the /proc file of proc when its
+// Name is set, during that syscall only: the kernel removes the grant when
+// the syscall returns, even if it is restarted, and no other thread can use
+// it. It must be called before the syscall is continued.
+func (l *LSM) GrantOnce(tid int, paths []string, proc ProcRule) error {
+	fd, err := unix.PidfdOpen(tid, unix.PIDFD_THREAD)
+	if err != nil {
+		return fmt.Errorf("pidfd_open %d: %w", tid, err)
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.pruneOnce()
+	l.seq++
+	g := &grant{pidfd: fd, seq: l.seq, paths: paths}
+	l.once = append(l.once, g)
+	mounts, err := l.sync()
+	if err != nil {
+		return err
+	}
+	v := hallpassHpGrant{Seq: g.seq}
+	n := 0
+	for _, p := range paths {
+		for _, lc := range locate(mounts, p, false, mountID(p)) {
+			c, ok := l.cookie(lc)
+			if !ok {
+				continue
+			}
+			if n == len(v.Nodes) {
+				return fmt.Errorf("allow once: too many paths (%d)", len(paths))
+			}
+			v.Nodes[n] = c
+			n++
+		}
+	}
+	copyName(v.Proc.Name[:], proc.Name)
+	copyName(v.Proc.Comm[:], proc.Comm)
+	return l.grants.Update(uint32(fd), v, ebpf.UpdateAny)
+}
+
+// pruneOnce forgets the grants the kernel has removed: their syscall
+// returned, or their thread exited. l.mu must be held.
+func (l *LSM) pruneOnce() {
+	once := l.once[:0]
+	for _, g := range l.once {
+		var v hallpassHpGrant
+		if err := l.grants.Lookup(uint32(g.pidfd), &v); err == nil && v.Seq == g.seq {
+			once = append(once, g)
+			continue
+		}
+		unix.Close(g.pidfd)
+	}
+	clear(l.once[len(once):])
+	l.once = once
+}
+
+// cookie returns the cookie of the node of lc, if it has one.
+func (l *LSM) cookie(lc loc) (uint64, bool) {
+	parent := rootCookie | uint64(lc.dev)
+	c := uint64(0)
+	for _, name := range strings.Split(lc.path, "/") {
+		if name == "" {
+			continue
+		}
+		if c = l.cookies[nodeKey{parent, name}]; c == 0 {
+			return 0, false
+		}
+		parent = c
+	}
+	return c, c != 0
 }
 
 // node adds the nodes leading to lc to nodes and returns the key of its last

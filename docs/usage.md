@@ -53,6 +53,8 @@ Strict mode builds on lite mode: it still pauses writes and asks you interactive
 
 Strict mode enforces your answers in the kernel with a BPF-LSM program, on the real file the kernel is about to modify. This closes the TOCTOU race that lite mode cannot: with seccomp, the kernel re-resolves the path after the check, so a malicious multi-threaded process can swap it in between (via a symlink, bind mount or rename). The LSM hook runs after that resolution, so there is no window to race.
 
+"Allow once" in strict mode allows exactly the paused syscall: the kernel grants it to that thread only, and drops the grant when the syscall returns. Another thread, or a retry of the same write later, is asked again. Dropping the grant needs a `sys_exit` tracepoint, which slows down every syscall on the host a little (about 200 ns) while strict mode runs.
+
 Run hallpass as your user; only loading the BPF programs needs root:
 
 ```console

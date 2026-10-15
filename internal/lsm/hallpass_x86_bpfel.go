@@ -25,6 +25,13 @@ type hallpassEvent struct {
 	Path [4096]int8
 }
 
+type hallpassHpGrant struct {
+	_     structs.HostLayout
+	Seq   uint64
+	Nodes [2]uint64
+	Proc  hallpassProcKey
+}
+
 type hallpassHpScratch struct {
 	_     structs.HostLayout
 	Depth uint32
@@ -67,6 +74,7 @@ type hallpassRuleVal struct {
 // Used for safe lookups in a Collection or CollectionSpec.
 const (
 	hallpassMapEvents               = "events"
+	hallpassMapGrants               = "grants"
 	hallpassMapMembers              = "members"
 	hallpassMapOwnedSbs             = "owned_sbs"
 	hallpassMapProc                 = "proc"
@@ -86,6 +94,7 @@ const (
 	hallpassProgHpSbAlloc           = "hp_sb_alloc"
 	hallpassProgHpSbFree            = "hp_sb_free"
 	hallpassProgHpSbKernMount       = "hp_sb_kern_mount"
+	hallpassProgHpSysExit           = "hp_sys_exit"
 	hallpassProgHpTaskAlloc         = "hp_task_alloc"
 	hallpassProgHpTaskKill          = "hp_task_kill"
 	hallpassVarLogAllowed           = "log_allowed"
@@ -147,6 +156,7 @@ type hallpassProgramSpecs struct {
 	HpSbAlloc           *ebpf.ProgramSpec `ebpf:"hp_sb_alloc"`
 	HpSbFree            *ebpf.ProgramSpec `ebpf:"hp_sb_free"`
 	HpSbKernMount       *ebpf.ProgramSpec `ebpf:"hp_sb_kern_mount"`
+	HpSysExit           *ebpf.ProgramSpec `ebpf:"hp_sys_exit"`
 	HpTaskAlloc         *ebpf.ProgramSpec `ebpf:"hp_task_alloc"`
 	HpTaskKill          *ebpf.ProgramSpec `ebpf:"hp_task_kill"`
 }
@@ -156,6 +166,7 @@ type hallpassProgramSpecs struct {
 // It can be passed ebpf.CollectionSpec.Assign.
 type hallpassMapSpecs struct {
 	Events    *ebpf.MapSpec `ebpf:"events"`
+	Grants    *ebpf.MapSpec `ebpf:"grants"`
 	Members   *ebpf.MapSpec `ebpf:"members"`
 	OwnedSbs  *ebpf.MapSpec `ebpf:"owned_sbs"`
 	Proc      *ebpf.MapSpec `ebpf:"proc"`
@@ -193,6 +204,7 @@ func (o *hallpassObjects) Close() error {
 // It can be passed to loadHallpassObjects or ebpf.CollectionSpec.LoadAndAssign.
 type hallpassMaps struct {
 	Events    *ebpf.Map `ebpf:"events"`
+	Grants    *ebpf.Map `ebpf:"grants"`
 	Members   *ebpf.Map `ebpf:"members"`
 	OwnedSbs  *ebpf.Map `ebpf:"owned_sbs"`
 	Proc      *ebpf.Map `ebpf:"proc"`
@@ -204,6 +216,7 @@ type hallpassMaps struct {
 func (m *hallpassMaps) Close() error {
 	return _HallpassClose(
 		m.Events,
+		m.Grants,
 		m.Members,
 		m.OwnedSbs,
 		m.Proc,
@@ -238,6 +251,7 @@ type hallpassPrograms struct {
 	HpSbAlloc           *ebpf.Program `ebpf:"hp_sb_alloc"`
 	HpSbFree            *ebpf.Program `ebpf:"hp_sb_free"`
 	HpSbKernMount       *ebpf.Program `ebpf:"hp_sb_kern_mount"`
+	HpSysExit           *ebpf.Program `ebpf:"hp_sys_exit"`
 	HpTaskAlloc         *ebpf.Program `ebpf:"hp_task_alloc"`
 	HpTaskKill          *ebpf.Program `ebpf:"hp_task_kill"`
 }
@@ -257,6 +271,7 @@ func (p *hallpassPrograms) Close() error {
 		p.HpSbAlloc,
 		p.HpSbFree,
 		p.HpSbKernMount,
+		p.HpSysExit,
 		p.HpTaskAlloc,
 		p.HpTaskKill,
 	)

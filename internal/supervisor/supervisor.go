@@ -49,10 +49,6 @@ type Config struct {
 	WaitAll bool
 }
 
-// onceTTL is how long the kernel allows a path after "allow once": long
-// enough for the syscall being continued to reach the LSM hook.
-const onceTTL = 2 * time.Second
-
 // syncPeriod is how often strict mode rules are re-translated, to follow
 // mounts appearing or disappearing.
 const syncPeriod = 5 * time.Second
@@ -167,6 +163,7 @@ func Run(cfg Config) (int, error) {
 		rules:    seccomp.Rules(cfg.AllowUserns),
 		listener: seccomp.NewListener(listenerFD),
 		inflight: map[string]*pending{},
+		restart:  map[string]time.Time{},
 		root:     cmd.Process.Pid,
 		wait:     wt,
 	}
@@ -238,10 +235,10 @@ type session struct {
 	inflight   map[string]*pending
 	waiting    int
 
-	// Strict mode: "allow once" answers, as short-lived exact rules.
-	onceMu   sync.Mutex
-	once     []lsm.Rule
-	onceProc []lsm.ProcRule
+	// restart holds the syscalls just allowed once (see restartKey), with
+	// until when a restart of them is allowed without asking.
+	restartMu sync.Mutex
+	restart   map[string]time.Time
 
 	// neverUnknown: the user answered "never" to an unreadable path.
 	neverUnknown atomic.Bool
@@ -251,8 +248,8 @@ type session struct {
 }
 
 type pending struct {
-	done    chan struct{}
-	allowed bool
+	done          chan struct{}
+	allowed, once bool
 }
 
 func (s *session) worker() {
@@ -352,6 +349,20 @@ func (s *session) handle(n seccomp.Notif) {
 	var cmdline, parents []string
 	unknown := false
 	for _, sub := range ask {
+		unknown = unknown || sub.unknown
+	}
+	var paths []string
+	for _, t := range targets {
+		paths = append(paths, t.path)
+	}
+	key := restartKey(n, paths)
+	restarted := len(ask) > 0 && !unknown && s.restarted(key)
+	var once []subject
+	for _, sub := range ask {
+		if restarted {
+			once = append(once, sub)
+			continue
+		}
 		if exe == "" {
 			exe = procfs.Exe(n.PID)
 			cmdline = procfs.Cmdline(int(n.PID))
@@ -359,7 +370,8 @@ func (s *session) handle(n seccomp.Notif) {
 		}
 		sub.req.Exe, sub.req.PID, sub.req.Op = exe, n.PID, rule.Op
 		sub.req.Cmdline, sub.req.Parents = cmdline, parents
-		if !s.ask(sub) {
+		allowed, o := s.ask(sub)
+		if !allowed {
 			if sub.unknown {
 				s.deny(n, rule, "", "user: unknown path")
 			} else {
@@ -367,9 +379,12 @@ func (s *session) handle(n seccomp.Notif) {
 			}
 			return
 		}
-		if sub.unknown {
-			unknown = true
+		if o {
+			once = append(once, sub)
 		}
+	}
+	if len(once) > 0 && !unknown && !restarted {
+		s.allowedOnce(key)
 	}
 
 	reason := "policy"
@@ -381,12 +396,18 @@ func (s *session) handle(n seccomp.Notif) {
 		if unknown {
 			reason += ": unknown path"
 		}
+		if restarted {
+			reason += ": restarted"
+		}
 	}
 	path := ""
 	if len(targets) > 0 {
 		path = targets[len(targets)-1].path
 	}
 	s.log(logEntry{PID: n.PID, Exe: exe, Syscall: rule.Name, Path: path, Decision: "allow", Reason: reason})
+	if s.cfg.LSM != nil && len(once) > 0 {
+		s.grantOnce(n, once)
+	}
 	if err := s.listener.Continue(n.ID); err != nil && !errors.Is(err, unix.ENOENT) {
 		fmt.Fprintf(os.Stderr, "hallpass: continue: %v\n", err)
 	}
@@ -415,16 +436,17 @@ func followLast(rule seccomp.Rule, n seccomp.Notif, i int) bool {
 	return false
 }
 
-// ask returns whether the user allows sub. Concurrent identical requests
-// share one prompt; queued prompts are re-evaluated after each answer so a
-// scoped grant settles them without asking again.
-func (s *session) ask(sub subject) bool {
+// ask returns whether the user allows sub, and whether only this once.
+// Concurrent identical requests share one prompt; queued prompts are
+// re-evaluated after each answer so a scoped grant settles them without
+// asking again.
+func (s *session) ask(sub subject) (allowed, once bool) {
 	req := sub.req
 	s.inflightMu.Lock()
 	if p, ok := s.inflight[sub.key]; ok {
 		s.inflightMu.Unlock()
 		<-p.done
-		return p.allowed
+		return p.allowed, p.once
 	}
 	p := &pending{done: make(chan struct{})}
 	s.inflight[sub.key] = p
@@ -449,10 +471,7 @@ func (s *session) ask(sub subject) bool {
 		}
 		switch a {
 		case ui.AnswerAllowOnce:
-			p.allowed = true
-			if s.cfg.LSM != nil {
-				sub.once()
-			}
+			p.allowed, p.once = true, true
 		case ui.AnswerAllowTemp:
 			sub.grant(ui.TempGrant)
 			p.allowed = true
@@ -473,5 +492,5 @@ func (s *session) ask(sub subject) bool {
 	delete(s.inflight, sub.key)
 	s.inflightMu.Unlock()
 	close(p.done)
-	return p.allowed
+	return p.allowed, p.once
 }

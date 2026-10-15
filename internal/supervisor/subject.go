@@ -19,7 +19,9 @@ type subject struct {
 	eval  func() policy.Decision
 	grant func(ttl time.Duration) // covers req.Scope; 0: rest of the session
 	never func()
-	once  func() // strict mode: let the kernel allow it this time
+	// For "allow once" in strict mode: what the kernel is to allow.
+	path string
+	proc *policy.ProcKey
 	// unknown: the path could not be read (see unknownSubject).
 	unknown bool
 }
@@ -37,7 +39,7 @@ func (s *session) fileSubject(path string) subject {
 		eval:  func() policy.Decision { return p.Eval(path) },
 		grant: func(ttl time.Duration) { p.AllowFolderFor(folder, ttl) },
 		never: func() { p.DenyPath(path) },
-		once:  func() { s.allowOnce(path) },
+		path:  path,
 	}
 }
 
@@ -50,7 +52,7 @@ func (s *session) procSubject(path string, k policy.ProcKey) subject {
 		eval:  func() policy.Decision { return p.EvalProc(k) },
 		grant: func(ttl time.Duration) { p.AllowProcFor(k, ttl) },
 		never: func() { p.DenyProc(k) },
-		once:  func() { s.allowProcOnce(k) },
+		proc:  &k,
 	}
 }
 
@@ -75,7 +77,6 @@ func (s *session) unknownSubject(id uint64, err error) subject {
 		},
 		grant:   func(time.Duration) {},
 		never:   func() { s.neverUnknown.Store(true) },
-		once:    func() {},
 		unknown: true,
 	}
 }

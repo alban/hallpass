@@ -71,6 +71,21 @@ struct proc_val {
 	__u8 pad[7];
 };
 
+#define GRANT_NODES 2
+
+/*
+ * "Allow once": what the user allowed for the syscall a member thread is
+ * blocked in, waiting for the supervisor. Set by the supervisor before it
+ * lets the syscall continue, and removed when the syscall returns
+ * (hp_sys_exit), so that neither another thread nor a later syscall can use
+ * it.
+ */
+struct hp_grant {
+	__u64 seq;		   /* for the supervisor, to tell its grants apart */
+	__u64 nodes[GRANT_NODES]; /* rule nodes allowed exactly: one per path of the syscall (rename, link: 2) */
+	struct proc_key proc;	   /* proc.name[0] == 0: none */
+};
+
 enum hp_op {
 	HP_OP_OPEN = 1,
 	HP_OP_CREATE,
@@ -135,6 +150,13 @@ struct {
 } protected SEC(".maps");
 
 struct {
+	__uint(type, BPF_MAP_TYPE_TASK_STORAGE);
+	__uint(map_flags, BPF_F_NO_PREALLOC);
+	__type(key, int);
+	__type(value, struct hp_grant);
+} grants SEC(".maps");
+
+struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__uint(map_flags, BPF_F_NO_PREALLOC);
 	__uint(max_entries, 65536);
@@ -175,13 +197,29 @@ static __always_inline bool live(__u64 expiry, __u64 now)
 	return expiry > now;
 }
 
+static __always_inline struct hp_grant *current_grant(void)
+{
+	return bpf_task_storage_get(&grants, bpf_get_current_task_btf(), 0, 0);
+}
+
+static __always_inline bool granted(struct hp_grant *g, __u64 cookie)
+{
+	if (!g || !cookie)
+		return false;
+	for (int i = 0; i < GRANT_NODES; i++)
+		if (g->nodes[i] == cookie)
+			return true;
+	return false;
+}
+
 /* Returns 0 to allow or -EACCES. Preemption must be disabled. */
-static __always_inline int walk(struct hp_scratch *r, struct dentry *target)
+static __always_inline int walk(struct hp_scratch *r, struct dentry *target,
+				 struct hp_grant *g)
 {
 	struct super_block *sb = BPF_CORE_READ(target, d_sb);
 	__u64 sbkey = (__u64)sb;
 	__u64 cur = (__u64)target;
-	__u64 now, cookie;
+	__u64 now, cookie, leaf = 0;
 	struct rule_val *v;
 	bool allow = false, deny = false;
 	__u32 n;
@@ -240,8 +278,11 @@ static __always_inline int walk(struct hp_scratch *r, struct dentry *target)
 			break;
 		deny |= v->deny_tree || (j == 0 && v->deny_exact);
 		allow |= live(v->allow_tree, now) || (j == 0 && live(v->allow_exact, now));
+		if (j == 0)
+			leaf = v->cookie;
 		cookie = v->cookie;
 	}
+	allow |= granted(g, leaf);
 
 	if (deny || !allow)
 		return -EACCES;
@@ -253,14 +294,29 @@ static __always_inline int check_dentry(struct dentry *target)
 {
 	__u32 zero = 0;
 	struct hp_scratch *r;
+	struct hp_grant *g = current_grant();
 	int ret = -EACCES;
 
 	bpf_preempt_disable();
 	r = bpf_map_lookup_elem(&scratch, &zero);
 	if (r)
-		ret = walk(r, target);
+		ret = walk(r, target, g);
 	bpf_preempt_enable();
 	return ret;
+}
+
+static __always_inline bool proc_granted(struct hp_grant *g, struct proc_key *k)
+{
+	__u64 *a, *b;
+
+	if (!g || !g->proc.name[0])
+		return false;
+	a = (__u64 *)&g->proc;
+	b = (__u64 *)k;
+	for (int i = 0; i < sizeof(*k) / 8; i++)
+		if (a[i] != b[i])
+			return false;
+	return true;
 }
 
 /*
@@ -299,9 +355,13 @@ static __always_inline int check_proc(struct dentry *dentry, struct inode *inode
 
 	bpf_probe_read_kernel_str(key.name, PROC_NAME_LEN, BPF_CORE_READ(dentry, d_name.name));
 	v = bpf_map_lookup_elem(&proc, &key);
-	if (!v || v->deny || !live(v->allow, bpf_ktime_get_ns()))
+	if (v && v->deny)
 		return -EACCES;
-	return 0;
+	if (v && live(v->allow, bpf_ktime_get_ns()))
+		return 0;
+	if (proc_granted(current_grant(), &key))
+		return 0;
+	return -EACCES;
 }
 
 /*
@@ -364,6 +424,18 @@ int BPF_PROG(hp_task_alloc, struct task_struct *task, __u64 clone_flags, int ret
 	if (is_member() &&
 	    !bpf_task_storage_get(&members, task, 0, BPF_LOCAL_STORAGE_GET_F_CREATE))
 		return -EACCES; /* never let a member spawn an unmarked task */
+	return 0;
+}
+
+/*
+ * The end of every syscall, of every task: the grant of the syscall, if any,
+ * is used up. A restarted syscall goes through seccomp again, and gets a new
+ * one from the supervisor.
+ */
+SEC("tp_btf/sys_exit")
+int BPF_PROG(hp_sys_exit, struct pt_regs *regs, long ret)
+{
+	bpf_task_storage_delete(&grants, bpf_get_current_task_btf());
 	return 0;
 }
 

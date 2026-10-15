@@ -9,32 +9,13 @@ import (
 	"time"
 
 	"github.com/alban/hallpass/internal/lsm"
-	"github.com/alban/hallpass/internal/policy"
+	"github.com/alban/hallpass/internal/seccomp"
 )
 
-// syncKernel pushes the policy's current rules and the pending "allow once"
-// answers to the kernel.
+// syncKernel pushes the policy's current rules to the kernel.
 func (s *session) syncKernel() error {
-	now := time.Now()
-	s.onceMu.Lock()
-	once := s.once[:0]
-	for _, r := range s.once {
-		if r.Expires.After(now) {
-			once = append(once, r)
-		}
-	}
-	s.once = once
-	onceProc := s.onceProc[:0]
-	for _, r := range s.onceProc {
-		if r.Expires.After(now) {
-			onceProc = append(onceProc, r)
-		}
-	}
-	s.onceProc = onceProc
-	rules := append([]lsm.Rule(nil), once...)
-	procs := append([]lsm.ProcRule(nil), onceProc...)
-	s.onceMu.Unlock()
-
+	var rules []lsm.Rule
+	var procs []lsm.ProcRule
 	for _, r := range s.cfg.Policy.Rules() {
 		rules = append(rules, lsm.Rule{Path: r.Path, Tree: r.Tree, Deny: r.Deny, Expires: r.Expires})
 	}
@@ -75,16 +56,51 @@ func (s *session) kernelEvents() {
 	})
 }
 
-// allowOnce lets the kernel allow exactly path for a moment, for the
-// syscall about to be continued.
-func (s *session) allowOnce(path string) {
-	s.onceMu.Lock()
-	s.once = append(s.once, lsm.Rule{Path: path, Expires: time.Now().Add(onceTTL)})
-	s.onceMu.Unlock()
+// grantOnce lets the kernel allow the "allow once" answers in subs for
+// syscall n only, which is about to be continued.
+func (s *session) grantOnce(n seccomp.Notif, subs []subject) {
+	var paths []string
+	var proc lsm.ProcRule
+	for _, sub := range subs {
+		switch {
+		case sub.proc != nil:
+			proc = lsm.ProcRule{Name: sub.proc.Name, Comm: sub.proc.Comm}
+		case sub.path != "":
+			paths = append(paths, sub.path)
+		}
+	}
+	if err := s.cfg.LSM.GrantOnce(int(n.PID), paths, proc); err != nil {
+		fmt.Fprintf(os.Stderr, "hallpass: strict mode: allow once: %v\n", err)
+	}
 }
 
-func (s *session) allowProcOnce(k policy.ProcKey) {
-	s.onceMu.Lock()
-	s.onceProc = append(s.onceProc, lsm.ProcRule{Name: k.Name, Comm: k.Comm, Expires: time.Now().Add(onceTTL)})
-	s.onceMu.Unlock()
+// restartTTL is how long an "allow once" answer covers the same syscall of
+// the same thread again: a signal handler run during the syscall makes the
+// kernel restart it, and seccomp notifies it again.
+const restartTTL = 2 * time.Second
+
+// restartKey identifies a syscall of a thread, with what it would write.
+func restartKey(n seccomp.Notif, paths []string) string {
+	return fmt.Sprintf("%d %d %x %q", n.PID, n.Nr, n.Args, paths)
+}
+
+// restarted reports whether the user allowed this syscall once very
+// recently: it is the same one, restarted.
+func (s *session) restarted(key string) bool {
+	s.restartMu.Lock()
+	defer s.restartMu.Unlock()
+	now := time.Now()
+	for k, t := range s.restart {
+		if now.After(t) {
+			delete(s.restart, k)
+		}
+	}
+	_, ok := s.restart[key]
+	return ok
+}
+
+func (s *session) allowedOnce(key string) {
+	s.restartMu.Lock()
+	s.restart[key] = time.Now().Add(restartTTL)
+	s.restartMu.Unlock()
 }
