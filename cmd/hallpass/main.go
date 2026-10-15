@@ -16,11 +16,10 @@ import (
 	"time"
 
 	"github.com/alban/hallpass/internal/config"
+	"github.com/alban/hallpass/internal/defaults"
 	"github.com/alban/hallpass/internal/launch"
 	"github.com/alban/hallpass/internal/lsm"
-	"github.com/alban/hallpass/internal/policy"
 	"github.com/alban/hallpass/internal/privsep"
-	"github.com/alban/hallpass/internal/supervisor"
 	"github.com/alban/hallpass/internal/tty"
 	"github.com/alban/hallpass/internal/ui"
 	"golang.org/x/sys/unix"
@@ -185,10 +184,10 @@ func runMain(argv []string, printPolicy bool) int {
 	}
 	defer closeLog()
 
-	code, err = supervisor.Run(supervisor.Config{
+	code, err = runSession(sessionConfig{
 		Args:        o.args,
 		Dir:         o.workdir,
-		Policy:      engine,
+		Defaults:    engine,
 		Asker:       asker,
 		AllowUserns: o.allowUserns,
 		Log:         logw,
@@ -254,26 +253,26 @@ func (o *options) resolvePaths(home, cfgDir string) error {
 
 // buildPolicy returns the rules of o, before the session's own $TMPDIR and
 // terminal are known.
-func (o *options) buildPolicy(home string) *policy.Engine {
-	granted, defaults := o.workdir, policy.DefaultAllows()
+func (o *options) buildPolicy(home string) *defaults.Defaults {
+	granted, allows := o.workdir, defaults.DefaultAllows()
 	if o.noImplicit {
-		granted, defaults = "", nil
+		granted, allows = "", nil
 	}
-	return policy.New(home, granted, append(defaults, o.allow...), o.deny)
+	return defaults.New(home, granted, append(allows, o.allow...), o.deny)
 }
 
 // printRules prints engine's rules, with placeholders for the $TMPDIR and
 // terminal a run would get.
-func (o *options) printRules(engine *policy.Engine) {
+func (o *options) printRules(engine *defaults.Defaults) {
 	if !o.noImplicit {
 		engine.SetTmpdir(filepath.Join(os.TempDir(), "hallpass-*"))
 	}
 	if o.allowTTY {
-		for _, p := range policy.TTYAllows("/dev/pts/N") {
+		for _, p := range defaults.TTYAllows("/dev/pts/N") {
 			engine.AllowDevice(p)
 		}
 	}
-	for _, l := range engine.Describe() {
+	for _, l := range engine.Describe(engine.Rules()) {
 		fmt.Println(l)
 	}
 }
@@ -329,12 +328,12 @@ func (o *options) loadStrict(cfgDir string) (*lsm.LSM, error) {
 
 // allowOwnTTY makes the program's own terminal writable without asking;
 // other /dev/pts/N (another session) stay asked.
-func allowOwnTTY(engine *policy.Engine, pty *tty.Term) {
+func allowOwnTTY(engine *defaults.Defaults, pty *tty.Term) {
 	pts := ""
 	if pty != nil {
 		pts = pty.SlavePath()
 	}
-	for _, p := range policy.TTYAllows(pts) {
+	for _, p := range defaults.TTYAllows(pts) {
 		engine.AllowDevice(p)
 	}
 }
