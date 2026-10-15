@@ -1,0 +1,544 @@
+# Monitor
+
+Status: design, not implemented yet. Names are proposals.
+
+## Scope
+
+hallpass is split in two layers:
+
+- **Monitor** (`internal/monitor`): the mechanism, a reference monitor. It
+  mediates a workload's accesses with seccomp user notification (lite) and
+  BPF-LSM (strict), applies rules and verdicts, and reports what it cannot
+  decide. It has no built-in policy, no notion of agents, shells or LLMs,
+  and does not show prompts.
+- **hallpass** (`cmd/hallpass`, `internal/ui`, `internal/tty`, ...): one UX
+  on top. Defaults (workdir, `$TMPDIR`, devices, secret stores), prompts,
+  answer keys, "allow folder" heuristics, timeouts, desktop notifications,
+  the answer socket, `--log` formatting.
+
+The name is for the reference monitor, and for the hall monitor who checks
+hall passes. Rule files and profiles are hallpass UX and are not covered
+here. The monitor stays in `internal/` until a second consumer (e.g. a
+runc/NRI launcher) needs it: a public API is a compatibility promise.
+
+## Concepts
+
+- **Workload**: the policy domain. One hallpass session, or one container.
+  One monitor serves one workload; a process serving several containers
+  creates one monitor per container. There is no workload id in the API.
+- **Listener**: one seccomp notification fd and the root pid its filter
+  was installed on. hallpass has one; a container has one per process
+  runc starts (`docker run`, then each `docker exec`).
+- **Request**: an access no rule decides, reported to clients until a
+  verdict closes it.
+- **Verdict**: allow or deny one request, once. Lasting answers ("temp",
+  "always", "never") are rules sent with the verdict.
+- **Rule**: subject, ops, object, verdict; optionally an expiry and a set.
+- **Generation**: a counter, incremented each time the rule set changes.
+
+## Packages
+
+```
+cmd/hallpass  →  monitor, launch, ui, tty, config, defaults
+monitor       →  seccomp, lsm, rules, procfs
+launch        →  seccomp
+privsep       →  lsm
+seccomp, lsm, rules, procfs: no hallpass imports
+```
+
+- `rules`: rule types and `Eval`. Pure: no I/O, no clock (time is a
+  parameter).
+- `seccomp`: filter and listener (`Recv`, `IDValid`, `Continue`, `Deny`).
+- `lsm`: loads BPF, fills the maps, grants, events. Keeps its own `Rule`
+  and `ProcRule`: what BPF can express, nothing more.
+- `monitor`: one workload: requests, coalescing, restart cache, `Apply`,
+  events. Converts `rules.Rule` to `lsm.Rule`; the conversion rejects any
+  field it does not handle (`ErrUnsupported`), so nothing is dropped
+  silently.
+- `launch`: hallpass's local launcher (see [Launch](#launch)).
+- `defaults`: hallpass's default rules and the "allow folder" heuristic.
+
+`seccomp` and `lsm` never import each other, so lite mode does not depend
+on BPF. What couples them is ordering on one syscall: grant (or sync) in
+BPF, then `Continue` the notification, keyed by the tid from the
+notification. Only the monitor does that.
+
+The monitor uses both through interfaces, so unit tests can fake them;
+`Kernel` is nil in lite mode:
+
+```go
+type Kernel interface {
+	AddMember(pid int) error
+	Sync(rules []lsm.Rule, procs []lsm.ProcRule) error
+	GrantOnce(tid int, paths []string, proc lsm.ProcRule) error
+	Events(fn func(lsm.Event))
+}
+
+type Notifier interface {
+	Recv() (seccomp.Notif, error)
+	IDValid(id uint64) bool
+	Continue(id uint64) error
+	Deny(id uint64, errno int32) error
+}
+```
+
+BPF is loaded and attached once per process, whatever the number of
+monitors: N copies would run N programs on every LSM hook and on
+`sys_exit`, for every task on the host (one `sys_exit` attachment costs
+~200 ns per syscall even with an empty program). Each monitor gets a
+domain of the shared programs:
+
+```go
+l, _ := lsm.Load(...)                                    // once
+a, _ := monitor.New(monitor.Config{Kernel: l.Domain()}) // container A
+b, _ := monitor.New(monitor.Config{Kernel: l.Domain()}) // container B
+```
+
+`Domain` allocates a u32 id: `AddMember` tags tasks with it, rule maps are
+keyed by it, and the one ringbuf reader dispatches events by it. Grants are
+per thread and need no domain. Until domains are implemented, `lsm` allows
+one, which is all hallpass needs.
+
+## Rule model
+
+### Ops
+
+```go
+package rules
+
+type Op uint32 // a bit, so that rules can carry a set of ops
+
+const (
+	OpWrite  Op = 1 << iota // open for write (O_WRONLY, O_RDWR, O_CREAT, O_TRUNC)
+	OpCreate                // mknod, open O_CREAT of a new file
+	OpMkdir
+	OpSymlink
+	OpDelete // unlink, rmdir
+	OpLink   // both objects: source and new name
+	OpRename // both objects: old and new name
+	OpTruncate
+	// Later: OpConnect, OpSend.
+
+	OpAll = OpTruncate<<1 - 1
+)
+```
+
+Lite mode sees syscalls, strict mode sees LSM hooks:
+
+| Op | seccomp (`seccomp/rules.go`) | LSM hook |
+|---|---|---|
+| Write | `openat` (write flags), `open`, `creat` | `file_open` |
+| Create | `mknodat`, `openat` O_CREAT | `path_mknod`, `inode_create` |
+| Mkdir | `mkdirat` | `path_mkdir` |
+| Symlink | `symlinkat` | `path_symlink` |
+| Delete | `unlinkat` | `path_unlink`, `path_rmdir` |
+| Link | `linkat` | `path_link` |
+| Rename | `renameat`, `renameat2` | `path_rename` |
+| Truncate | `truncate` | `path_truncate` |
+
+Seccomp cannot tell create from write on `openat(O_CREAT)` for an existing
+file; it reports `OpWrite|OpCreate`, and a rule must allow both. Strict
+mode sees the exact op. Prompt text ("create directory", "delete") is
+rendered by the UX from `Op`. BPF has no ops yet, so rules must use
+`OpAll` for now.
+
+### Objects
+
+```go
+type Object struct { // exactly one field is set
+	Path    *PathObject
+	Proc    *ProcObject
+	Unknown error // lite mode only: the path could not be read
+	// Later: Addr *SockAddr
+}
+
+type PathObject struct {
+	Path string // absolute, symlink-resolved (lexical past the first missing component)
+	Dev  uint64 // of the existing part; 0 when unknown (lite)
+	Ino  uint64
+}
+
+// ProcObject is a write to another process's /proc/<pid>/<Name>, for a
+// target outside the workload.
+type ProcObject struct {
+	Name   string  // e.g. "oom_score_adj"
+	Target Subject // the target process, Comm used by rules
+}
+```
+
+Not objects, always allowed by the monitor (mechanism, not policy):
+pipes and sockets reached through `/proc/<pid>/fd/N`, and writes by the
+workload to its own processes' `/proc` files, for any of its listeners'
+roots.
+
+### Subjects
+
+```go
+type Subject struct {
+	Chain []Task // Chain[0] is the requesting thread, then its parents up to the workload root
+}
+
+type Task struct {
+	PID, TID       int
+	StartTime      uint64 // boot-relative, from /proc/<pid>/stat; with PID, a stable identity
+	Comm           string
+	Exe            string
+	ExeDev, ExeIno uint64
+	Cmdline        []string // written by the process itself
+	Cwd            string
+}
+```
+
+The monitor reports the full chain; the UX truncates it for display.
+
+### Rules
+
+```go
+type Rule struct {
+	ID      uint64 // set by the monitor on Apply
+	Subject SubjectMatch
+	Ops     Op
+	Object  ObjectMatch
+	Verdict Verdict
+	Label   string    // for Ask: shown in prompts, e.g. "SSH keys"
+	Expires time.Time // zero: until removed
+	Set     string    // opaque, chosen by the client
+}
+
+type Verdict int
+
+const (
+	Allow Verdict = iota
+	Deny
+	Ask // needs the BPF cut-off, see Strict mode
+)
+
+// SubjectMatch selects the processes a rule applies to. The zero value
+// matches every process, the only behaviour for now; fields such as Exe
+// or Under come later.
+type SubjectMatch struct{}
+
+type ObjectMatch struct { // exactly one field is set
+	Path    *PathMatch
+	Proc    *ProcMatch
+	Unknown bool // all unreadable paths (lite)
+	// Later: Addr *AddrMatch
+}
+
+type PathMatch struct {
+	Path string // absolute; the monitor resolves it
+	Tree bool   // the path and everything below it
+}
+
+type ProcMatch struct {
+	Name string // /proc/<pid>/<Name>
+	Comm string // of the target process
+}
+```
+
+The monitor has one rule set and no persistence. `Set` lets a client
+replace a group of rules atomically (remove the set and add its new rules
+in one `Apply`). Precedence ignores sets. hallpass uses `implicit`
+(defaults and `--allow`/`--deny`) and `session` (answers).
+
+### Evaluation
+
+For one object, from the rules whose subject, ops and object match and
+that have not expired:
+
+1. Any **Deny** wins, at any depth. A deny on a directory beats an allow
+   below it and an allow-once grant. Both layers already work this way:
+   the BPF walk ORs `deny_tree` along the path. A deny is a plain OR,
+   with no ordering between rules.
+2. Otherwise the **deepest** Allow or Ask decides. An Ask below an Allow
+   cuts the Allow off (`ask ~/.ssh` inside an allowed `~`); an Allow below
+   an Ask re-allows (`allow ~/.ssh/known_hosts`).
+3. No match: a `Request`.
+
+For two objects (rename, link), each is evaluated: any Deny denies, all
+Allow allows, otherwise a `Request`.
+
+### Strict mode
+
+In strict mode, every rule must be evaluable in BPF. Today BPF has path
+trie nodes with `allow_tree`, `allow_exact` (with expiry), `deny_tree` and
+`deny_exact`; proc keys {name, comm} with allow/deny and expiry; and
+per-thread one-shot grants. It has no ops, no subjects and no Ask (which
+needs a cut-off bit: "no allow inherited from above"). The monitor refuses
+rules it cannot enforce (`ErrUnsupported`), so the UX cannot think a rule
+holds when the kernel ignores it.
+
+Rules are host paths, but BPF keys them by superblock and path within it:
+each rule is compiled through `mountinfo` to every mount exposing it. A
+new mount (a tmpfs on `~/proj/build`, a USB drive, a bind mount of
+`~/.ssh`) needs the rules recompiled. The monitor polls
+`/proc/<rootPID>/mountinfo`, which reports `EPOLLPRI|EPOLLERR` when that
+mount namespace changes, so there is no wake-up without a change. No
+notification is continued while a mount event is unprocessed, so an allow
+is never continued into a BPF denial for a mount not yet compiled. Expired
+rules and stale grants are pruned at the next sync; BPF and `rules.Eval`
+enforce expiry themselves.
+
+The realistic sync failure is a full BPF map (`rules`: 65536 nodes, one
+per path component per mount exposing it; `proc`: 1024). `Apply` then
+rolls back (see API). A failed resync after a mount change goes to
+`Event.Warning`.
+
+## API
+
+```go
+package monitor
+
+type Config struct {
+	Kernel Kernel // nil: lite mode
+}
+
+// New returns a monitor for one workload.
+func New(cfg Config) (*Monitor, error)
+
+// Attach starts mediating the processes behind seccompFD. rootPID is
+// the process the filter was installed on, in the monitor's pid
+// namespace; in strict mode it becomes a BPF member. The launcher must
+// keep it from running untrusted code until Attach returns. Called once
+// per listener.
+func (m *Monitor) Attach(seccompFD, rootPID int) error
+
+// Events subscribes a client; each call returns a new channel. Batches:
+// the first event after a quiet period is sent at once; later ones are
+// held until 500 ms without new events, at most 2 s, so a steady stream
+// cannot starve the client. All events are flushed before the channel
+// is closed, when the workload is gone (all listeners hung up and,
+// strict, no member left): a log is complete when the workload ends.
+func (m *Monitor) Events(opts EventOptions) <-chan []Event
+
+type EventOptions struct {
+	// Decided also delivers accesses decided without asking (for logs,
+	// tracers). Off by default: they can be many, and building their
+	// subject costs /proc reads.
+	Decided bool
+}
+
+// Apply is the only write entry point, and atomic: it computes the new
+// rule set, syncs the kernel (strict), gives the verdicts (strict: the
+// grants first), then closes the pending requests that the new rules
+// decide. It returns the new generation. With IfGeneration != 0, it
+// fails with ErrStale if the rules changed since that generation. If
+// the kernel sync or a grant fails, Apply restores the previous rule set
+// (userspace and kernel), gives no verdict and returns the error: the
+// requests stay pending, so a client can remove rules and retry, or send
+// the verdict alone.
+func (m *Monitor) Apply(d Decision) (gen uint64, err error)
+
+// Snapshot lets a client join: pending requests and the rules, at
+// generation gen; then follow Events.
+func (m *Monitor) Snapshot() (pending []*Request, rules []rules.Rule, gen uint64)
+
+func (m *Monitor) Close() error
+
+var (
+	ErrStale       = errors.New("monitor: rules changed since IfGeneration")
+	ErrClosed      = errors.New("monitor: request already closed")
+	ErrUnsupported = errors.New("monitor: rule not enforceable in strict mode")
+)
+
+type Event struct { // exactly one field is set
+	Opened  *Request
+	Closed  *Closed
+	Rules   uint64   // the rule set changed: its new generation
+	Decided *Decided // an access decided without asking (EventOptions.Decided)
+	// Warning reports a failure no caller can receive, e.g. the resync
+	// after a mount change.
+	Warning string
+	// Dropped counts Decided events lost because this client was too
+	// slow. Opened, Closed and Rules are never dropped.
+	Dropped uint64
+}
+
+type Request struct {
+	ID      uint64
+	Syscall string // e.g. "renameat2"
+	Op      rules.Op
+	Objects []Object // 1, or 2 for rename and link
+	Subject Subject
+	Facts   []Fact
+}
+
+type Closed struct {
+	ID  uint64 // Request.ID
+	Why Reason
+}
+
+type Decided struct {
+	Syscall string // "" when BPF decided (LSM hook, not a syscall)
+	Op      rules.Op
+	Objects []Object
+	Subject Subject // the requesting task only, no ancestry walk
+	Allowed bool
+	Why     []Reason // one per object
+	Source  Source
+}
+
+// Reason says why a request was closed or an access decided. Exactly
+// one field is set.
+type Reason struct {
+	Client  string // a verdict from this client (Decision.Client)
+	Rule    uint64 // this rule; 0 when BPF decided (it does not know rule ids)
+	Builtin string // mechanism, not a rule: "special-file" (pipe, socket),
+	// "own-proc" (the workload writes its own /proc files), "restarted"
+	// (restart cache), "bpf" (strict: other mount namespace or
+	// unreadable path, left to BPF), "execve" (always continued)
+	Died bool // the requesting task died
+}
+
+type Source int
+
+const (
+	SourceSeccomp Source = iota
+	SourceLSM
+)
+
+type Decision struct {
+	Verdicts     []Verdict
+	AddRules     []rules.Rule
+	RemoveRules  []uint64 // rules.Rule.ID
+	RemoveSets   []string
+	IfGeneration uint64
+	Client       string // reported in Reason.Client
+}
+
+// Verdict allows or denies one request, once. In strict mode, an allow
+// is a per-thread, per-syscall grant in the kernel (task storage,
+// cleared at sys_exit).
+type Verdict struct {
+	Request uint64 // Request.ID
+	Allow   bool
+}
+
+type Fact struct {
+	Kind  string // "listener-in-sandbox", "dns-name", "secret-store"...
+	Value string
+	Trust Trust
+}
+
+type Trust int
+
+const (
+	TrustKernel  Trust = iota // from the kernel (notification, BPF)
+	TrustRacy                 // read from process memory; may change after the read
+	TrustClaimed              // written by the process itself (cmdline, comm)
+)
+```
+
+### Behaviour
+
+- **Several clients** (TUI, answer socket, phone, web): the first verdict
+  wins; the others get `Closed` and drop the prompt. A verdict on a closed
+  request returns `ErrClosed`. A gRPC/HTTP adapter maps batches and
+  `Apply` one-to-one to messages.
+- **Coalescing**: concurrent requests with the same op and objects are one
+  `Request`, whatever the subject: two processes writing the same file
+  share a prompt. A syscall restarted after a signal is answered from a
+  restart cache without a new `Request`.
+- **Serialization** is the UX's: the monitor does not hold requests back
+  while one is being answered. After each `Apply` it closes the pending
+  requests the new rules decide, so an "allow folder" answer settles the
+  queued prompts.
+- **Timeouts** are the UX's: it sends a deny verdict. The monitor only
+  closes requests whose task died. The kernel does not signal a withdrawn
+  notification, so the monitor polls `IDValid` every second, only while
+  requests are pending.
+- **Rename and link** are reported as one `Request` per object, in order,
+  for now (one prompt per path, as today).
+- **Unreadable path** (lite): `Object{Unknown: err}`, matched only by
+  `ObjectMatch{Unknown}` rules; a verdict allows that one syscall.
+- **Other mount namespace or unreadable path** (strict): the monitor
+  continues the syscall and lets BPF decide; it reports a `Decided` event
+  only if BPF denies.
+- **Kernel sync failure** in `Apply`: hallpass warns and sends the verdict
+  alone, and shows nothing on success. A smarter UI may offer to remove
+  rules and retry, since the request stays pending.
+- **No `os.Process`**: the monitor does not wait for or signal processes.
+  Liveness comes from the listener fd (POLLHUP when no task uses the
+  filter); the root pid is only used for `/proc` and `AddMember`.
+
+## Launch
+
+```go
+package launch
+
+type ProcSpec struct {
+	Args []string // argv[0] is looked up in PATH
+	Dir  string
+	Env  []string
+	// Files are the child's fds 0, 1, 2, ...; Setsid/Setctty as in
+	// syscall.SysProcAttr (the TTY case).
+	Files   []*os.File
+	Setsid  bool
+	Setctty bool
+	// Whether new user and mount namespaces are refused (lite mode needs
+	// it, see seccomp.Rules).
+	AllowUserns bool
+}
+
+// Start starts spec paused before its first exec, with the seccomp
+// filter installed. The caller attaches seccompFD and proc.Pid to a
+// monitor, then calls release to let the child exec.
+func Start(spec ProcSpec) (proc *os.Process, seccompFD int, release func() error, err error)
+```
+
+`launch` hands two ints to the monitor and does not import it. The
+workload is a real child here: `Wait`, signal forwarding, subreaper and
+`--wait=all` stay in hallpass, next to `launch`. runc/NRI are other
+launchers.
+
+**execve.** runc does not wait for the seccomp agent: it lets the child
+continue as soon as it has a copy of the fd, then sends it to the agent
+(`libcontainer/process_linux.go`), relying on notify actions to make the
+child wait. The filter is installed just before the container's `execve`.
+So the profile a runc/NRI integration injects must notify on `execve` and
+`execveat`, and the monitor continues them only once `Attach` has
+returned: no untrusted code runs before the process is a BPF member.
+`ContainerProcessState.Pid` is the host pid, as `Attach` needs.
+
+hallpass's own filter notifies on `execve` and `execveat` too, and the
+monitor always continues them (`Reason.Builtin` "execve"): what to check
+on exec is not designed yet. This exercises the path runc needs, costs
+one notification round trip per exec, and could later replace the
+launcher's pause before exec. Continuing is safe since the monitor does
+not decide on the arguments. Go programs are multithreaded and get SIGURG
+for preemption: `WAIT_KILLABLE_RECV` should make a received notification
+immune to it; before it is received, the signal restarts the syscall with
+a new notification, harmless since execve is always continued. Tests
+cover hallpass running a Go program, a Go program exec'ing others from
+many goroutines, and `syscall.Exec` from a multithreaded Go program.
+
+## Deployment
+
+The monitor must run in the host pid namespace (or an ancestor of the
+workloads'): `SECCOMP_IOCTL_NOTIF_RECV` reports the task's pid in the
+caller's pid namespace, and 0 when it is not visible there. `setns` cannot
+move to a parent pid namespace. In Kubernetes: `hostPID: true`. A
+`/host/proc` mount is enough for `/proc` reads, but not for this.
+
+## Tracing
+
+The API is enough for an strace-like client: subscribe with
+`EventOptions{Decided: true}`, keep the rules from `Snapshot` and the
+`Rules` events (to print a rule from its id), and print one line per
+`Decided`, and per `Opened` and its `Closed`:
+
+```
+1234 openat   write   /home/u/proj/a.go           allow  rule 7 (allow tree /home/u/proj, implicit)
+1234 openat   write   /home/u/.bashrc             ask -> deny (client tui)
+1240 renameat rename  /tmp/x -> /home/u/proj/y    allow  rule 3, rule 7
+1240 execve   -       /usr/bin/git                allow  builtin execve
+```
+
+Limits:
+
+- Only syscalls the seccomp filter notifies: read-only opens and most
+  syscalls never reach userspace. strace sees all of them.
+- No return value: after Continue the monitor does not see the result.
+- In strict mode, BPF decisions are reported for denies only, unless
+  `lsm` logs allowed accesses too (`--log`), and without a rule id.
+- `Decided` events can be dropped for a slow client (`Event.Dropped`).

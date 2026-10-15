@@ -32,6 +32,9 @@ theme:
     - content.code.copy
     - toc.integrate
 
+exclude_docs: |
+  devel/
+
 nav:
   - Home: index.md
   - How it works: design.md
