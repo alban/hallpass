@@ -2,8 +2,7 @@
 
 Status: implemented in lite and strict mode (`internal/rules`,
 `internal/launch`, `internal/monitor`, `internal/defaults`; hallpass is a
-client). Not yet: the execve notification (see Launch), and the BPF
-extensions for ops, subjects and Ask.
+client). Not yet: the BPF extensions for ops, subjects and Ask.
 
 ## Scope
 
@@ -404,8 +403,7 @@ type Reason struct {
 	// "own-proc" (the workload writes its own /proc files), "restarted"
 	// (restart cache), "bpf" (strict: other mount namespace or
 	// unreadable path, continued for BPF to decide), "unresolvable" (the
-	// path could not be resolved: denied), "execve" (planned: always
-	// continued)
+	// path could not be resolved: denied), "execve" (always continued)
 	Died bool // the requesting task died
 }
 
@@ -524,17 +522,20 @@ So the profile a runc/NRI integration injects must notify on `execve` and
 returned: no untrusted code runs before the process is a BPF member.
 `ContainerProcessState.Pid` is the host pid, as `Attach` needs.
 
-Planned: hallpass's own filter notifies on `execve` and `execveat` too,
-and the monitor always continues them (`Reason.Builtin` "execve"): what to check
-on exec is not designed yet. This exercises the path runc needs, costs
-one notification round trip per exec, and could later replace the
-launcher's pause before exec. Continuing is safe since the monitor does
-not decide on the arguments. Go programs are multithreaded and get SIGURG
-for preemption: `WAIT_KILLABLE_RECV` should make a received notification
-immune to it; before it is received, the signal restarts the syscall with
-a new notification, harmless since execve is always continued. Tests
-cover hallpass running a Go program, a Go program exec'ing others from
-many goroutines, and `syscall.Exec` from a multithreaded Go program.
+hallpass's own filter notifies on `execve` and `execveat` too, and the
+monitor always continues them (`Reason.Builtin` "execve"): what to check
+on exec is not designed yet. This exercises the path runc needs, and
+could later replace the launcher's pause before exec. It costs one
+notification round trip per exec: about 0.2 ms on the arm64 test VM,
+where a fork and exec of `/bin/true` takes 1.1 ms. Continuing is safe
+since the monitor does not decide on the arguments. hallpass's `--log`
+leaves execs out until they are mediated. Go programs are multithreaded
+and get SIGURG for preemption: `WAIT_KILLABLE_RECV` makes a received
+notification immune to it; before it is received, the signal restarts
+the syscall with a new notification (`-ERESTARTSYS`), harmless since
+execve is always continued. `TestGoExec` covers a Go program exec'ing
+others from many goroutines while others spin, and `syscall.Exec` from a
+multithreaded Go program; mediation must still hold after both.
 
 ## Deployment
 

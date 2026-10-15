@@ -21,6 +21,9 @@ import (
 var hallpassBin string
 
 func TestMain(m *testing.M) {
+	if mode := os.Getenv("HALLPASS_E2E_HELPER"); mode != "" {
+		os.Exit(goHelper(mode))
+	}
 	// HALLPASS_BIN is a binary built beforehand, e.g. on the host by
 	// `make test-vm`, so that the VM does not have to run the linker.
 	if bin := os.Getenv("HALLPASS_BIN"); bin != "" {

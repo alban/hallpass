@@ -29,11 +29,17 @@ func logEvents(evs <-chan []monitor.Event, w io.Writer, audit bool, done chan<- 
 	enc := json.NewEncoder(w)
 	for batch := range evs {
 		for _, ev := range batch {
-			if ev.Decided != nil {
+			if ev.Decided != nil && !isExec(ev.Decided) {
 				_ = enc.Encode(decidedEntry(ev.Decided, audit))
 			}
 		}
 	}
+}
+
+// isExec reports an exec, always continued: not logged until exec is
+// mediated.
+func isExec(d *monitor.Decided) bool {
+	return len(d.Why) == 1 && d.Why[0].Builtin == "execve"
 }
 
 func decidedEntry(d *monitor.Decided, audit bool) logEntry {

@@ -60,6 +60,11 @@ func commonRules(allowUserns bool) []Rule {
 		{Nr: unix.SYS_RENAMEAT, Name: "renameat", Kind: Notify, Op: "rename", Paths: []PathArg{{0, 1}, {2, 3}}},
 		{Nr: unix.SYS_RENAMEAT2, Name: "renameat2", Kind: Notify, Op: "rename", Paths: []PathArg{{0, 1}, {2, 3}}},
 		{Nr: unix.SYS_TRUNCATE, Name: "truncate", Kind: Notify, Op: "truncate", Paths: []PathArg{{-1, 0}}},
+		// Always continued for now: notifying them lets a launcher that
+		// does not wait for the monitor (runc) hold the first exec until
+		// the monitor is attached.
+		{Nr: unix.SYS_EXECVE, Name: "execve", Kind: Notify, Op: "exec", Paths: []PathArg{{-1, 0}}},
+		{Nr: unix.SYS_EXECVEAT, Name: "execveat", Kind: Notify, Op: "exec", Paths: []PathArg{{0, 1}}},
 
 		// openat2 hides its flags behind a struct pointer that cBPF cannot
 		// read; ENOSYS makes libc fall back to openat.

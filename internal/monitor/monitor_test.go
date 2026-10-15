@@ -399,6 +399,20 @@ func TestUnresolvable(t *testing.T) {
 	}
 }
 
+func TestExecContinued(t *testing.T) {
+	// No rule at all: an exec is continued anyway, even in strict mode.
+	fx := setup(t, &fakeKernel{}, true)
+	id := fx.f.send(unix.SYS_EXECVE, map[int]string{0: "/usr/bin/true"}, nil)
+	fx.f.expect(t, id, 0)
+	d := fx.next(t, func(ev Event) bool { return ev.Decided != nil }).Decided
+	if !d.Allowed || d.Syscall != "execve" || d.Why[0].Builtin != "execve" ||
+		len(d.Objects) != 1 || d.Objects[0].Path.Path != "/usr/bin/true" {
+		t.Fatalf("decided %+v", d)
+	}
+	id = fx.f.send(unix.SYS_EXECVEAT, map[int]string{1: "x"}, map[int]uint64{0: 99999})
+	fx.f.expect(t, id, 0)
+}
+
 func TestStrict(t *testing.T) {
 	k := &fakeKernel{}
 	fx := setup(t, k, false)

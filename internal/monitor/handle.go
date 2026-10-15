@@ -92,6 +92,10 @@ func (m *Monitor) handle(l *listener, n seccomp.Notif) {
 		return
 	}
 	op := opOf(sc, n)
+	if sc.Op == "exec" {
+		m.exec(l, n, sc)
+		return
+	}
 	if m.kernel != nil {
 		// Paths of a process in another mount namespace or chroot cannot
 		// be resolved here: let the kernel's rules decide.
@@ -358,6 +362,27 @@ func (m *Monitor) toBPF(l *listener, n seccomp.Notif, sc seccomp.Rule, op rules.
 }
 
 // report emits a Decided event, if a subscriber wants them.
+// exec continues an execve or execveat: what to check on exec is not
+// designed yet. Its path is read for Decided events only, best effort.
+func (m *Monitor) exec(l *listener, n seccomp.Notif, sc seccomp.Rule) {
+	m.mu.Lock()
+	want := m.decided > 0
+	m.mu.Unlock()
+	var objs []rules.Object
+	if want {
+		pa := sc.Paths[0]
+		if raw, err := procfs.ReadCString(n.PID, n.Args[pa.Path]); err == nil {
+			objs = []rules.Object{{Path: &rules.PathObject{Path: raw}}}
+		}
+	}
+	if err := l.n.Continue(n.ID); err != nil && !errors.Is(err, unix.ENOENT) {
+		m.warn(fmt.Sprintf("continue %s: %v", sc.Name, err))
+	}
+	if want {
+		m.report(n, sc.Name, 0, objs, true, []Reason{{Builtin: "execve"}})
+	}
+}
+
 func (m *Monitor) report(n seccomp.Notif, syscall string, op rules.Op, objs []rules.Object, allowed bool, why []Reason) {
 	m.mu.Lock()
 	want := m.decided > 0
