@@ -1,6 +1,9 @@
 # Monitor
 
-Status: design, not implemented yet. Names are proposals.
+Status: implemented in lite and strict mode (`internal/rules`,
+`internal/launch`, `internal/monitor`, `internal/defaults`; hallpass is a
+client). Not yet: the execve notification (see Launch), and the BPF
+extensions for ops, subjects and Ask.
 
 ## Scope
 
@@ -303,12 +306,14 @@ func New(cfg Config) (*Monitor, error)
 // per listener.
 func (m *Monitor) Attach(seccompFD, rootPID int) error
 
-// Events subscribes a client; each call returns a new channel. Batches:
-// the first event after a quiet period is sent at once; later ones are
-// held until 500 ms without new events, at most 2 s, so a steady stream
-// cannot starve the client. All events are flushed before the channel
-// is closed, when the workload is gone (all listeners hung up and,
-// strict, no member left): a log is complete when the workload ends.
+// Events subscribes a client; each call returns a new channel. Opened,
+// Closed, Rules and Warning events are sent at once: a prompt must not
+// wait. Decided events are batched: the first after a quiet period is
+// sent at once; later ones are held until 500 ms without new events, at
+// most 2 s, so a steady stream cannot starve the client. All events are
+// flushed before the channel is closed, when the workload is gone (all
+// listeners hung up) or the monitor closed: a log is complete when the
+// workload ends.
 func (m *Monitor) Events(opts EventOptions) <-chan []Event
 
 type EventOptions struct {
@@ -319,20 +324,29 @@ type EventOptions struct {
 }
 
 // Apply is the only write entry point, and atomic: it computes the new
-// rule set, syncs the kernel (strict), gives the verdicts (strict: the
-// grants first), then closes the pending requests that the new rules
-// decide. It returns the new generation. With IfGeneration != 0, it
-// fails with ErrStale if the rules changed since that generation. If
-// the kernel sync or a grant fails, Apply restores the previous rule set
-// (userspace and kernel), gives no verdict and returns the error: the
-// requests stay pending, so a client can remove rules and retry, or send
-// the verdict alone.
+// rule set, syncs the kernel (strict), gives the verdicts, then closes
+// the pending requests that the new rules decide. It returns the new
+// generation. With IfGeneration != 0, it fails with ErrStale if the
+// rules changed since that generation. If the kernel sync fails, Apply
+// restores the previous rule set (userspace and kernel), gives no
+// verdict and returns the error: the requests stay pending, so a client
+// can remove rules and retry, or send the verdict alone.
+//
+// In strict mode, the grant of an allow verdict is made by the thread
+// handling the syscall, just before it continues it (the grant needs the
+// requesting thread and the resolved paths, which the worker holds); a
+// failed grant is a Warning, and BPF then denies the syscall.
 func (m *Monitor) Apply(d Decision) (gen uint64, err error)
 
 // Snapshot lets a client join: pending requests and the rules, at
 // generation gen; then follow Events.
 func (m *Monitor) Snapshot() (pending []*Request, rules []rules.Rule, gen uint64)
 
+// Close stops mediating: pending requests are closed as if their tasks
+// died, and subscriptions are flushed and closed. The seccomp fds stay
+// open until the process exits, so no task is left waiting on a closed
+// fd (and the fd numbers are not reused under the workers): mediated
+// syscalls fail with ENOSYS meanwhile, as after an exit.
 func (m *Monitor) Close() error
 
 var (
@@ -369,24 +383,29 @@ type Closed struct {
 }
 
 type Decided struct {
-	Syscall string // "" when BPF decided (LSM hook, not a syscall)
+	Time    time.Time // of the decision: delivery may be batched
+	Syscall string    // the LSM operation when BPF decided
 	Op      rules.Op
 	Objects []Object
 	Subject Subject // the requesting task only, no ancestry walk
 	Allowed bool
-	Why     []Reason // one per object
-	Source  Source
+	// Why has one entry per object; on a deny, only the denied object's
+	// is set.
+	Why    []Reason
+	Source Source
 }
 
-// Reason says why a request was closed or an access decided. Exactly
-// one field is set.
+// Reason says why a request was closed or an access decided. At most
+// one field is set; none when BPF decided (it does not know rule ids).
 type Reason struct {
 	Client  string // a verdict from this client (Decision.Client)
-	Rule    uint64 // this rule; 0 when BPF decided (it does not know rule ids)
+	Rule    uint64 // this rule
 	Builtin string // mechanism, not a rule: "special-file" (pipe, socket),
 	// "own-proc" (the workload writes its own /proc files), "restarted"
 	// (restart cache), "bpf" (strict: other mount namespace or
-	// unreadable path, left to BPF), "execve" (always continued)
+	// unreadable path, continued for BPF to decide), "unresolvable" (the
+	// path could not be resolved: denied), "execve" (planned: always
+	// continued)
 	Died bool // the requesting task died
 }
 
@@ -452,14 +471,19 @@ const (
 - **Unreadable path** (lite): `Object{Unknown: err}`, matched only by
   `ObjectMatch{Unknown}` rules; a verdict allows that one syscall.
 - **Other mount namespace or unreadable path** (strict): the monitor
-  continues the syscall and lets BPF decide; it reports a `Decided` event
-  only if BPF denies.
+  continues the syscall and lets BPF decide. It reports a `Decided` event
+  with `Builtin` "bpf" for the continue, and BPF reports its own
+  `Decided` (`SourceLSM`) if it denies.
 - **Kernel sync failure** in `Apply`: hallpass warns and sends the verdict
   alone, and shows nothing on success. A smarter UI may offer to remove
   rules and retry, since the request stays pending.
 - **No `os.Process`**: the monitor does not wait for or signal processes.
   Liveness comes from the listener fd (POLLHUP when no task uses the
-  filter); the root pid is only used for `/proc` and `AddMember`.
+  filter); the root pid is only used for `/proc` and `AddMember`. Since
+  Linux 6.11 (95036a79e7b5), `SECCOMP_IOCTL_NOTIF_RECV` on a filter with
+  no task left returns `ENOENT` at once instead of blocking, which is
+  also its error for a task killed before its notification was received:
+  a worker stops on `ENOENT` only after POLLHUP, else it would spin.
 
 ## Launch
 
@@ -500,8 +524,8 @@ So the profile a runc/NRI integration injects must notify on `execve` and
 returned: no untrusted code runs before the process is a BPF member.
 `ContainerProcessState.Pid` is the host pid, as `Attach` needs.
 
-hallpass's own filter notifies on `execve` and `execveat` too, and the
-monitor always continues them (`Reason.Builtin` "execve"): what to check
+Planned: hallpass's own filter notifies on `execve` and `execveat` too,
+and the monitor always continues them (`Reason.Builtin` "execve"): what to check
 on exec is not designed yet. This exercises the path runc needs, costs
 one notification round trip per exec, and could later replace the
 launcher's pause before exec. Continuing is safe since the monitor does
