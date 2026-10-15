@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/alban/hallpass/internal/config"
+	"github.com/alban/hallpass/internal/launch"
 	"github.com/alban/hallpass/internal/lsm"
 	"github.com/alban/hallpass/internal/policy"
 	"github.com/alban/hallpass/internal/privsep"
@@ -42,8 +43,8 @@ func (l *listFlag) String() string     { return strings.Join(*l, ",") }
 func (l *listFlag) Set(v string) error { *l = append(*l, v); return nil }
 
 func main() {
-	if supervisor.IsChild() {
-		supervisor.ChildMain()
+	if launch.IsChild() {
+		launch.ChildMain()
 		return
 	}
 	if len(os.Args) > 1 && os.Args[1] == privsep.HelperArg {

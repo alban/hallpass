@@ -1,20 +1,24 @@
 // Copyright The hallpass Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package supervisor runs the sandboxed child and mediates its intercepted
-// syscalls. In lite mode hallpass re-executes itself as a small child stub
-// (ChildMain) that installs the seccomp filter, hands the resulting listener fd
-// back to the parent over a socketpair, and execs the real target. The parent
-// then runs the notification loop.
-package supervisor
+// Package launch is hallpass's local launcher: it starts a command with the
+// seccomp filter installed, paused before its exec until the caller has
+// attached the filter's listener to a monitor.
+//
+// hallpass re-executes itself as a small child stub (ChildMain) that
+// installs the filter, hands the listener fd back over a socketpair, waits
+// for the go byte, and execs the real command.
+package launch
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/alban/hallpass/internal/seccomp"
 	"golang.org/x/sys/unix"
@@ -25,8 +29,76 @@ const (
 	childEnvSentinel = "_HALLPASS_CHILD"
 	childEnvFD       = "_HALLPASS_SOCK_FD"
 	childEnvUserns   = "_HALLPASS_ALLOW_USERNS"
-	childEnvWait     = "_HALLPASS_WAIT"
 )
+
+// ProcSpec describes the command to start.
+type ProcSpec struct {
+	Args []string // argv[0] is looked up in PATH
+	Dir  string
+	Env  []string
+	// Files are the child's fds 0, 1, 2, ...; Setsid/Setctty as in
+	// syscall.SysProcAttr (the TTY case, with fd 0 as the terminal).
+	Files   []*os.File
+	Setsid  bool
+	Setctty bool
+	// Whether new user and mount namespaces are allowed (lite mode
+	// refuses them, see seccomp.Rules).
+	AllowUserns bool
+}
+
+// Start starts spec paused before its first exec, with the seccomp filter
+// installed. The caller attaches seccompFD and proc.Pid to a monitor, then
+// calls release to let the child exec. The caller owns waiting for proc.
+// When the child fails to set up the filter, Start returns an error with
+// proc still set, to be waited for: the child printed why.
+func Start(spec ProcSpec) (proc *os.Process, seccompFD int, release func() error, err error) {
+	if len(spec.Files) < 3 {
+		return nil, -1, nil, errors.New("launch: Files must have at least stdin, stdout and stderr")
+	}
+	pair, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_SEQPACKET|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		return nil, -1, nil, fmt.Errorf("socketpair: %w", err)
+	}
+	parentSock := pair[0]
+	childSock := os.NewFile(uintptr(pair[1]), "hallpass-child-sock")
+	defer childSock.Close()
+
+	cmd := exec.Command("/proc/self/exe", append([]string{"--"}, spec.Args...)...)
+	cmd.Args[0] = "hallpass-child"
+	cmd.Dir = spec.Dir
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = spec.Files[0], spec.Files[1], spec.Files[2]
+	cmd.ExtraFiles = append(append([]*os.File{}, spec.Files[3:]...), childSock)
+	if spec.Setsid || spec.Setctty {
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: spec.Setsid, Setctty: spec.Setctty, Ctty: 0}
+	}
+	cmd.Env = append(append([]string{}, spec.Env...),
+		childEnvSentinel+"=1",
+		childEnvFD+"="+strconv.Itoa(len(spec.Files)),
+	)
+	if spec.AllowUserns {
+		cmd.Env = append(cmd.Env, childEnvUserns+"=1")
+	}
+	if err := cmd.Start(); err != nil {
+		unix.Close(parentSock)
+		return nil, -1, nil, err
+	}
+	childSock.Close()
+
+	fd, err := recvFD(parentSock)
+	if err != nil {
+		unix.Close(parentSock)
+		return cmd.Process, -1, nil, errors.New("sandbox setup failed")
+	}
+	unix.SetNonblock(fd, false)
+	release = func() error {
+		defer unix.Close(parentSock)
+		if _, err := unix.Write(parentSock, []byte{1}); err != nil {
+			return fmt.Errorf("release the sandbox: %w", err)
+		}
+		return nil
+	}
+	return cmd.Process, fd, release, nil
+}
 
 // IsChild reports whether this process is the re-executed child stub.
 func IsChild() bool { return os.Getenv(childEnvSentinel) != "" }
@@ -75,12 +147,11 @@ func ChildMain() {
 		fatal("child: send listener fd: %v", err)
 	}
 	_ = unix.Close(listenerFD)
-	if os.Getenv(childEnvWait) == "1" {
-		// Strict mode: exec only once the supervisor has made us a member.
-		var b [1]byte
-		if n, err := unix.Read(fd, b[:]); n != 1 || err != nil {
-			fatal("child: the supervisor did not start the sandbox")
-		}
+	// Exec only once the parent has attached the listener (and, in strict
+	// mode, made us a member).
+	var b [1]byte
+	if n, err := unix.Read(fd, b[:]); n != 1 || err != nil {
+		fatal("child: the supervisor did not start the sandbox")
 	}
 	_ = unix.Close(fd)
 

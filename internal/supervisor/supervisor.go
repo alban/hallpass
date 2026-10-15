@@ -1,6 +1,8 @@
 // Copyright The hallpass Authors
 // SPDX-License-Identifier: Apache-2.0
 
+// Package supervisor runs the sandboxed command (see package launch) and
+// mediates its intercepted syscalls.
 package supervisor
 
 import (
@@ -9,7 +11,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
@@ -18,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/alban/hallpass/internal/launch"
 	"github.com/alban/hallpass/internal/lsm"
 	"github.com/alban/hallpass/internal/policy"
 	"github.com/alban/hallpass/internal/procfs"
@@ -59,39 +61,22 @@ const maxParents = 4
 // Run starts the command under the seccomp filter, mediates its syscalls until
 // it exits, and returns its exit status (128+signal when killed).
 func Run(cfg Config) (int, error) {
-	pair, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_SEQPACKET|unix.SOCK_CLOEXEC, 0)
-	if err != nil {
-		return 0, fmt.Errorf("socketpair: %w", err)
+	spec := launch.ProcSpec{
+		Args:        cfg.Args,
+		Dir:         cfg.Dir,
+		Env:         append(append(os.Environ(), "HALLPASS=1"), cfg.Env...),
+		Files:       []*os.File{os.Stdin, os.Stdout, os.Stderr},
+		AllowUserns: cfg.AllowUserns,
 	}
-	parentSock := pair[0]
-	childSock := os.NewFile(uintptr(pair[1]), "hallpass-child-sock")
-
-	cmd := exec.Command("/proc/self/exe", append([]string{"--"}, cfg.Args...)...)
-	cmd.Args[0] = "hallpass-child"
-	cmd.Dir = cfg.Dir
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if cfg.TTY != nil {
 		s := cfg.TTY.Slave()
-		cmd.Stdin, cmd.Stdout, cmd.Stderr = s, s, s
+		spec.Files = []*os.File{s, s, s}
 		// New session with the pty as controlling terminal, so Ctrl-C,
 		// Ctrl-Z and job control work inside.
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
-	}
-	cmd.ExtraFiles = []*os.File{childSock} // fd 3 in the child
-	cmd.Env = append(os.Environ(),
-		childEnvSentinel+"=1",
-		childEnvFD+"=3",
-		"HALLPASS=1",
-	)
-	cmd.Env = append(cmd.Env, cfg.Env...)
-	if cfg.AllowUserns {
-		cmd.Env = append(cmd.Env, childEnvUserns+"=1")
+		spec.Setsid, spec.Setctty = true, true
 	}
 	if cfg.LSM != nil {
-		cmd.Env = append(cmd.Env, childEnvWait+"=1")
 		if err := cfg.LSM.Protect(os.Getpid()); err != nil {
-			childSock.Close()
-			unix.Close(parentSock)
 			return 0, fmt.Errorf("protect the supervisor: %w", err)
 		}
 	}
@@ -119,8 +104,6 @@ func Run(cfg Config) (int, error) {
 
 	if cfg.TTY != nil {
 		if err := cfg.TTY.Start(filepath.Base(cfg.Args[0])); err != nil {
-			childSock.Close()
-			unix.Close(parentSock)
 			return 0, fmt.Errorf("terminal: %w", err)
 		}
 	}
@@ -130,33 +113,24 @@ func Run(cfg Config) (int, error) {
 	// /proc/<pid>/mem. Without it, every write of a daemonized process was
 	// denied as unreadable. We reap them, and the command, in reap.
 	if err := unix.Prctl(unix.PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0); err != nil {
-		childSock.Close()
-		unix.Close(parentSock)
 		return 0, fmt.Errorf("prctl(PR_SET_CHILD_SUBREAPER): %w", err)
 	}
 	sigchld := make(chan os.Signal, 1)
 	signal.Notify(sigchld, syscall.SIGCHLD)
 	defer signal.Stop(sigchld)
-	if err := cmd.Start(); err != nil {
-		childSock.Close()
-		unix.Close(parentSock)
+	proc, listenerFD, release, err := launch.Start(spec)
+	if proc == nil {
 		return 0, err
 	}
 	mainDone := make(chan unix.WaitStatus, 1)
-	go reap(cmd.Process.Pid, sigchld, mainDone)
+	go reap(proc.Pid, sigchld, mainDone)
 	waitMain := func() int { return exitStatus(<-mainDone) }
-	childSock.Close()
 	if cfg.TTY != nil {
 		cfg.TTY.CloseSlave()
 	}
-
-	listenerFD, err := recvFD(parentSock)
 	if err != nil {
-		unix.Close(parentSock)
-		// The child printed why it failed before exiting.
-		return waitMain(), fmt.Errorf("sandbox setup failed")
+		return waitMain(), err
 	}
-	unix.SetNonblock(listenerFD, false)
 
 	s := &session{
 		cfg:      cfg,
@@ -164,7 +138,7 @@ func Run(cfg Config) (int, error) {
 		listener: seccomp.NewListener(listenerFD),
 		inflight: map[string]*pending{},
 		restart:  map[string]time.Time{},
-		root:     cmd.Process.Pid,
+		root:     proc.Pid,
 		wait:     wt,
 	}
 	if cfg.Log != nil {
@@ -175,16 +149,13 @@ func Run(cfg Config) (int, error) {
 	}
 
 	if cfg.LSM != nil {
-		err := cfg.LSM.AddMember(cmd.Process.Pid)
+		err := cfg.LSM.AddMember(proc.Pid)
 		if err == nil {
 			err = s.syncKernel()
 		}
-		if err == nil {
-			_, err = unix.Write(parentSock, []byte{1})
-		}
 		if err != nil {
-			unix.Close(parentSock)
-			_ = cmd.Process.Kill()
+			_ = proc.Kill()
+			release()
 			waitMain()
 			return 1, fmt.Errorf("strict mode: %w", err)
 		}
@@ -193,7 +164,11 @@ func Run(cfg Config) (int, error) {
 		go s.kernelEvents()
 		go s.periodicSync(done)
 	}
-	unix.Close(parentSock)
+	if err := release(); err != nil {
+		_ = proc.Kill()
+		waitMain()
+		return 1, err
+	}
 
 	workers := max(4, runtime.NumCPU())
 	for i := 0; i < workers; i++ {
@@ -206,7 +181,7 @@ func Run(cfg Config) (int, error) {
 				wt.Stop()
 				continue
 			}
-			_ = cmd.Process.Signal(sig)
+			_ = proc.Signal(sig)
 		}
 	}()
 
