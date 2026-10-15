@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/alban/hallpass/internal/lsm"
 )
 
 var hallpassBin string
@@ -381,8 +383,8 @@ func TestStrictOnce(t *testing.T) {
 	if os.Geteuid() != 0 {
 		strictSkip(t, "needs root (go test -exec sudo)")
 	}
-	if b, err := os.ReadFile("/sys/kernel/security/lsm"); err != nil || !strings.Contains(","+strings.TrimSpace(string(b))+",", ",bpf,") {
-		strictSkip(t, "BPF-LSM is not active")
+	if err := lsm.Active(); err != nil {
+		strictSkip(t, err.Error())
 	}
 	e := newEnv(t)
 	script := `
