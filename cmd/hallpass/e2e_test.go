@@ -377,6 +377,81 @@ func TestSignalWhilePrompting(t *testing.T) {
 	}
 }
 
+// TestQueuedPrompts checks that concurrent writes share prompts: the same
+// path is asked once, and a folder answer settles the writes queued under
+// that folder without asking again.
+func TestQueuedPrompts(t *testing.T) {
+	e := newEnv(t)
+	if err := os.MkdirAll(e.home+"/.m2", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	script := `
+w() { if echo x > "$HOME/.m2/$1"; then echo "$2=ok"; else echo "$2=denied"; fi; }
+w a a1 & w a a2 & w b b1 & w c c1 &
+wait
+`
+	c := e.cmd(script, "--ask=answer", "--timeout=20s")
+	var out strings.Builder
+	c.Stdout, c.Stderr = &out, &out
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	p := dialPrompts(t, e, c)
+	id, path, err := p.next(10 * time.Second)
+	if err != nil || !strings.Contains(path, "/.m2/") {
+		t.Fatalf("prompt %q: %v\n%s", path, err, out.String())
+	}
+	time.Sleep(500 * time.Millisecond) // the other writes queue up
+	fmt.Fprintf(p.conn, "%d temp\n", id)
+	if _, path, err := p.next(time.Second); err == nil {
+		t.Errorf("asked again, for %q", path)
+	}
+	if err := c.Wait(); err != nil {
+		t.Fatalf("hallpass: %v\n%s", err, out.String())
+	}
+	for _, want := range []string{"a1=ok", "a2=ok", "b1=ok", "c1=ok"} {
+		if !strings.Contains(out.String(), want+"\n") {
+			t.Errorf("output lacks %q:\n%s", want, out.String())
+		}
+	}
+}
+
+// TestRenamePerPath checks that a rename between two asked locations asks
+// about each path, source first, and that denying the second fails it.
+func TestRenamePerPath(t *testing.T) {
+	e := newEnv(t)
+	if err := os.WriteFile(e.home+"/src", []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(e.root+"/other", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	script := `if mv "$HOME/src" "` + e.root + `/other/dst" 2>/dev/null; then echo mv=ok; else echo mv=denied; fi`
+	c := e.cmd(script, "--ask=answer", "--timeout=20s")
+	var out strings.Builder
+	c.Stdout, c.Stderr = &out, &out
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	p := dialPrompts(t, e, c)
+	for _, st := range []struct{ suffix, reply string }{{"/home/src", "once"}, {"/other/dst", "deny"}} {
+		id, path, err := p.next(10 * time.Second)
+		if err != nil || !strings.HasSuffix(path, st.suffix) {
+			t.Fatalf("prompt %q, want *%s: %v\n%s", path, st.suffix, err, out.String())
+		}
+		fmt.Fprintf(p.conn, "%d %s\n", id, st.reply)
+	}
+	if err := c.Wait(); err != nil {
+		t.Fatalf("hallpass: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "mv=denied\n") {
+		t.Errorf("output:\n%s", out.String())
+	}
+	if _, err := os.Stat(e.home + "/src"); err != nil {
+		t.Errorf("src moved: %v", err)
+	}
+}
+
 // TestStrictOnce checks "allow once" in strict mode: the kernel allows the
 // syscall that was asked about, and not the same write afterwards.
 func TestStrictOnce(t *testing.T) {
