@@ -5,6 +5,7 @@ package ui
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -131,7 +132,7 @@ type wireRequest struct {
 
 // Ask sends the request to the connected client, waiting for one to connect if
 // needed, and returns its answer.
-func (s *Socket) Ask(r Request) Answer {
+func (s *Socket) Ask(_ context.Context, r Request) Answer {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

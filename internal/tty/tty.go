@@ -478,9 +478,9 @@ func (t *Term) paintLoop() {
 // accept keys. Keys pressed within guard of the prompt appearing are ignored,
 // so typing meant for the program does not answer it; so is any input that
 // is not a single key press (pastes, escape sequences other than a lone Esc).
-// It returns 0 after timeout (0: no timeout) or when the program's
-// terminal goes away.
-func (t *Term) Prompt(lines []string, accept string, guard, timeout time.Duration) byte {
+// It returns 0 after timeout (0: no timeout), when cancel is closed (nil:
+// never), or when the program's terminal goes away.
+func (t *Term) Prompt(lines []string, accept string, guard, timeout time.Duration, cancel <-chan struct{}) byte {
 	t.mu.Lock()
 	// Do not cut an escape sequence or a UTF-8 character in two.
 	for wait := time.Now().Add(300 * time.Millisecond); !t.esc.ground() && time.Now().Before(wait); {
@@ -526,6 +526,8 @@ wait:
 				break wait
 			}
 		case <-expired:
+			break wait
+		case <-cancel:
 			break wait
 		case <-t.outDone:
 			break wait

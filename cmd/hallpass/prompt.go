@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -37,10 +38,22 @@ func (s *session) prompts(evs <-chan []monitor.Event, gone chan<- struct{}) {
 				case kick <- struct{}{}:
 				default:
 				}
+			case ev.Closed != nil:
+				s.cancelPrompt(ev.Closed.ID)
 			case ev.Warning != "":
 				s.notice("hallpass: " + ev.Warning)
 			}
 		}
+	}
+}
+
+// cancelPrompt takes down the prompt about request id, if shown: another
+// client answered it, a rule settled it, or its task died.
+func (s *session) cancelPrompt(id uint64) {
+	s.curMu.Lock()
+	defer s.curMu.Unlock()
+	if s.curID == id && s.curCancel != nil {
+		s.curCancel()
 	}
 }
 
@@ -71,16 +84,55 @@ func (s *session) askLoop(kick <-chan struct{}) {
 	}
 }
 
-// ask asks the user about req and applies the answer.
+// ask asks the user about req and applies the answer, unless another
+// client answers first.
 func (s *session) ask(req *monitor.Request, waiting int, rs []rules.Rule) {
 	s.promptMu.Lock()
 	defer s.promptMu.Unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s.curMu.Lock()
+	s.curID, s.curCancel = req.ID, cancel
+	s.curMu.Unlock()
+	defer func() {
+		s.curMu.Lock()
+		s.curID, s.curCancel = 0, nil
+		s.curMu.Unlock()
+	}()
+	// Closed before curID was set: cancelPrompt missed it.
+	if !s.pending(req.ID) {
+		return
+	}
 	ur := s.uiRequest(req, waiting)
-	a := s.cfg.Asker.Ask(ur)
-	if !ur.Valid(a) {
+	a := s.cfg.Asker.Ask(ctx, ur)
+	if ctx.Err() != nil {
+		return
+	}
+	if err := s.answer(req, a, rs, client); err != nil && !errors.Is(err, monitor.ErrClosed) {
+		s.warnLocked(fmt.Sprintf("hallpass: %v", err))
+	}
+}
+
+// pending reports whether request id is still pending.
+func (s *session) pending(id uint64) bool {
+	pending, _, _ := s.m.Snapshot()
+	for _, r := range pending {
+		if r.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// answer applies a, the answer of client to req, with the session's
+// policy: the folder of a grant, "never" as an exact deny. rs are the
+// current rules. It fails with monitor.ErrClosed if req is no longer
+// pending; the rules of a are applied anyway.
+func (s *session) answer(req *monitor.Request, a ui.Answer, rs []rules.Rule, who string) error {
+	if !s.uiRequest(req, 0).Valid(a) {
 		a = ui.AnswerAllowOnce
 	}
-	d := monitor.Decision{Client: client}
+	d := monitor.Decision{Client: who}
 	allow := false
 	obj := req.Objects[0]
 	switch a {
@@ -98,19 +150,21 @@ func (s *session) ask(req *monitor.Request, waiting int, rs []rules.Rule) {
 	d.Verdicts = []monitor.Verdict{{Request: req.ID, Allow: allow}}
 	_, err := s.m.Apply(d)
 	if errors.Is(err, monitor.ErrClosed) {
-		// Its task died, or the monitor closed: keep the rules.
+		// Its task died, another client answered, or the monitor
+		// closed: keep the rules.
 		d.Verdicts = nil
-		if len(d.AddRules)+len(d.RemoveRules) == 0 {
-			return
+		if len(d.AddRules)+len(d.RemoveRules) > 0 {
+			_, _ = s.m.Apply(d)
 		}
-		_, err = s.m.Apply(d)
+		return err
 	}
-	if err != nil && !errors.Is(err, monitor.ErrClosed) {
-		s.warnLocked(fmt.Sprintf("hallpass: %v", err))
-		if d.Verdicts != nil {
-			_, _ = s.m.Apply(monitor.Decision{Verdicts: d.Verdicts, Client: client})
+	if err != nil {
+		// The rules failed (strict mode): give the verdict alone.
+		if _, err2 := s.m.Apply(monitor.Decision{Verdicts: d.Verdicts, Client: who}); err2 != nil {
+			return errors.Join(err, err2)
 		}
 	}
+	return err
 }
 
 // grant adds to d the rule an "allow temp/always" answer gives obj: its
@@ -246,7 +300,7 @@ func (s *session) menu() {
 	for k := 1; k < 256; k++ {
 		keys = append(keys, byte(k))
 	}
-	if s.cfg.TTY.Prompt(lines, string(keys), 0, 0) == 's' && s.wait.active.Load() {
+	if s.cfg.TTY.Prompt(lines, string(keys), 0, 0, nil) == 's' && s.wait.active.Load() {
 		s.wait.Stop()
 	}
 }

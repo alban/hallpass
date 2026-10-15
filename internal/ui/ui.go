@@ -5,6 +5,7 @@
 package ui
 
 import (
+	"context"
 	"strings"
 	"time"
 	"unicode"
@@ -166,9 +167,11 @@ func (r Request) Valid(a Answer) bool {
 }
 
 // Asker prompts the user and returns their answer. The supervisor serializes
-// calls, so implementations show at most one prompt at a time.
+// calls, so implementations show at most one prompt at a time. When ctx
+// ends (another client answered), Ask takes the prompt down and returns;
+// its answer is then ignored.
 type Asker interface {
-	Ask(Request) Answer
+	Ask(ctx context.Context, r Request) Answer
 	Close() error
 }
 
@@ -177,7 +180,7 @@ type Asker interface {
 type AutoDeny struct{}
 
 // Ask always denies.
-func (AutoDeny) Ask(Request) Answer { return AnswerDismissed }
+func (AutoDeny) Ask(context.Context, Request) Answer { return AnswerDismissed }
 
 // Close is a no-op.
 func (AutoDeny) Close() error { return nil }
@@ -187,10 +190,35 @@ func (AutoDeny) Close() error { return nil }
 type AutoAllow struct{}
 
 // Ask always allows, once.
-func (AutoAllow) Ask(Request) Answer { return AnswerAllowOnce }
+func (AutoAllow) Ask(context.Context, Request) Answer { return AnswerAllowOnce }
 
 // Close is a no-op.
 func (AutoAllow) Close() error { return nil }
+
+// Remote shows nothing: it waits for another client (`hallpass answer`,
+// `hallpass web`) to answer, and dismisses the request after Timeout (0:
+// never). For --ask=answer.
+type Remote struct {
+	Timeout time.Duration
+}
+
+// Ask waits for ctx to end, or for the timeout.
+func (r Remote) Ask(ctx context.Context, _ Request) Answer {
+	var expired <-chan time.Time
+	if r.Timeout > 0 {
+		t := time.NewTimer(r.Timeout)
+		defer t.Stop()
+		expired = t.C
+	}
+	select {
+	case <-ctx.Done():
+	case <-expired:
+	}
+	return AnswerDismissed
+}
+
+// Close is a no-op.
+func (Remote) Close() error { return nil }
 
 func baseName(p string) string {
 	for i := len(p) - 1; i >= 0; i-- {

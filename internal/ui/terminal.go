@@ -4,6 +4,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -31,8 +32,8 @@ func bold(s string) string { return "\x1b[1m" + s + "\x1b[22m" }
 
 func redBold(s string) string { return "\x1b[1;31m" + s + "\x1b[39m\x1b[22m" }
 
-// Ask shows the overlay and waits for a key.
-func (a *Terminal) Ask(r Request) Answer {
+// Ask shows the overlay and waits for a key, or for ctx to end.
+func (a *Terminal) Ask(ctx context.Context, r Request) Answer {
 	head := bold(fmt.Sprintf(" hallpass: %s (pid %d) wants to %s", sanitize(baseName(r.Exe)), r.PID, r.Op))
 	if r.Waiting > 0 {
 		head += fmt.Sprintf("   (+%d waiting)", r.Waiting)
@@ -56,7 +57,7 @@ func (a *Terminal) Ask(r Request) Answer {
 		keys += fmt.Sprintf("   (dismissed in %v)", a.timeout)
 	}
 	lines = append(lines, keys)
-	switch a.t.Prompt(lines, accept, typeaheadGuard, a.timeout) {
+	switch a.t.Prompt(lines, accept, typeaheadGuard, a.timeout, ctx.Done()) {
 	case 'o', 'O':
 		return AnswerAllowOnce
 	case 't', 'T':

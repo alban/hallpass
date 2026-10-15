@@ -4,6 +4,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"html"
 	"net/url"
@@ -89,8 +90,9 @@ func NewDesktop(timeout time.Duration) (*Desktop, error) {
 	return d, nil
 }
 
-// Ask shows (or replaces) the session's notification and blocks for an answer.
-func (d *Desktop) Ask(r Request) Answer {
+// Ask shows (or replaces) the session's notification and blocks for an
+// answer, or until ctx ends.
+func (d *Desktop) Ask(ctx context.Context, r Request) Answer {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -151,6 +153,9 @@ func (d *Desktop) Ask(r Request) Answer {
 				return a
 			}
 		case <-deadline:
+			d.conn.Object(notifDest, notifPath).Call(notifIfc+".CloseNotification", 0, id)
+			return AnswerDismissed
+		case <-ctx.Done():
 			d.conn.Object(notifDest, notifPath).Call(notifIfc+".CloseNotification", 0, id)
 			return AnswerDismissed
 		}

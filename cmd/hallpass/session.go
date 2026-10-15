@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -56,6 +57,12 @@ type session struct {
 	promptMu sync.Mutex
 	menuOpen atomic.Bool
 	wait     *waiter
+
+	// curMu guards the request asked about, and how to take its prompt
+	// down.
+	curMu     sync.Mutex
+	curID     uint64
+	curCancel context.CancelFunc
 }
 
 // runSession starts the command under the monitor, until it exits, and
