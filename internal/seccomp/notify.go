@@ -14,6 +14,8 @@ import (
 const (
 	secompSetModeFilter = 1
 	filterFlagNewLister = unix.SECCOMP_FILTER_FLAG_NEW_LISTENER
+	// Linux 5.19+.
+	filterFlagWaitKillableRecv = unix.SECCOMP_FILTER_FLAG_WAIT_KILLABLE_RECV
 
 	// ioctl numbers for the notify fd. RECV/SEND are not exported by
 	// x/sys/unix; the values are identical on arm64 and amd64 (same struct

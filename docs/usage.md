@@ -43,6 +43,10 @@ By default (`--wait=main`), hallpass exits with the command. The processes left 
 
 Sometimes hallpass cannot read the path a syscall passes, for example when the pointer is invalid. In lite mode, hallpass asks with a red "Unknown path" warning, and only offers "once", "deny" and "never" ("never" denies every unknown path for the rest of the session): allowing such a write skips every rule, so it is never granted for good. In strict mode, the kernel's rules decide on the real file, without asking.
 
+## Signals during a prompt
+
+While a prompt is pending, the paused thread only reacts to fatal signals (Linux 5.19 and later): a Ctrl-C or other handled signal is delivered once you answer, instead of restarting the syscall and asking again.
+
 ## Strict mode
 
 Strict mode builds on lite mode: it still pauses writes and asks you interactively, exactly as lite mode does, and the workload waits for your answer. The BPF-LSM program is an added layer, not a replacement: it enforces each answer in the kernel on the real file. It is not a silent, pre-configured policy.

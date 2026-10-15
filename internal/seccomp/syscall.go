@@ -25,14 +25,26 @@ type sockFprog struct {
 	filter *bpf.RawInstruction
 }
 
+// seccompSetFilter loads prog with a listener. Once the supervisor has
+// received a notification, only a fatal signal interrupts the wait for its
+// answer (Linux 5.19+, skipped on older kernels): otherwise a signal would
+// abort the syscall, which is then restarted, notified and asked about again.
 func seccompSetFilter(prog []bpf.RawInstruction) (int, error) {
+	fd, err := setFilter(prog, filterFlagNewLister|filterFlagWaitKillableRecv)
+	if err == unix.EINVAL {
+		fd, err = setFilter(prog, filterFlagNewLister)
+	}
+	return fd, err
+}
+
+func setFilter(prog []bpf.RawInstruction, flags uintptr) (int, error) {
 	fprog := sockFprog{
 		length: uint16(len(prog)),
 		filter: &prog[0],
 	}
 	r, _, errno := unix.Syscall(unix.SYS_SECCOMP,
 		secompSetModeFilter,
-		filterFlagNewLister,
+		flags,
 		uintptr(unsafe.Pointer(&fprog)),
 	)
 	runtime.KeepAlive(prog)

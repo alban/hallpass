@@ -309,6 +309,72 @@ type logLine struct {
 	Path, Decision, Reason string
 }
 
+// prompter answers the prompts of a hallpass run with --ask=answer.
+type prompter struct {
+	conn net.Conn
+	rd   *bufio.Reader
+}
+
+func dialPrompts(t *testing.T, e env, c *exec.Cmd) prompter {
+	t.Helper()
+	sock := fmt.Sprintf("%s/hallpass/%d.sock", e.runtime, c.Process.Pid)
+	for i := 0; i < 100; i++ {
+		if conn, err := net.Dial("unix", sock); err == nil {
+			t.Cleanup(func() { conn.Close() })
+			return prompter{conn, bufio.NewReader(conn)}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	c.Process.Kill()
+	t.Fatalf("dial %s", sock)
+	return prompter{}
+}
+
+// next returns the ID and path of the next prompt, waiting at most d.
+func (p prompter) next(d time.Duration) (uint64, string, error) {
+	p.conn.SetReadDeadline(time.Now().Add(d))
+	line, err := p.rd.ReadString('\n')
+	if err != nil {
+		return 0, "", err
+	}
+	var req struct {
+		ID   uint64
+		Path string
+	}
+	err = json.Unmarshal([]byte(strings.TrimPrefix(line, "PROMPT ")), &req)
+	return req.ID, req.Path, err
+}
+
+// TestSignalWhilePrompting checks that a signal caught by the sandboxed
+// process while it waits for an answer does not abort and restart the
+// syscall, which would ask again (SECCOMP_FILTER_FLAG_WAIT_KILLABLE_RECV).
+func TestSignalWhilePrompting(t *testing.T) {
+	e := newEnv(t)
+	script := `trap 'echo sig' USR1; (sleep 0.3; kill -USR1 $$) & if echo x > "$HOME/sig"; then echo write=ok; else echo write=failed; fi; wait`
+	c := e.cmd(script, "--ask=answer", "--timeout=20s")
+	var out strings.Builder
+	c.Stdout, c.Stderr = &out, &out
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	p := dialPrompts(t, e, c)
+	id, path, err := p.next(10 * time.Second)
+	if err != nil || !strings.HasSuffix(path, "/sig") {
+		t.Fatalf("prompt %q: %v", path, err)
+	}
+	time.Sleep(time.Second) // the signal is sent meanwhile
+	fmt.Fprintf(p.conn, "%d once\n", id)
+	if _, path, err := p.next(time.Second); err == nil {
+		t.Errorf("asked again, for %q", path)
+	}
+	if err := c.Wait(); err != nil {
+		t.Fatalf("hallpass: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "write=ok\n") || !strings.Contains(out.String(), "sig\n") {
+		t.Errorf("output:\n%s", out.String())
+	}
+}
+
 func readLog(t *testing.T, file string) []logLine {
 	t.Helper()
 	b, err := os.ReadFile(file)
