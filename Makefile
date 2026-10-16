@@ -14,6 +14,11 @@ GO_TAGS ?= grpcnotrace
 all:
 	go build -tags '$(GO_TAGS)' -o hallpass ./cmd/hallpass
 
+# The Kubernetes node agent (docs/kubernetes.md), static.
+.PHONY: hallpass-node
+hallpass-node:
+	CGO_ENABLED=0 go build -tags '$(GO_TAGS)' -o hallpass-node ./cmd/hallpass-node
+
 # Run the tests in a VM booting ci-kernels:KERNEL_VERSION, which has BPF-LSM
 # active. Needs vimto (CGO_ENABLED=0 go install lmb.io/vimto@latest) and qemu.
 # Without /dev/kvm, qemu emulates the CPU: slower, but it works. Everything is

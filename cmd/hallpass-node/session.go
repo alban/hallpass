@@ -1,0 +1,181 @@
+// Copyright The hallpass Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package main
+
+import (
+	"errors"
+	"fmt"
+	"log/slog"
+	"strconv"
+	"sync"
+	"time"
+
+	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
+	"github.com/alban/hallpass/internal/answer"
+	"github.com/alban/hallpass/internal/defaults"
+	"github.com/alban/hallpass/internal/monitor"
+	"github.com/alban/hallpass/internal/sessionapi"
+	pb "github.com/alban/hallpass/internal/sessionpb"
+	"github.com/alban/hallpass/internal/ui"
+)
+
+const (
+	// client is the agent's name in monitor.Reason.Client.
+	client = "hallpass-node"
+	// remoteClient names answers from the session API that name no client.
+	remoteClient = "remote"
+)
+
+// session mediates one container.
+type session struct {
+	id     string
+	pid    int
+	md     metadata
+	policy *Policy
+	d      *defaults.Defaults
+	m      *monitor.Monitor
+	evs    <-chan []monitor.Event
+	start  time.Time
+	log    *slog.Logger
+
+	mu     sync.Mutex
+	timers map[uint64]*time.Timer
+}
+
+// newSession creates the monitor of container id with policy p. The
+// caller attaches the listeners.
+func newSession(id string, pid int, md metadata, p *Policy, log *slog.Logger) (*session, error) {
+	m, err := monitor.New(monitor.Config{ProcRoot: true})
+	if err != nil {
+		return nil, err
+	}
+	d := defaultsFor(p, md.Home)
+	if _, err := m.Apply(monitor.Decision{AddRules: d.Rules(), Client: client}); err != nil {
+		m.Close()
+		return nil, err
+	}
+	return &session{
+		id: id, pid: pid, md: md, policy: p, d: d, m: m,
+		// Subscribed before the first Attach: no request is missed.
+		evs:    m.Events(monitor.EventOptions{}),
+		start:  time.Now(),
+		log:    log.With("namespace", md.Namespace, "pod", md.Pod, "container", md.Container),
+		timers: map[uint64]*time.Timer{},
+	}, nil
+}
+
+// run handles the requests until the container is gone: without ask, they
+// are denied at once; with it, after the policy's askTimeout.
+func (s *session) run() {
+	for batch := range s.evs {
+		for _, ev := range batch {
+			switch {
+			case ev.Opened != nil:
+				s.opened(ev.Opened)
+			case ev.Closed != nil:
+				s.closed(ev.Closed)
+			case ev.Warning != "":
+				s.log.Warn(ev.Warning)
+			}
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, t := range s.timers {
+		t.Stop()
+		delete(s.timers, id)
+	}
+}
+
+func (s *session) opened(req *monitor.Request) {
+	r := answer.Request(s.d, req, 0)
+	s.log.Info("request", "id", req.ID, "op", r.Op, "path", r.Path, "exe", r.Exe, "pid", r.PID)
+	if !s.policy.Ask {
+		s.dismiss(req.ID)
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.timers[req.ID] = time.AfterFunc(s.policy.AskTimeout, func() { s.dismiss(req.ID) })
+}
+
+func (s *session) closed(c *monitor.Closed) {
+	s.mu.Lock()
+	if t := s.timers[c.ID]; t != nil {
+		t.Stop()
+		delete(s.timers, c.ID)
+	}
+	s.mu.Unlock()
+	why := c.Why.Client
+	switch {
+	case c.Why.Rule != 0:
+		why = "rule " + strconv.FormatUint(c.Why.Rule, 10)
+	case c.Why.Died:
+		why = "died"
+	}
+	s.log.Info("request closed", "id", c.ID, "by", why)
+}
+
+// dismiss denies request id, if still pending, without remembering it.
+func (s *session) dismiss(id uint64) {
+	req, rs, err := answer.Find(s.m, id)
+	if err != nil {
+		return
+	}
+	if err := answer.Apply(s.m, s.d, req, ui.AnswerDismissed, rs, client); err != nil && !errors.Is(err, monitor.ErrClosed) {
+		s.log.Error("deny", "id", id, "err", err)
+	}
+}
+
+// Info implements sessionapi.Session.
+func (s *session) Info() *pb.SessionInfo {
+	var timeout time.Duration
+	if s.policy.Ask {
+		timeout = s.policy.AskTimeout
+	}
+	return &pb.SessionInfo{
+		Pid:           int32(s.pid),
+		Mode:          "lite",
+		StartTime:     timestamppb.New(s.start),
+		PromptTimeout: durationpb.New(timeout),
+		Labels: map[string]string{
+			"namespace":   s.md.Namespace,
+			"pod":         s.md.Pod,
+			"podUID":      s.md.PodUID,
+			"container":   s.md.Container,
+			"containerID": s.id,
+			"policy":      s.policy.Name,
+			"ask":         strconv.FormatBool(s.policy.Ask),
+		},
+	}
+}
+
+// Prompt implements sessionapi.Session.
+func (s *session) Prompt(req *monitor.Request) *pb.Prompt {
+	r := answer.Request(s.d, req, 0)
+	return &pb.Prompt{
+		Op: r.Op, Path: r.Path, Exe: r.Exe, Pid: r.PID,
+		Cmdline: r.Cmdline, Parents: r.Parents,
+		Scope: r.Scope, Never: r.Never, Warn: r.Warn,
+	}
+}
+
+// Answer implements sessionapi.Session.
+func (s *session) Answer(id uint64, a, who string) error {
+	ans := ui.ParseAnswer(a)
+	if ans == ui.AnswerDismissed && a != ui.AnswerDismissed.String() {
+		return fmt.Errorf("%w %q", sessionapi.ErrBadAnswer, a)
+	}
+	if who == "" {
+		who = remoteClient
+	}
+	req, rs, err := answer.Find(s.m, id)
+	if err != nil {
+		return err
+	}
+	s.log.Info("answer", "id", id, "answer", ans.String(), "client", who)
+	return answer.Apply(s.m, s.d, req, ans, rs, who)
+}
