@@ -1,0 +1,43 @@
+# Copyright The hallpass Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# A sample: pods of namespace "agents" annotated hallpass.io/policy=agent
+# may write /workspace and /tmp; anything else they write is asked about
+# through the node agent's session API (hallpass-node answer), and denied
+# after 5 minutes without an answer.
+apiVersion: hallpass.io/v1alpha1
+kind: HallpassPolicy
+metadata:
+  name: agent
+spec:
+  allow: [/workspace/**, /tmp/**]
+  deny: [/var/run/secrets/**]
+  ask: true
+  askTimeout: 5m
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agents
+  labels:
+    hallpass.io/enabled: "true"
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: agent
+  namespace: agents
+  annotations:
+    hallpass.io/policy: agent
+spec:
+  restartPolicy: Never
+  containers:
+    - name: agent
+      image: busybox:1.37
+      command: [sh, -c, "echo ok > /workspace/allowed && echo asked > /etc/asked; sleep 3600"]
+      volumeMounts:
+        - name: workspace
+          mountPath: /workspace
+  volumes:
+    - name: workspace
+      emptyDir: {}

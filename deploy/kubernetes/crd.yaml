@@ -1,0 +1,61 @@
+# Copyright The hallpass Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# HallpassPolicy: what a pod annotated hallpass.io/policy=<name> may write
+# without asking. Cluster-scoped: only the cluster admin creates policies.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: hallpasspolicies.hallpass.io
+spec:
+  group: hallpass.io
+  scope: Cluster
+  names:
+    kind: HallpassPolicy
+    listKind: HallpassPolicyList
+    plural: hallpasspolicies
+    singular: hallpasspolicy
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      additionalPrinterColumns:
+        - name: Ask
+          type: boolean
+          jsonPath: .spec.ask
+        - name: Timeout
+          type: string
+          jsonPath: .spec.askTimeout
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                allow:
+                  description: >-
+                    Container paths writable without asking. "/workspace/**"
+                    (or "/workspace") is the tree under /workspace.
+                  type: array
+                  items:
+                    type: string
+                    pattern: '^/[^*?\[]*(/\*\*)?$'
+                deny:
+                  description: >-
+                    Container paths denied without asking, even under an
+                    allowed tree. Same syntax as allow.
+                  type: array
+                  items:
+                    type: string
+                    pattern: '^/[^*?\[]*(/\*\*)?$'
+                ask:
+                  description: >-
+                    Ask about writes no rule decides (default true). false
+                    denies them at once.
+                  type: boolean
+                askTimeout:
+                  description: >-
+                    How long a request waits for an answer before it is
+                    denied (Go duration, default 5m).
+                  type: string

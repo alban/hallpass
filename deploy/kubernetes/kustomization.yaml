@@ -1,0 +1,7 @@
+# Copyright The hallpass Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# kubectl apply -k deploy/kubernetes
+resources:
+  - crd.yaml
+  - hallpass-node.yaml

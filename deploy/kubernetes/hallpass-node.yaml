@@ -1,0 +1,99 @@
+# Copyright The hallpass Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# The node agent: one per node. It holds the seccomp listeners of the
+# mediated containers, so restarting it breaks them (their mediated
+# syscalls fail with ENOSYS): updates are manual (OnDelete), after the
+# mediated pods are gone or with their restart in mind.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: hallpass-system
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: hallpass-node
+  namespace: hallpass-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: hallpass-node
+rules:
+  # Namespaces for --namespace-selector. Pods are not read: NRI gives the
+  # pod's annotations.
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get, list, watch]
+  - apiGroups: [hallpass.io]
+    resources: [hallpasspolicies]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: hallpass-node
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: hallpass-node
+subjects:
+  - kind: ServiceAccount
+    name: hallpass-node
+    namespace: hallpass-system
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: hallpass-node
+  namespace: hallpass-system
+  labels:
+    app.kubernetes.io/name: hallpass-node
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: hallpass-node
+  updateStrategy:
+    type: OnDelete
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: hallpass-node
+    spec:
+      serviceAccountName: hallpass-node
+      # /proc/<pid>/{mem,root,cwd,fd} of the containers of the node.
+      hostPID: true
+      # Not hostNetwork: the session API listens on the pod's loopback,
+      # reachable through kubectl port-forward only.
+      priorityClassName: system-node-critical
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: hallpass-node
+          image: ghcr.io/alban/hallpass-node:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - run
+            - --namespace-selector=hallpass.io/enabled=true
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: nri
+              mountPath: /var/run/nri
+            - name: agent
+              mountPath: /run/hallpass
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+      volumes:
+        - name: nri
+          hostPath:
+            path: /var/run/nri
+            type: DirectoryOrCreate
+        # The agent socket: runc, on the host, connects to the same path.
+        - name: agent
+          hostPath:
+            path: /run/hallpass
+            type: DirectoryOrCreate
