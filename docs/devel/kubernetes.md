@@ -197,6 +197,50 @@ account could answer for itself.
   server with blocked threads.
 - A request takes an API round trip (tens of ms) before it is shown.
 
+## Headlamp plugin (draft)
+
+Both a dedicated view and additions to the pod pages; the data comes
+from the cluster API (A or B), the UI is the same.
+
+- Sidebar entry and route: pending requests across the cluster, the
+  activity and the rules (the three views of `hallpass web`, in React).
+- App bar badge (`registerAppBarAction`): the number of pending
+  requests. A blocked workload waits on an answer: it must show on any
+  page.
+- Pod details section (`registerDetailsViewSection`): whether hallpass
+  is on, the policy, the pod's pending requests and rules, answerable
+  in place.
+- Pod header action (`registerDetailsViewHeaderAction`): "Sandbox with
+  hallpass". The filter is installed when the container is created, so
+  it patches the owner's (Deployment...) pod template annotation and
+  causes a rollout; it cannot apply to a running pod.
+- Pod list column (`registerResourceTableColumnsProcessor`): pending
+  count.
+
+## Idea: substitute a file's content (to discuss, not planned)
+
+Use case: deploy a container with one config file changed, without
+rebuilding the image. A rule names a path and a content; an `openat` of
+that path gets a memfd holding the content.
+
+Lite mode can do it: the agent fills a memfd and makes it the result of
+the syscall with `SECCOMP_IOCTL_NOTIF_ADDFD` and
+`SECCOMP_ADDFD_FLAG_SEND`, atomically. To discuss:
+
+- For a content fixed at deploy time, an NRI bind mount over the file
+  at container creation is simpler: it also covers `stat`, `mmap` and
+  `exec`, and costs nothing at run time. A memfd only wins for dynamic
+  cases (content changed at run time, per process, per open).
+- Cost: the filter traps writes today. Substituting reads means trapping
+  every `openat` (seccomp cannot match paths), in the containers that
+  have such a rule only.
+- Leaks: `stat(path)` still shows the original size and inode,
+  `/proc/self/fd/N` shows `memfd:`. Some programs read `st_size` bytes.
+- Opens for writing: a sealed read-only copy, or a private writable one?
+- Lite mode only: BPF-LSM can deny, not substitute.
+- Who may set it: injecting content is a privilege beyond allow or deny
+  (annotation or CRD, RBAC).
+
 ## Lifetime
 
 - The notify fd lives in the agent. If the agent dies, the mediated
