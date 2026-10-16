@@ -7,6 +7,7 @@ Each demo is a directory with its recording script. The [Makefile](Makefile) fin
 | Shell | [`shell/demo.tape`](shell/demo.tape) | README, home page | [VHS](https://github.com/charmbracelet/vhs) |
 | Copilot | [`copilot/demo.tape`](copilot/demo.tape) | home page | VHS, with copilot |
 | Coalesce | [`coalesce/demo.tape`](coalesce/demo.tape) | How it works | VHS |
+| Strict | [`strict/demo.tape`](strict/demo.tape) | How it works | VHS, over ssh |
 | Web UI | [`web/record.js`](web/record.js) | Usage | Puppeteer |
 
 [`example/`](example) is a small C project that the demos work in.
@@ -43,6 +44,7 @@ Requirements: `vhs` (with `ttyd` and a Chromium; on arm64 Linux, `snap install c
 
 - `shell.mp4` (no agent, the same at every run apart from pids): a shell in the sandbox. Writing in the project goes through, appending to `~/.bashrc` is asked and denied, and Ctrl-] shows the session's rules.
 - `coalesce.mp4` (no agent): eight parallel `touch` under one folder outside the project give one prompt; "always" allows the folder, settles all eight, and shows as a rule. It runs with `HOME` in `$DEMO_DIR`.
+- `strict.mp4` (no agent): [`strict/race`](strict/race/main.go) opens a path while another thread flips one of its bytes, between `./.bashrc` in the project and `../.bashrc`, which is `~/.bashrc`. Under lite mode it soon writes to `~/.bashrc`; under strict mode it never does. Strict mode needs BPF-LSM, so the tape builds `race`, copies it and `hallpass` to `~/tmp/hallpass-demo-strict` on `$STRICT_HOST` (default `fedora`) and runs there over ssh, with `HOME` in that directory. The host needs `bpf` in `/sys/kernel/security/lsm`, Linux 6.12 or later, passwordless sudo, and this host's architecture. The try count varies from run to run.
 - `copilot.mp4`: `copilot --yolo` asked to "Build and install the project" in [`example/`](example). The `install` step copies the built binary into `~/.local/bin`, outside the project, so hallpass asks and the write is denied. A fast model (`--model claude-haiku-4.5`) keeps the agent's turn short. The agent's answers vary from run to run.
 
 The copilot demo needs `copilot`, logged in. Its tape copies `example/` to `/tmp/hallpass-demo`, outside any git repository, so that copilot works on it alone. Copilot asks whether to trust a new folder, which the tape does not answer: trust it once beforehand.
@@ -73,3 +75,4 @@ Set with `make VAR=value`:
 - `CRF`: the x264 quality of the encoded videos, default 30 (lower is better and bigger).
 - `CHROMIUM_PROFILE`: prefix of the scratch profile, `-NAME` appended, created and removed by the recording. The snap can only write under `~/snap/chromium/common/`, hence the default `~/snap/chromium/common/hallpass-demo`; any directory works with a non-snap Chromium.
 - `DEMO_TMPDIR`: where each recording's fresh directory is created with `mktemp`, default `$TMPDIR` or `/tmp`. It is removed after a successful run and kept on failure; a browser demo also leaves a screenshot of the page there (`raw.webm.error.png`). Its path shows in the web video: keep it short.
+- `STRICT_HOST`: the ssh host the strict demo runs on, default `fedora` (an environment variable: the tape reads it).
