@@ -1,6 +1,8 @@
 # Kubernetes
 
-Status: design, not implemented.
+Status: work item 1 (lite mode) implemented on branch `nri`; see
+[Implementation notes](#implementation-notes-work-item-1) for where it
+differs from this design. User docs: [../kubernetes.md](../kubernetes.md).
 
 Run AI agents in pods under hallpass, opted in per namespace and per pod,
 and answer their requests from [Headlamp](https://headlamp.dev). Lite mode
@@ -252,7 +254,7 @@ the syscall with `SECCOMP_IOCTL_NOTIF_ADDFD` and
   containerd), so the container starts without hallpass: open by
   default. To fail closed, the admin lists the plugin in the NRI default
   validator's `required_plugins`, or the pod requests it with the
-  `required-plugins.nri.io` annotation. The plugin cannot add that
+  `required-plugins.noderesource.dev` annotation (e.g. `[hallpass]`). The plugin cannot add that
   annotation: it is set when the pod is created (a mutating admission
   webhook could add it to every opted-in pod).
 - Between the plugin's adjustment and runc's start, an agent that died
@@ -289,3 +291,69 @@ API (port-forward), and checks the write and the session's rules.
 - Remove a rule: an annotation on the session (decided).
 - The agent socket directory on the host: rely on its permissions
   (root-only, 0700), no peer check (decided).
+
+## Implementation notes (work item 1)
+
+Where `cmd/hallpass-node` (branch `nri`) differs from or adds to the
+design above:
+
+- **Paths.** `procfs.Resolve` takes a root (`procfs.Root`); the agent
+  uses `/proc/<pid>/root` of the calling process and gets container
+  paths back. It also checks that the directory it resolved from is the
+  file the root names (`sameFile`): a detached mount (`fsopen`,
+  `open_tree`) is named relative to its own root, so its name means
+  nothing in the container and a clone could pass for an allowed path.
+  Such opens are refused, except one case: runc 1.2+ reopens its exec
+  FIFO through a detached procfs after loading the filter
+  (`openat(<detached /proc/1/task/1/fd>, "7", O_WRONLY)`); a single
+  component on a procfs directory whose magic link points to a FIFO or
+  socket is reported as the special file `fifo:N`/`socket:N`, as
+  `/proc/self/fd/N` already is.
+- **Rules.** Policy paths are matched lexically (`defaults.NewLexical`):
+  the agent does not resolve them in the container at start, since the
+  container's root is not populated yet when the policy is built.
+  Policy path syntax: `/x/**` or `/x` (the tree under `/x`); other globs
+  and relative paths are rejected. `ask` defaults to true, `askTimeout`
+  to 5m (must be positive).
+- **Implicit allows** in a container: `defaults.DefaultAllows`
+  (`/dev/null`, ...), `/dev/tty`, `/dev/pts` (the container's own
+  devpts) and `/dev/termination-log`. No home or cache defaults.
+- **Seccomp profile** (`internal/ociseccomp`): only the native
+  architecture is kept (`architectures` of the original policy are
+  dropped, as hallpass's rules use native syscall numbers). A container
+  policy that already uses `SCMP_ACT_NOTIFY` (default action or any
+  rule) or its own `listenerPath`, or that conditions a hallpass syscall
+  in a way libseccomp cannot combine with hallpass's rule, is refused
+  (container creation fails) rather than merged. `CLONE_NEWUSER` and
+  `CLONE_NEWNS` are denied as with `--allow-userns=false`.
+  `SECCOMP_FILTER_FLAG_WAIT_KILLABLE_RECV` is set with
+  `--wait-killable=auto` only if the kernel accepts it and
+  `runc features`, run chrooted in `/proc/1/root`, lists it (runc 1.4.3
+  in kind does not).
+- **Policies** come from the `HallpassPolicy` CRD through a dynamic
+  informer. A pod naming a missing policy, or a namespace lookup error,
+  fails the container creation (fail closed once opted in). If the
+  policy is gone when runc connects, the session has only the implicit
+  allows and does not ask.
+- **Sessions.** One per container id; `kubectl exec` (a new listener for
+  the same container) attaches to the same monitor. A session ends when
+  the monitor has no listener left. `listenerMetadata` is JSON
+  `{namespace, pod, podUID, container, policy, home}`.
+- **Session API.** One `sessionapi.Hub` per node on `127.0.0.1:7323`.
+  Backward compatible proto changes: a `List` RPC and `SessionInfo.id`;
+  on the hub, the other RPCs must select the session with the
+  `hallpass-session` gRPC metadata key. The CLI's unix socket serves one
+  session, ignores that key and keeps its peer checks; the hub's TCP
+  listener has none.
+- **Client.** `hallpass-node sessions|pending|answer --addr`, sessions
+  named by id, id prefix or `namespace/pod/container`. Answers go
+  through `internal/answer`, shared with `hallpass`.
+- **RBAC.** Namespaces and `hallpasspolicies` (get, list, watch); pods
+  are not read: the pod's labels and annotations come from NRI.
+- **kind.** `kindest/node:v1.37.0` ships containerd 2.3.4 with NRI on
+  and the default validator off, and runc 1.4.3: no node image changes.
+  `make test-kind` (`test/kind/e2e.sh`) creates the cluster, deploys
+  the agent and checks mediation, answers (once, deny) over
+  port-forward, and that unselected pods are untouched.
+- **Not done:** strict mode, the cluster API and Headlamp (work items
+  2-3), the fd holder; policy changes do not affect running sessions.
