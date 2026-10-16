@@ -87,6 +87,7 @@ hallpass [flags] [--] [command [args...]]     # default command: $SHELL
 
 hallpass policy [flags]                       # print the rules these flags give, then exit
 hallpass answer [PID]                         # answer another session's prompts from this terminal
+hallpass web [--listen ADDR] [--open]         # follow and answer every session in a browser (experimental)
 ```
 
 By default, only `~/.config/hallpass` is denied (the sandbox must not change what hallpass runs next time); the project, a private `$TMPDIR` for the session (removed at exit if empty) and the usual `/dev` nodes are writable; anything else is asked, including the shared `/tmp`, `/var/tmp` and `/dev/shm` (answer "always" to allow them). Writes to known secret stores (`~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.config/gh`, `~/.kube`, `~/.docker`, `~/.netrc`, `~/.git-credentials`) are asked too, with a red warning label. Press Ctrl-] inside a session to see its current rules, including answers given so far; any key closes the overlay.

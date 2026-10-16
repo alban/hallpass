@@ -21,6 +21,7 @@ hallpass [flags] [--] [command [args...]]     # default command: $SHELL
 
 hallpass policy [flags]                       # print the rules these flags give, then exit
 hallpass answer [PID]                         # answer another session's prompts from this terminal
+hallpass web [--listen ADDR] [--open]         # follow and answer every session in a browser (experimental)
 ```
 
 ## Default policy
@@ -100,6 +101,16 @@ hallpass answer                      # in another, to see prompts and reply
 `hallpass answer` connects to the running session's socket, shows each pending request (path, the `by:` command line and its parents) and lets you allow once, allow temporarily, allow always, deny or refuse forever. Every client answers the same requests: the first answer wins, and the others take their prompt down, the terminal overlay included.
 
 `hallpass answer` is mainly a testing and debugging aid, and a fallback for the headless case above; the terminal overlay is the normal way to answer. The socket serves a gRPC API (`internal/sessionpb/session.proto`) to follow and answer the session. It only accepts a client of the same user that is not itself sandboxed (it rejects any peer running under a seccomp filter), so the sandbox cannot answer its own prompts through it.
+
+### Web UI (experimental)
+
+```console
+hallpass web
+```
+
+`hallpass web` serves a page on 127.0.0.1 that shows every session of the user: the pending requests with the same answers as the terminal, the activity (every decided access, filterable) and the rules, which can be removed. It prints a pairing link that works once; press Enter in its terminal for a new one. `--open` opens it with `xdg-open`, `--listen` picks the address (loopback only).
+
+It is experimental: the browser keeps a cookie that a sandboxed agent could read from the profile, then use to answer its own requests. See [docs/devel/web.md](devel/web.md#security).
 
 ## Requirements
 

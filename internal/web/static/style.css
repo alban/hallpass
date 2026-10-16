@@ -1,0 +1,32 @@
+body { font: 14px/1.4 system-ui, sans-serif; margin: 0; color: #222; background: #fafafa; }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 1em; padding: .5em 1em; background: #fff; border-bottom: 1px solid #ddd; }
+h1 { font-size: 1.2em; margin: 0; }
+nav button { font: inherit; border: 1px solid #ccc; background: #f4f4f4; padding: .3em .8em; border-radius: 4px; cursor: pointer; }
+nav button.active { background: #333; color: #fff; border-color: #333; }
+.experimental { margin: 0; color: #a15c00; font-size: .9em; }
+#sessions { display: flex; flex-wrap: wrap; gap: .5em; padding: .5em 1em; }
+.session { background: #fff; border: 1px solid #ddd; border-radius: 4px; padding: .2em .6em; font-size: .9em; }
+.session.ended { opacity: .5; }
+main { padding: 0 1em 1em; }
+.card { background: #fff; border: 1px solid #ddd; border-left: 4px solid #e0a000; border-radius: 4px; padding: .6em .8em; margin: .6em 0; }
+.card .path { font-family: monospace; font-size: 1.1em; word-break: break-all; }
+.card .warn { color: #c00; font-weight: bold; }
+.card .meta { color: #555; font-family: monospace; word-break: break-all; }
+.card .buttons { margin-top: .5em; display: flex; flex-wrap: wrap; gap: .4em; }
+.card button { font: inherit; padding: .3em .8em; border-radius: 4px; border: 1px solid #aaa; cursor: pointer; background: #fff; }
+.card button.allow { border-color: #2a7a2a; color: #2a7a2a; }
+.card button.deny { border-color: #b00; color: #b00; }
+.card .error { color: #b00; }
+.empty { color: #777; margin: 1em 0; }
+table { border-collapse: collapse; width: 100%; background: #fff; }
+th, td { text-align: left; padding: .2em .5em; border-bottom: 1px solid #eee; vertical-align: top; }
+td { font-family: monospace; word-break: break-all; }
+td.allow { color: #2a7a2a; }
+td.deny { color: #b00; }
+#filter { width: 100%; box-sizing: border-box; font: inherit; padding: .3em; margin: .6em 0; }
+h2 { font-size: 1em; margin: 1em 0 .3em; }
+#unpaired { padding: 1em; }
+td button { white-space: nowrap; }
+td.nowrap { white-space: nowrap; word-break: normal; }
+.session { max-width: 40em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+h2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hallpass</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+<script src="app.js" defer></script>
+</head>
+<body>
+<header>
+  <h1>hallpass</h1>
+  <nav>
+    <button data-view="pending" class="active">Pending <span id="pending-count"></span></button>
+    <button data-view="activity">Activity</button>
+    <button data-view="rules">Rules</button>
+  </nav>
+  <p class="experimental">Experimental: a sandboxed agent that reads this browser's cookies can answer its own requests. See docs/devel/web.md.</p>
+</header>
+<section id="sessions"></section>
+<main>
+  <section id="view-pending"></section>
+  <section id="view-activity" hidden>
+    <input id="filter" type="search" placeholder="Filter: path, process, session, allow, deny, reason…">
+    <table><thead><tr><th>Time</th><th>Session</th><th>Verdict</th><th>Op</th><th>Object</th><th>Process</th><th>Why</th></tr></thead><tbody id="activity"></tbody></table>
+  </section>
+  <section id="view-rules" hidden></section>
+</main>
+<p id="unpaired" hidden>Not paired: open the link printed by <code>hallpass web</code> (press Enter in its terminal for a new one).</p>
+</body>
+</html>

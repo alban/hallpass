@@ -13,10 +13,10 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 
 	"github.com/alban/hallpass/internal/monitor"
@@ -188,10 +188,13 @@ func toStatus(err error) error {
 	return status.Error(codes.Unknown, err.Error())
 }
 
-// Dial connects to the session socket at path.
+// Dial connects to the session socket at path. The calls fail unless the
+// socket is served by an unsandboxed process of the same user, the one
+// whose pid names it (see SocketPath).
 func Dial(path string) (*grpc.ClientConn, pb.SessionClient, error) {
+	pid, _ := strconv.Atoi(strings.TrimSuffix(filepath.Base(path), ".sock"))
 	conn, err := grpc.NewClient("unix://"+path,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithTransportCredentials(serverCreds{pid: pid}),
 		// The default backoff is up to 2 minutes: the session is local.
 		grpc.WithConnectParams(connectParams))
 	if err != nil {

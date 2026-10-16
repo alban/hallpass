@@ -29,6 +29,7 @@ import (
 const usageText = `Usage:
   hallpass [flags] [--] [command [args...]]   run command (default: $SHELL)
   hallpass answer [PID]                       answer prompts from this terminal
+  hallpass web [--listen ADDR] [--open]       follow and answer sessions in a browser (experimental)
   hallpass policy [flags]                     print the rules these flags give
 
 In the program's terminal, press Ctrl-] to show the current rules.
@@ -51,6 +52,9 @@ func main() {
 	}
 	if len(os.Args) > 1 && os.Args[1] == "answer" {
 		os.Exit(answerMain(os.Args[2:]))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "web" {
+		os.Exit(webMain(os.Args[2:]))
 	}
 	if len(os.Args) > 1 && os.Args[1] == "policy" {
 		os.Exit(runMain(os.Args[2:], true))
