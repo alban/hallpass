@@ -26,11 +26,14 @@ KERNEL_VERSION ?= 7.2.8
 TEST_VM_KERNEL ?= ghcr.io/inspektor-gadget/ci-kernels:$(KERNEL_VERSION)
 TEST_VM_PKGS ?= ./...
 TEST_VM_FLAGS ?=
+# vimto's default (about 64 MB) is too small for the test packages running in
+# parallel: processes in the sandbox fail with ENOMEM.
+TEST_VM_MEMORY ?= 1G
 .PHONY: test-vm
 test-vm: all
 	$(if $(wildcard /dev/kvm),,VIMTO_DISABLE_KVM=1) CGO_ENABLED=0 \
 	HALLPASS_BIN=$(CURDIR)/hallpass \
-		$(VIMTO) -smp cpus=2 -sudo -kernel $(TEST_VM_KERNEL) -- \
+		$(VIMTO) -smp cpus=2 -memory $(TEST_VM_MEMORY) -sudo -kernel $(TEST_VM_KERNEL) -- \
 		go test -count=1 $(TEST_VM_FLAGS) $(TEST_VM_PKGS)
 
 # Rebuild the BPF objects (needs clang); they are committed.

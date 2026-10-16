@@ -625,7 +625,7 @@ func TestWait(t *testing.T) {
 		t.Run(wait, func(t *testing.T) {
 			e := newEnv(t)
 			logf := e.root + "/log.jsonl"
-			script := `(sleep 1; echo x > "$HOME/late") </dev/null >/dev/null 2>&1 & exit 3`
+			script := `(sleep 3; echo x > "$HOME/late") </dev/null >/dev/null 2>&1 & exit 3`
 			c := e.cmd(script, "--ask=deny", "--wait="+wait, "--log="+logf)
 			start := time.Now()
 			out, err := c.CombinedOutput()
@@ -633,18 +633,18 @@ func TestWait(t *testing.T) {
 				t.Fatalf("exit: %v (want 3)\n%s", err, out)
 			}
 			took := time.Since(start)
-			time.Sleep(1500 * time.Millisecond) // let a --wait=main orphan try
+			time.Sleep(3500 * time.Millisecond) // let a --wait=main orphan try
 			l, logged := findLog(readLog(t, logf), e.home+"/late")
 			switch wait {
 			case "main":
-				if took > 900*time.Millisecond {
+				if took > 2*time.Second {
 					t.Errorf("--wait=main took %v: waited for the background process", took)
 				}
 				if logged {
 					t.Errorf("--wait=main logged the background write: %+v", l)
 				}
 			case "all":
-				if took < time.Second {
+				if took < 3*time.Second {
 					t.Errorf("--wait=all returned after %v, before the background process", took)
 				}
 				if !logged || l.Decision != "deny" {
