@@ -8,6 +8,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/alban/hallpass/internal/answer"
 	"github.com/alban/hallpass/internal/monitor"
 )
 
@@ -88,7 +89,7 @@ func decidedEntry(d *monitor.Decided, audit bool) logEntry {
 		case o.Path != nil:
 			e.Path = o.Path.Path
 		case o.Proc != nil:
-			e.Path = procPath(o.Proc)
+			e.Path = answer.ProcPath(o.Proc)
 		default:
 			e.Path = ""
 		}
