@@ -97,12 +97,21 @@ func (m *Monitor) handle(l *listener, n seccomp.Notif) {
 		return
 	}
 	if m.kernel != nil {
-		// Paths of a process in another mount namespace or chroot cannot
-		// be resolved here: let the kernel's rules decide.
-		if same, err := procfs.SameView(n.PID); err == nil && !same {
+		// Paths of a process in another mount namespace or chroot than
+		// the one the rules are written for cannot be resolved here: let
+		// the kernel's rules decide.
+		ref := 0
+		if m.procRoot {
+			ref = l.root
+		}
+		if same, err := procfs.SameView(n.PID, ref); err == nil && !same {
 			m.toBPF(l, n, sc, op)
 			return
 		}
+	}
+	root := "/"
+	if m.procRoot {
+		root = procfs.ProcRoot(n.PID)
 	}
 
 	var items []item
@@ -121,7 +130,7 @@ func (m *Monitor) handle(l *listener, n seccomp.Notif) {
 		if pa.DirFD >= 0 {
 			dirfd = procfs.DirFDArg(n.Args[pa.DirFD])
 		}
-		t, err := procfs.Resolve(n.PID, dirfd, raw, followLast(sc, n, i))
+		t, err := procfs.Resolve(n.PID, root, dirfd, raw, followLast(sc, n, i))
 		if err != nil {
 			obj := rules.Object{Path: &rules.PathObject{Path: raw}}
 			m.deny(l, n, sc, op, []rules.Object{obj}, []Reason{{Builtin: "unresolvable"}})
@@ -133,7 +142,11 @@ func (m *Monitor) handle(l *listener, n seccomp.Notif) {
 			it.decided, it.why = true, Reason{Builtin: "special-file"}
 		default:
 			if tid, name, ok := procfs.PidFile(t.Path); ok {
-				if m.ownProc(tid) {
+				if m.procRoot {
+					// A pid of the workload's procfs.
+					tid, ok = procfs.HostTID(n.PID, tid)
+				}
+				if ok && m.ownProc(tid) {
 					// Processes of the workload may tune each other
 					// (e.g. oom_score_adj).
 					it.decided, it.why = true, Reason{Builtin: "own-proc"}

@@ -58,7 +58,7 @@ func TestResolve(t *testing.T) {
 		{proj + "/./dir/../dir/f", true, proj + "/dir/f"},
 		{proj + "/missing/../f", true, proj + "/f"},
 	} {
-		got, err := Resolve(pid, AtFDCWD, tc.raw, tc.follow)
+		got, err := Resolve(pid, "/", AtFDCWD, tc.raw, tc.follow)
 		if err != nil {
 			t.Errorf("Resolve(%s): %v", tc.raw, err)
 			continue
@@ -68,7 +68,7 @@ func TestResolve(t *testing.T) {
 		}
 	}
 
-	if _, err := Resolve(pid, AtFDCWD, proj+"/loop/f", true); err == nil {
+	if _, err := Resolve(pid, "/", AtFDCWD, proj+"/loop/f", true); err == nil {
 		t.Error("symlink loop: want error")
 	}
 }
@@ -79,7 +79,7 @@ func TestResolveRelative(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Chdir(dir)
-	got, err := Resolve(uint32(os.Getpid()), AtFDCWD, "a/../b", true)
+	got, err := Resolve(uint32(os.Getpid()), "/", AtFDCWD, "a/../b", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestResolveRelative(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer f.Close()
-	got, err = Resolve(uint32(os.Getpid()), int64(f.Fd()), "c", true)
+	got, err = Resolve(uint32(os.Getpid()), "/", int64(f.Fd()), "c", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,12 +108,141 @@ func TestResolveProcSelf(t *testing.T) {
 	}
 	defer r.Close()
 	defer w.Close()
-	got, err := Resolve(uint32(os.Getpid()), AtFDCWD, "/proc/self/fd/"+strconv.Itoa(int(w.Fd())), true)
+	got, err := Resolve(uint32(os.Getpid()), "/", AtFDCWD, "/proc/self/fd/"+strconv.Itoa(int(w.Fd())), true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Special == "" {
 		t.Errorf("pipe via /proc/self/fd: got %+v, want Special", got)
+	}
+}
+
+// TestResolveRoot resolves paths below a fake root, as the node agent does
+// below /proc/<pid>/root: absolute symlinks and ".." stay inside it, and
+// the results are relative to it.
+func TestResolveRoot(t *testing.T) {
+	outside, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(outside, "root")
+	for _, d := range []string{"root/workspace/dir", "root/etc", "workspace", "etc"} {
+		if err := os.MkdirAll(filepath.Join(outside, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	links := map[string]string{
+		"workspace/abs":     "/etc",               // the root's /etc, not the host's
+		"workspace/rel":     "../etc",             // inside the root
+		"workspace/escape":  "../../../../../etc", // ".." stops at the root
+		"workspace/viaabs":  "/workspace/dir/..",  // ".." after an absolute link
+		"workspace/new":     "/newdir/f",          // dangling, absolute
+		"workspace/dotdots": "/../../workspace/dir",
+	}
+	for l, dst := range links {
+		if err := os.Symlink(dst, filepath.Join(root, l)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pid := uint32(os.Getpid())
+	for _, tc := range []struct {
+		raw    string
+		follow bool
+		want   string
+	}{
+		{"/workspace/dir/f", true, "/workspace/dir/f"},
+		{"/workspace/abs/f", true, "/etc/f"},
+		{"/workspace/rel/f", true, "/etc/f"},
+		{"/workspace/escape/f", true, "/etc/f"},
+		{"/../../../workspace/f", true, "/workspace/f"},
+		{"/workspace/viaabs/f", true, "/workspace/f"},
+		{"/workspace/new", true, "/newdir/f"},
+		{"/workspace/new", false, "/workspace/new"},
+		{"/workspace/dotdots/f", true, "/workspace/dir/f"},
+		{"/workspace/abs", false, "/workspace/abs"},
+	} {
+		got, err := Resolve(pid, root, AtFDCWD, tc.raw, tc.follow)
+		if err != nil {
+			t.Errorf("Resolve(%s): %v", tc.raw, err)
+			continue
+		}
+		if got.Path != tc.want {
+			t.Errorf("Resolve(%s, follow=%v) = %s, want %s", tc.raw, tc.follow, got.Path, tc.want)
+		}
+	}
+
+	// Relative paths start from a directory fd below the root, named by the
+	// kernel from our root.
+	f, err := os.Open(filepath.Join(root, "workspace"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	got, err := Resolve(pid, root, int64(f.Fd()), "abs/../x", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Path != "/x" {
+		t.Errorf("dirfd below the root: got %s, want /x", got.Path)
+	}
+	// A dirfd outside the root cannot be named in it.
+	g, err := os.Open(filepath.Join(outside, "workspace"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+	if got, err := Resolve(pid, root, int64(g.Fd()), "x", true); err == nil {
+		t.Errorf("dirfd outside the root: got %+v, want an error", got)
+	}
+	// So does a magic link to a file outside it.
+	if err := os.MkdirAll(filepath.Join(root, "proc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(outside, "etc"), filepath.Join(root, "proc", "magic")); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := Resolve(pid, root, AtFDCWD, "/proc/magic/f", true); err == nil {
+		t.Errorf("magic link outside the root: got %+v, want an error", got)
+	}
+	if err := os.Symlink(filepath.Join(root, "etc"), filepath.Join(root, "proc", "inside")); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := Resolve(pid, root, AtFDCWD, "/proc/inside/f", true); err != nil || got.Path != "/etc/f" {
+		t.Errorf("magic link inside the root: got %+v, %v, want /etc/f", got, err)
+	}
+}
+
+// TestResolveProcRoot resolves through /proc/self/root, the agent's case
+// for a process sharing its view: the same as from "/".
+func TestResolveProcRoot(t *testing.T) {
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/proc/self", filepath.Join(dir, "self")); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	pid := uint32(os.Getpid())
+	for _, raw := range []string{"a", dir + "/b", "self/cwd/c"} {
+		want, err := Resolve(pid, "/", AtFDCWD, raw, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := Resolve(pid, ProcRoot(pid), AtFDCWD, raw, true)
+		if err != nil || got != want {
+			t.Errorf("Resolve(%s) from %s = %+v, %v; want %+v", raw, ProcRoot(pid), got, err, want)
+		}
+	}
+}
+
+func TestHostTID(t *testing.T) {
+	pid := os.Getpid()
+	if got, ok := HostTID(uint32(pid), pid); !ok || got != pid {
+		t.Errorf("HostTID(self) = %d, %v; want %d", got, ok, pid)
+	}
+	if ok, err := SameView(uint32(pid), pid); err != nil || !ok {
+		t.Errorf("SameView(self, self) = %v, %v", ok, err)
 	}
 }
 

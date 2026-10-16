@@ -181,7 +181,12 @@ type fixture struct {
 
 func setup(t *testing.T, k Kernel, decided bool) *fixture {
 	t.Helper()
-	m, err := New(Config{Kernel: k})
+	return setupConfig(t, Config{Kernel: k}, decided)
+}
+
+func setupConfig(t *testing.T, cfg Config, decided bool) *fixture {
+	t.Helper()
+	m, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -446,6 +451,34 @@ func TestUnresolvable(t *testing.T) {
 	fx.f.expect(t, id, int32(unix.EACCES))
 	d := fx.next(t, func(ev Event) bool { return ev.Decided != nil }).Decided
 	if d.Allowed || d.Why[0].Builtin != "unresolvable" {
+		t.Fatalf("decided %+v", d)
+	}
+}
+
+// TestProcRoot resolves paths through the caller's /proc/<tid>/root, as the
+// node agent does; the test process's root is "/", so the paths are the
+// same. Rule paths are not symlink-resolved: they are paths in the
+// workload's root, not the monitor's.
+func TestProcRoot(t *testing.T) {
+	fx := setupConfig(t, Config{ProcRoot: true}, true)
+	ok := filepath.Join(fx.dir, "ok")
+	link := filepath.Join(fx.dir, "link")
+	if err := os.Symlink(ok, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.m.Apply(Decision{AddRules: []rules.Rule{tree(link, rules.Allow), tree(ok+"/no", rules.Deny)}}); err != nil {
+		t.Fatal(err)
+	}
+	_, rs, _ := fx.m.Snapshot()
+	if rs[0].Object.Path.Path != link {
+		t.Errorf("rule path %s, want %s as given", rs[0].Object.Path.Path, link)
+	}
+	fx.f.expect(t, fx.f.mkdir(link+"/no/a"), int32(unix.EACCES))
+	// The workload's own /proc files, named through its procfs.
+	id := fx.f.send(unix.SYS_OPENAT, map[int]string{1: "/proc/self/oom_score_adj"}, map[int]uint64{2: unix.O_WRONLY})
+	fx.f.expect(t, id, 0)
+	d := fx.next(t, func(ev Event) bool { return ev.Decided != nil && ev.Decided.Syscall == "openat" }).Decided
+	if !d.Allowed || d.Why[0].Builtin != "own-proc" {
 		t.Fatalf("decided %+v", d)
 	}
 }

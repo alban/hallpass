@@ -42,6 +42,13 @@ type Notifier interface {
 // Config configures a monitor.
 type Config struct {
 	Kernel Kernel // nil: lite mode
+	// ProcRoot resolves each path through the calling thread's root
+	// directory, /proc/<tid>/root, and reports it relative to that root:
+	// for a monitor outside the workload's mount namespace, such as the
+	// node agent for a container. Rule paths are then paths in that root
+	// too, taken as they are: their symlinks are not resolved. False: the
+	// workload shares the monitor's view (the CLI).
+	ProcRoot bool
 }
 
 var (
@@ -164,9 +171,10 @@ var pollPeriod = time.Second
 
 // Monitor mediates one workload.
 type Monitor struct {
-	kernel Kernel
-	table  []seccomp.Rule
-	now    func() time.Time
+	kernel   Kernel
+	procRoot bool
+	table    []seccomp.Rule
+	now      func() time.Time
 
 	// kmu serializes kernel syncs and mount checks. It is taken before mu.
 	kmu sync.Mutex
@@ -201,12 +209,13 @@ type listener struct {
 // New returns a monitor for one workload.
 func New(cfg Config) (*Monitor, error) {
 	m := &Monitor{
-		kernel:  cfg.Kernel,
-		table:   seccomp.Rules(true),
-		now:     time.Now,
-		pending: map[uint64]*request{},
-		byKey:   map[string]*request{},
-		restart: map[string]time.Time{},
+		kernel:   cfg.Kernel,
+		procRoot: cfg.ProcRoot,
+		table:    seccomp.Rules(true),
+		now:      time.Now,
+		pending:  map[uint64]*request{},
+		byKey:    map[string]*request{},
+		restart:  map[string]time.Time{},
 	}
 	m.idle = sync.NewCond(&m.mu)
 	return m, nil
@@ -432,8 +441,10 @@ func (m *Monitor) check(r *rules.Rule) error {
 			return fmt.Errorf("monitor: rule path %q is not absolute", o.Path.Path)
 		}
 		p := filepath.Clean(o.Path.Path)
-		if res, err := filepath.EvalSymlinks(p); err == nil {
-			p = res
+		if !m.procRoot {
+			if res, err := filepath.EvalSymlinks(p); err == nil {
+				p = res
+			}
 		}
 		r.Object.Path = &rules.PathMatch{Path: p, Tree: o.Path.Tree}
 	}

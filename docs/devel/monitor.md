@@ -293,6 +293,9 @@ package monitor
 
 type Config struct {
 	Kernel Kernel // nil: lite mode
+	// ProcRoot resolves paths through the caller's /proc/<tid>/root, and
+	// reports them relative to it (the node agent, see kubernetes.md).
+	ProcRoot bool
 }
 
 // New returns a monitor for one workload.
