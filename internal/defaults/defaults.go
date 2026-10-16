@@ -24,6 +24,7 @@ const Set = "implicit"
 
 // Defaults is the policy of a session, before any answer.
 type Defaults struct {
+	canon   func(string) string
 	home    string
 	workdir string
 	tmpdir  string
@@ -43,22 +44,43 @@ type warnLoc struct {
 // when they exist, symlink-resolved so they compare equal to resolved
 // targets. An empty workdir grants no project directory (--no-implicit).
 func New(home, workdir string, allow, deny []string) *Defaults {
+	return build(canon, home, workdir, allow, deny)
+}
+
+// NewLexical is New for paths in another mount namespace (a container's):
+// they are only cleaned, not symlink-resolved, since the symlinks of the
+// caller's view of the filesystem do not apply to them.
+func NewLexical(home, workdir string, allow, deny []string) *Defaults {
+	return build(filepath.Clean, home, workdir, allow, deny)
+}
+
+func build(canon func(string) string, home, workdir string, allow, deny []string) *Defaults {
 	home = canon(home)
 	if workdir != "" {
 		workdir = canon(workdir)
 	}
+	all := func(in []string) []string {
+		out := make([]string, 0, len(in))
+		for _, p := range in {
+			if p != "" {
+				out = append(out, canon(p))
+			}
+		}
+		return out
+	}
 	return &Defaults{
+		canon:   canon,
 		home:    home,
 		workdir: workdir,
-		allow:   canonAll(allow),
-		deny:    canonAll(deny),
-		warn:    sensitiveLocations(home),
+		allow:   all(allow),
+		deny:    all(deny),
+		warn:    sensitiveLocations(canon, home),
 	}
 }
 
 // SetTmpdir makes dir, the session's $TMPDIR, writable without asking.
 func (d *Defaults) SetTmpdir(dir string) {
-	d.tmpdir = canon(dir)
+	d.tmpdir = d.canon(dir)
 	d.allow = append(d.allow, d.tmpdir)
 }
 
@@ -66,7 +88,7 @@ func (d *Defaults) SetTmpdir(dir string) {
 // writable without asking.
 func (d *Defaults) AllowDevice(path string) {
 	if path != "" {
-		d.allow = append(d.allow, canon(path))
+		d.allow = append(d.allow, d.canon(path))
 	}
 }
 
@@ -89,7 +111,7 @@ var sensitiveLabels = map[string]string{
 }
 
 // sensitiveLocations resolves sensitiveLabels against home, sorted by path.
-func sensitiveLocations(home string) []warnLoc {
+func sensitiveLocations(canon func(string) string, home string) []warnLoc {
 	out := make([]warnLoc, 0, len(sensitiveLabels))
 	for name, label := range sensitiveLabels {
 		out = append(out, warnLoc{path: canon(filepath.Join(home, name)), label: label})
@@ -282,14 +304,4 @@ func canon(p string) string {
 		return r
 	}
 	return p
-}
-
-func canonAll(in []string) []string {
-	out := make([]string, 0, len(in))
-	for _, p := range in {
-		if p != "" {
-			out = append(out, canon(p))
-		}
-	}
-	return out
 }

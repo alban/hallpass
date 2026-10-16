@@ -4,6 +4,8 @@
 package defaults
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -84,6 +86,30 @@ func TestAllowDevice(t *testing.T) {
 	}
 	if got := eval(rs, "/dev/pts/8"); got != "ask" {
 		t.Errorf("other terminal: %s", got)
+	}
+}
+
+// TestLexical checks that container paths are not resolved against the
+// caller's filesystem.
+func TestLexical(t *testing.T) {
+	dir := t.TempDir()
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink("/etc", link); err != nil {
+		t.Fatal(err)
+	}
+	d := NewLexical("/root", "", []string{link + "/"}, []string{"/var/run/secrets"})
+	rs := d.Rules()
+	if got := eval(rs, link+"/f"); got != "allow" {
+		t.Errorf("%s/f: %s, want allow", link, got)
+	}
+	if got := eval(rs, "/etc/f"); got != "ask" {
+		t.Errorf("/etc/f: %s, want ask", got)
+	}
+	if got := eval(rs, "/var/run/secrets/token"); got != "deny" {
+		t.Errorf("secret: %s, want deny", got)
+	}
+	if d.Warn("/root/.ssh/id") == "" {
+		t.Errorf("/root/.ssh not flagged")
 	}
 }
 
