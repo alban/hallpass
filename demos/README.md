@@ -2,12 +2,14 @@
 
 Each demo is a directory with its recording script. The [Makefile](Makefile) finds them, encodes every recording the same way into `media/NAME.mp4` and takes a poster frame into `media/NAME.png`. The README shows the posters; the [documentation](../docs/index.md) plays the videos (`docs/assets/demos` links to `media/`).
 
-| Demo | Source | Recorded with |
-|------|--------|---------------|
-| Terminal | [`terminal/demo.tape`](terminal/demo.tape) | [VHS](https://github.com/charmbracelet/vhs) |
-| Web UI | [`web/record.js`](web/record.js) | Puppeteer |
+| Demo | Source | Shown in | Recorded with |
+|------|--------|----------|---------------|
+| Shell | [`shell/demo.tape`](shell/demo.tape) | README, home page | [VHS](https://github.com/charmbracelet/vhs) |
+| Copilot | [`copilot/demo.tape`](copilot/demo.tape) | home page | VHS, with copilot |
+| Coalesce | [`coalesce/demo.tape`](coalesce/demo.tape) | How it works | VHS |
+| Web UI | [`web/record.js`](web/record.js) | Usage | Puppeteer |
 
-[`example/`](example) is a small C project that both demos work in.
+[`example/`](example) is a small C project that the demos work in.
 
 ```console
 $ make -C demos list       # list the demos and their outputs
@@ -27,28 +29,27 @@ Create `NAME/demo.tape` for a terminal demo or `NAME/record.js` for a browser de
 - A browser script gets its settings from the environment: `HALLPASS` (the binary), `CHROMIUM`, `PROFILE` (a scratch Chromium profile), `WORKDIR` (the fresh directory) and `OUT` (the webm to write). [`web/record.js`](web/record.js) is the model to copy.
 - `NAME/poster-at` holds the second the poster is taken from (default 1): pick a frame that tells what the demo is about.
 
-Then show it in the documentation, the paths relative to the page's URL:
+Then show it in the documentation, the paths relative to the page's URL, with a one-line caption saying what to watch for:
 
 ```html
 <video src="assets/demos/NAME.mp4" poster="assets/demos/NAME.png" controls muted playsinline></video>
+
+*What to watch for.*
 ```
 
-## Terminal
+## Terminal demos
 
-`terminal.mp4` shows two scenarios:
+Requirements: `vhs` (with `ttyd` and a Chromium; on arm64 Linux, `snap install chromium`) and `ffmpeg` (with libx264). Title cards and `#` comments typed in the shell explain each step.
 
-1. A shell in the sandbox: writing in the project goes through, appending to `~/.bashrc` is asked and denied, and Ctrl-] shows the session's rules.
-2. `copilot --yolo` asked to "Build and install the project" in [`example/`](example). The `install` step copies the built binary into `~/.local/bin`, outside the project, so hallpass asks and the write is denied. A fast model (`--model claude-haiku-4.5`) keeps the agent's turn short.
+- `shell.mp4` (no agent, the same at every run apart from pids): a shell in the sandbox. Writing in the project goes through, appending to `~/.bashrc` is asked and denied, and Ctrl-] shows the session's rules.
+- `coalesce.mp4` (no agent): eight parallel `touch` under one folder outside the project give one prompt; "always" allows the folder, settles all eight, and shows as a rule. It runs with `HOME` in `$DEMO_DIR`.
+- `copilot.mp4`: `copilot --yolo` asked to "Build and install the project" in [`example/`](example). The `install` step copies the built binary into `~/.local/bin`, outside the project, so hallpass asks and the write is denied. A fast model (`--model claude-haiku-4.5`) keeps the agent's turn short. The agent's answers vary from run to run.
 
-Title cards and `#` comments typed in the shell explain each step.
-
-Requirements: `vhs` (with `ttyd` and a Chromium; on arm64 Linux, `snap install chromium`), `ffmpeg` (with libx264), and `copilot`, logged in.
-
-The tape copies `example/` to `/tmp/hallpass-demo`, outside any git repository, so that copilot works on it alone. Copilot asks whether to trust a new folder, which the tape does not answer: trust it once beforehand.
+The copilot demo needs `copilot`, logged in. Its tape copies `example/` to `/tmp/hallpass-demo`, outside any git repository, so that copilot works on it alone. Copilot asks whether to trust a new folder, which the tape does not answer: trust it once beforehand.
 
 ```console
 $ cp -r demos/example /tmp/hallpass-demo && (cd /tmp/hallpass-demo && copilot)   # trust the folder, then /exit
-$ make -C demos terminal   # about 2 minutes
+$ make -C demos copilot   # about 2 minutes
 ```
 
 ## Web UI
