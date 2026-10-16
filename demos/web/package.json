@@ -1,0 +1,12 @@
+{
+  "name": "hallpass-web-demo",
+  "private": true,
+  "description": "Records demos/web.mp4: a terminal and hallpass web side by side. See demos/README.md.",
+  "license": "Apache-2.0",
+  "scripts": {
+    "record": "node record.js"
+  },
+  "dependencies": {
+    "puppeteer-core": "^25.13.0"
+  }
+}

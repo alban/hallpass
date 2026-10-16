@@ -20,3 +20,23 @@ $ make -C demos hallpass.gif   # build hallpass and record, about 2 minutes
 ```
 
 `vhs` is looked up in `$PATH` (`go install` puts it in `~/go/bin`); override with `make VHS=/path/to/vhs`. The agent's answers vary from run to run: check the result before committing it.
+
+## Web UI
+
+`web.mp4` shows a terminal (left) and [`hallpass web`](../docs/usage.md#web-ui-experimental) in a browser (right) side by side. A shell runs under hallpass in [`example/`](example): `make` writes in the project without a question; appending to `~/.bashrc` is asked in both places and denied from the browser, and the terminal prompt goes away; `make install` creates `~/.local/bin`, answered "Always" from the browser, which also covers the copy that follows. The Activity view (filtered on "answered") and the Rules view show the result.
+
+No agent: [`web/record.js`](web/record.js) scripts the whole timeline, so every recording is the same apart from pids and times. It runs one headless Chromium page that frames a [ttyd](https://github.com/tsl0922/ttyd) terminal and `hallpass web` (whose `frame-ancestors`/`X-Frame-Options` headers it drops in that browser only), types the commands, clicks the answers with a drawn pointer and records the page with Puppeteer's screencast; `ffmpeg` then encodes the mp4. The session gets its own `HOME`, `XDG_RUNTIME_DIR` and `XDG_CONFIG_HOME` in a fresh directory, so `hallpass web` only sees this session and the demo commands never write in your home.
+
+### Recording
+
+Requirements: Go, `node` and `npm`, `ttyd`, `ffmpeg` (with libx264), and Chromium (on Ubuntu, `snap install chromium`). The Makefile runs `npm ci` in `web/` to install `puppeteer-core`.
+
+```console
+$ make -C demos web.mp4   # build hallpass and record, about 1 minute
+```
+
+Variables (`make VAR=value`):
+
+- `CHROMIUM`: the browser, default `/snap/bin/chromium`.
+- `CHROMIUM_PROFILE`: a scratch profile, created and removed by the recording. The snap can only write under `~/snap/chromium/common/`, hence the default `~/snap/chromium/common/hallpass-demo-web`; any directory works with a non-snap Chromium.
+- `WEB_TMPDIR`: where the run directory (HOME, project, sockets, raw recording) is created with `mktemp`, default `$TMPDIR` or `/tmp`. It is removed after a successful run, kept on failure with a screenshot of the page (`raw.webm.error.png`). Its path shows in the video: keep it short.
