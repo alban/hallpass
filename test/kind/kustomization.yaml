@@ -1,0 +1,10 @@
+# Copyright The hallpass Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# The node agent with the image built by test/kind/e2e.sh.
+resources:
+  - ../../deploy/kubernetes
+images:
+  - name: ghcr.io/alban/hallpass-node
+    newName: hallpass-node
+    newTag: e2e

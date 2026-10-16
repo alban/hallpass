@@ -19,6 +19,12 @@ all:
 hallpass-node:
 	CGO_ENABLED=0 go build -tags '$(GO_TAGS)' -o hallpass-node ./cmd/hallpass-node
 
+# End-to-end test of hallpass-node on a kind cluster (see test/kind/e2e.sh).
+# Needs docker, kind, kubectl and network access to Docker Hub.
+.PHONY: test-kind
+test-kind:
+	test/kind/e2e.sh
+
 # Run the tests in a VM booting ci-kernels:KERNEL_VERSION, which has BPF-LSM
 # active. Needs vimto (CGO_ENABLED=0 go install lmb.io/vimto@latest) and qemu.
 # Without /dev/kvm, qemu emulates the CPU: slower, but it works. Everything is

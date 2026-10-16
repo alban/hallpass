@@ -1,0 +1,79 @@
+# Copyright The hallpass Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# The e2e test workloads (test/kind/e2e.sh).
+apiVersion: hallpass.io/v1alpha1
+kind: HallpassPolicy
+metadata:
+  name: e2e
+spec:
+  allow: [/workspace/**]
+  ask: true
+  askTimeout: 3m
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: hallpass-e2e
+  labels:
+    hallpass.io/enabled: "true"
+---
+# Annotated, but its namespace is not selected: not mediated.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: hallpass-e2e-off
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mediated
+  namespace: hallpass-e2e
+  annotations:
+    hallpass.io/policy: e2e
+spec:
+  restartPolicy: Never
+  containers:
+    - name: agent
+      image: BUSYBOX
+      command:
+        - sh
+        - -c
+        - |
+          try() { if echo x > "$1" 2>/dev/null; then echo "$2=ok"; else echo "$2=denied"; fi; }
+          try /workspace/allowed allowed
+          try /etc/once once
+          try /etc/denied denied
+      volumeMounts:
+        - name: workspace
+          mountPath: /workspace
+  volumes:
+    - name: workspace
+      emptyDir: {}
+---
+# Selected namespace, no annotation: not mediated.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: plain
+  namespace: hallpass-e2e
+spec:
+  restartPolicy: Never
+  containers:
+    - name: plain
+      image: BUSYBOX
+      command: [sh, -c, "echo x > /etc/plain && echo plain=ok"]
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: unselected
+  namespace: hallpass-e2e-off
+  annotations:
+    hallpass.io/policy: e2e
+spec:
+  restartPolicy: Never
+  containers:
+    - name: unselected
+      image: BUSYBOX
+      command: [sh, -c, "echo x > /etc/unselected && echo unselected=ok"]

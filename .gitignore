@@ -7,3 +7,4 @@
 # Editor files (vim/gvim swap files, backups)
 .*.sw[a-p]
 *~
+/.e2e-work.*
