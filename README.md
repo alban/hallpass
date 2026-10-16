@@ -16,7 +16,7 @@ $ hallpass -allow ~/.copilot -allow ~/.cache/copilot -- copilot
 
 Agents keep their own state (sessions, logs, caches) outside the project: the `-allow` flags let copilot write it without asking. They are optional: without them, hallpass asks you when copilot writes there, which is a good way to see what an agent touches. Other agents (claude, codex, gemini, agy, aider, ...) work the same, with their own directories; plain `hallpass` starts a shell.
 
-![hallpass denying a write to ~/.bashrc from a shell, then denying copilot's install step from copying a binary into ~/.local/bin](demos/hallpass.gif)
+[![hallpass denying a write to ~/.bashrc from a shell, then denying copilot's install step from copying a binary into ~/.local/bin. Click to watch the video.](demos/media/terminal.png)](https://alban.github.io/hallpass/)
 
 Everything the agent starts (shells, compilers, `git`, `npm`, scripts) inherits the sandbox. Writes inside the project directory go through without asking. Writes anywhere else make hallpass pause the process and ask you in a bar drawn over the bottom of your terminal, like a tmux status line:
 

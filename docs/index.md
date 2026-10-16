@@ -7,7 +7,7 @@ $ cd ~/src/myproject
 $ hallpass -- copilot        # or: claude, codex, gemini, agy, aider, ... or just `hallpass` for a shell
 ```
 
-![hallpass denying a write to ~/.bashrc from a shell, then denying copilot's install step from copying a binary into ~/.local/bin](https://raw.githubusercontent.com/alban/hallpass/main/demos/hallpass.gif)
+<video src="assets/demos/terminal.mp4" poster="assets/demos/terminal.png" controls muted playsinline aria-label="hallpass denying a write to ~/.bashrc from a shell, then denying copilot's install step from copying a binary into ~/.local/bin"></video>
 
 Everything the agent starts (shells, compilers, `git`, `npm`, scripts) inherits the sandbox. Writes inside the project directory go through without asking. Writes anywhere else pause the process and ask you, in a bar drawn over the bottom of your terminal or as a desktop notification.
 
