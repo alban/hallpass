@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestResolve(t *testing.T) {
@@ -98,6 +100,69 @@ func TestResolveRelative(t *testing.T) {
 	}
 	if got.Path != dir+"/c" {
 		t.Errorf("dirfd: got %s, want %s", got.Path, dir+"/c")
+	}
+}
+
+func TestResolveDetached(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs root: fsopen")
+	}
+	pid := uint32(os.Getpid())
+	mount := func(fstype string) int {
+		fs, err := unix.Fsopen(fstype, unix.FSOPEN_CLOEXEC)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer unix.Close(fs)
+		if err := unix.FsconfigCreate(fs); err != nil {
+			t.Fatal(err)
+		}
+		m, err := unix.Fsmount(fs, unix.FSMOUNT_CLOEXEC, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { unix.Close(m) })
+		return m
+	}
+
+	// A detached tmpfs names its files "/x": not a path of our root.
+	tmp := mount("tmpfs")
+	if got, err := Resolve(pid, "/", int64(tmp), "x", true); err == nil {
+		t.Errorf("detached tmpfs: got %+v, want an error", got)
+	}
+
+	// runc reopens its exec FIFO through a detached procfs.
+	proc := mount("proc")
+	fds, err := unix.Openat(proc, "self/fd", unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(fds)
+	dir := t.TempDir()
+	fifo := filepath.Join(dir, "fifo")
+	if err := unix.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ff, err := os.OpenFile(fifo, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ff.Close()
+	reg, err := os.Create(filepath.Join(dir, "file"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reg.Close()
+
+	n := strconv.Itoa(int(ff.Fd()))
+	if got, err := Resolve(pid, "/", int64(fds), n, true); err != nil || got.Special != "fifo:"+n {
+		t.Errorf("FIFO: got %+v, %v", got, err)
+	}
+	if got, err := Resolve(pid, "/", int64(fds), strconv.Itoa(int(reg.Fd())), true); err == nil {
+		t.Errorf("regular file: got %+v, want an error", got)
+	}
+	if got, err := Resolve(pid, "/", int64(fds), "../fd/"+n, true); err == nil {
+		t.Errorf("FIFO through ..: got %+v, want an error", got)
 	}
 }
 

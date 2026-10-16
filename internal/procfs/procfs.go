@@ -111,9 +111,59 @@ func Resolve(pid uint32, root string, dirfd int64, raw string, followLast bool) 
 		if dir, err = r.inside(dir); err != nil {
 			return Target{}, fmt.Errorf("dirfd %d: %w", dirfd, err)
 		}
+		if !sameFile(r.host(dir), base) {
+			// The name is not the directory's: it is on a mount the
+			// target's root does not reach, such as a detached mount
+			// (fsmount, open_tree), or it was deleted.
+			return unnamed(base, raw, dirfd)
+		}
 		start = dir + "/" + raw
 	}
 	return r.walk(start, followLast)
+}
+
+// sameFile reports whether paths a and b are the same file.
+func sameFile(a, b string) bool {
+	var sa, sb unix.Stat_t
+	if unix.Stat(a, &sa) != nil || unix.Stat(b, &sb) != nil {
+		return false
+	}
+	return sa.Dev == sb.Dev && sa.Ino == sb.Ino
+}
+
+// unnamed resolves raw relative to a directory that has no name in the
+// target's root (base, its /proc/<pid>/{cwd,fd/<n>}). Only one case is
+// known to be harmless: a magic link of a procfs to a FIFO or a socket,
+// which is not a filesystem write. runc does this between loading the
+// container's seccomp filter and exec'ing its process: it reopens its
+// exec FIFO through a detached procfs mount, openat(<.../fd>, "N",
+// O_WRONLY). Anything else cannot be named: an error.
+func unnamed(base, raw string, dirfd int64) (Target, error) {
+	fail := fmt.Errorf("dirfd %d is not reachable from the root", dirfd)
+	if strings.Contains(raw, "/") || raw == "." || raw == ".." {
+		return Target{}, fail
+	}
+	var fs unix.Statfs_t
+	if err := unix.Statfs(base, &fs); err != nil || fs.Type != unix.PROC_SUPER_MAGIC {
+		return Target{}, fail
+	}
+	p := base + "/" + raw
+	fi, err := os.Lstat(p)
+	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		return Target{}, fail
+	}
+	// A magic link is not resolved as a path: following it reaches the
+	// same file from any root.
+	if fi, err = os.Stat(p); err != nil {
+		return Target{}, fail
+	}
+	switch fi.Mode().Type() {
+	case os.ModeNamedPipe:
+		return Target{Special: "fifo:" + raw}, nil
+	case os.ModeSocket:
+		return Target{Special: "socket:" + raw}, nil
+	}
+	return Target{}, fail
 }
 
 // rootView is how the target sees the filesystem: below root, with its own
