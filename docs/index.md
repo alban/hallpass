@@ -7,11 +7,17 @@ $ cd ~/src/myproject
 $ hallpass -- copilot        # or: claude, codex, gemini, agy, aider, ... or just `hallpass` for a shell
 ```
 
-<video src="assets/demos/terminal.mp4" poster="assets/demos/terminal.png" controls muted playsinline aria-label="hallpass denying a write to ~/.bashrc from a shell, then denying copilot's install step from copying a binary into ~/.local/bin"></video>
+<video src="assets/demos/shell.mp4" poster="assets/demos/shell.png" controls muted playsinline aria-label="a shell under hallpass: a write in the project goes through, a write to ~/.bashrc is asked and denied, Ctrl-] shows the rules"></video>
+
+*A write in the project goes through; appending to `~/.bashrc` pauses the shell until you answer.*
 
 Everything the agent starts (shells, compilers, `git`, `npm`, scripts) inherits the sandbox. Writes inside the project directory go through without asking. Writes anywhere else pause the process and ask you, in a bar drawn over the bottom of your terminal or as a desktop notification.
 
 hallpass is enforced by the kernel, from outside the agent, so it does not depend on the agent being well-behaved. It complements the agent's own permission prompts rather than replacing them.
+
+<video src="assets/demos/copilot.mp4" poster="assets/demos/copilot.png" controls muted playsinline aria-label="copilot --yolo under hallpass: its install step wants to copy a binary into ~/.local/bin, hallpass asks and the write is denied"></video>
+
+*`copilot --yolo` skips its own permission prompts, but its `make install` into `~/.local/bin` is still asked, by the `cp` that makes the write.*
 
 ## Two modes
 

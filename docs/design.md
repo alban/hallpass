@@ -36,4 +36,8 @@ Prompts are designed not to overwhelm you:
 - identical pending requests (for example from `make -j`) are coalesced;
 - an "allow for 5 minutes" or "always" answer settles every pending request under that folder.
 
+<video src="../assets/demos/coalesce.mp4" poster="../assets/demos/coalesce.png" controls muted playsinline aria-label="eight parallel writes under ~/.cache/thumbs give one prompt; answering always creates all eight files and shows as a rule"></video>
+
+*Eight parallel writes under one folder: one question, and "always" lets all eight through.*
+
 The prompt shows the target path and, as a `by:` line, the command that tried the write and its parent chain (for example `cp hello ~/.local/bin/hello ← make ← copilot`), so you can see who is really behind the access. Press Ctrl-] inside a session to see its current rules, including the answers given so far.

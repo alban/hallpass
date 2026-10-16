@@ -112,6 +112,8 @@ hallpass web
 
 <video src="../assets/demos/web.mp4" poster="../assets/demos/web.png" controls muted playsinline aria-label="a shell under hallpass on the left and hallpass web on the right: a write to ~/.bashrc denied from the browser, then ~/.local/bin allowed always"></video>
 
+*The same request shows in the terminal and in the browser; answering in the browser takes the terminal prompt down.*
+
 It is experimental: the browser keeps a cookie that a sandboxed agent could read from the profile, then use to answer its own requests. See [docs/devel/web.md](devel/web.md#security).
 
 ## Requirements
