@@ -37,8 +37,14 @@ service Session {
   rpc Events(EventsRequest) returns (stream EventBatch); // EventOptions.Decided, optional snapshot first
   rpc Apply(Decision) returns (ApplyReply);            // generation, or ErrStale/ErrClosed/ErrUnsupported as status codes
   rpc Answer(AnswerRequest) returns (AnswerReply);     // a terminal answer (once, temp, always, never, deny)
+  rpc List(ListRequest) returns (ListReply);           // the sessions served (one on a session's socket)
 }
 ```
+
+A session's socket serves one session. The Kubernetes node agent serves
+all the sessions of its node on one TCP listener (`sessionapi.Hub`): `List`
+gives their ids, and the other calls select one with the
+`hallpass-session` gRPC metadata.
 
 Messages mirror `monitor.Request`, `Decided`, `Reason`, `rules.Rule`,
 `Subject` and `Fact`. Each pending request also carries its `Prompt`: the

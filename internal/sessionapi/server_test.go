@@ -5,10 +5,14 @@ package sessionapi
 
 import (
 	"context"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/alban/hallpass/internal/monitor"
 	pb "github.com/alban/hallpass/internal/sessionpb"
@@ -69,5 +73,70 @@ func TestDialWrongPID(t *testing.T) {
 	_, err = c.Info(context.Background(), &pb.InfoRequest{})
 	if err == nil || !strings.Contains(err.Error(), "not a hallpass session") {
 		t.Fatalf("Info: %v, want a refusal", err)
+	}
+}
+
+func TestListSocket(t *testing.T) {
+	s := listen(t)
+	conn, c, err := Dial(s.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	l, err := c.List(context.Background(), &pb.ListRequest{})
+	if err != nil || len(l.Sessions) != 1 || l.Sessions[0].Pid != int32(os.Getpid()) {
+		t.Fatalf("List: %v, %v", l, err)
+	}
+}
+
+type labeled struct {
+	fakeSession
+	name string
+}
+
+func (l labeled) Info() *pb.SessionInfo {
+	return &pb.SessionInfo{Labels: map[string]string{"name": l.name}}
+}
+
+func TestHub(t *testing.T) {
+	h := NewHub()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = h.Serve(ln) }()
+	defer h.Stop()
+	for _, id := range []string{"b", "a"} {
+		m, err := monitor.New(monitor.Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer m.Close()
+		h.Add(id, m, labeled{name: "session " + id})
+	}
+
+	conn, c, err := DialHub(ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	ctx := context.Background()
+	l, err := c.List(ctx, &pb.ListRequest{})
+	if err != nil || len(l.Sessions) != 2 || l.Sessions[0].Id != "a" || l.Sessions[1].Labels["name"] != "session b" {
+		t.Fatalf("List: %v, %v", l, err)
+	}
+	info, err := c.Info(WithSession(ctx, "b"), &pb.InfoRequest{})
+	if err != nil || info.Labels["name"] != "session b" {
+		t.Fatalf("Info: %v, %v", info, err)
+	}
+	if _, err := c.Snapshot(WithSession(ctx, "a"), &pb.SnapshotRequest{}); err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if _, err := c.Info(ctx, &pb.InfoRequest{}); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("Info without a session: %v", err)
+	}
+	h.Remove("b")
+	if _, err := c.Info(WithSession(ctx, "b"), &pb.InfoRequest{}); status.Code(err) != codes.NotFound {
+		t.Errorf("Info of a removed session: %v", err)
 	}
 }

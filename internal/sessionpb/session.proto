@@ -5,6 +5,11 @@
 // ($XDG_RUNTIME_DIR/hallpass/<pid>.sock): the monitor API (see
 // docs/devel/monitor.md), plus Info and Answer. Regenerate with
 // `go generate ./internal/sessionpb`.
+//
+// The node agent (cmd/hallpass-node) serves all the sessions of its node
+// on one server: List returns them, and the other calls select one with
+// the "hallpass-session" metadata (a SessionInfo.id). A session's own
+// socket ignores that metadata.
 
 syntax = "proto3";
 
@@ -32,9 +37,18 @@ service Session {
   // the session's policy (the folder of a grant, "never" as an exact
   // deny). NOT_FOUND if the request is no longer pending.
   rpc Answer(AnswerRequest) returns (AnswerReply);
+  // List describes the sessions served; a session's own socket returns
+  // just itself.
+  rpc List(ListRequest) returns (ListReply);
 }
 
 message InfoRequest {}
+
+message ListRequest {}
+
+message ListReply {
+  repeated SessionInfo sessions = 1;
+}
 
 message SessionInfo {
   int32 pid = 1;                  // the supervisor
@@ -45,6 +59,9 @@ message SessionInfo {
   // Unanswered requests are dismissed (denied) after it; 0: never.
   google.protobuf.Duration prompt_timeout = 6;
   map<string, string> labels = 7;
+  // Selects the session on a server serving several (the
+  // "hallpass-session" metadata); empty on a session's own socket.
+  string id = 8;
 }
 
 message SnapshotRequest {}

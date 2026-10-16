@@ -48,11 +48,24 @@ type Session interface {
 
 // Server serves a session on its socket.
 type Server struct {
-	pb.UnimplementedSessionServer
-	m    *monitor.Monitor
-	sess Session
+	service
 	srv  *grpc.Server
 	path string
+}
+
+// entry is a served session.
+type entry struct {
+	m    *monitor.Monitor
+	sess Session
+}
+
+// service implements the API on the sessions that lookup finds.
+type service struct {
+	pb.UnimplementedSessionServer
+	// lookup returns the session a call is for.
+	lookup func(context.Context) (entry, error)
+	// list describes the sessions served.
+	list func() []*pb.SessionInfo
 }
 
 // Listen serves sess and m on SocketPath(os.Getpid()).
@@ -67,7 +80,10 @@ func Listen(m *monitor.Monitor, sess Session) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{m: m, sess: sess, path: path}
+	e := entry{m: m, sess: sess}
+	s := &Server{path: path}
+	s.lookup = func(context.Context) (entry, error) { return e, nil }
+	s.list = func() []*pb.SessionInfo { return []*pb.SessionInfo{sess.Info()} }
 	s.srv = grpc.NewServer(
 		grpc.Creds(peerCreds{}),
 		grpc.UnaryInterceptor(func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, h grpc.UnaryHandler) (any, error) {
@@ -83,7 +99,7 @@ func Listen(m *monitor.Monitor, sess Session) (*Server, error) {
 			return h(srv, ss)
 		}),
 	)
-	pb.RegisterSessionServer(s.srv, s)
+	pb.RegisterSessionServer(s.srv, &s.service)
 	go func() { _ = s.srv.Serve(ln) }()
 	return s, nil
 }
@@ -97,15 +113,23 @@ func (s *Server) Close() {
 	_ = os.Remove(s.path)
 }
 
-func (s *Server) Info(context.Context, *pb.InfoRequest) (*pb.SessionInfo, error) {
-	return s.sess.Info(), nil
+func (s *service) Info(ctx context.Context, _ *pb.InfoRequest) (*pb.SessionInfo, error) {
+	e, err := s.lookup(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return e.sess.Info(), nil
 }
 
-func (s *Server) snapshot() *pb.SnapshotReply {
-	pending, rs, gen := s.m.Snapshot()
+func (s *service) List(context.Context, *pb.ListRequest) (*pb.ListReply, error) {
+	return &pb.ListReply{Sessions: s.list()}, nil
+}
+
+func (e entry) snapshot() *pb.SnapshotReply {
+	pending, rs, gen := e.m.Snapshot()
 	out := &pb.SnapshotReply{Generation: gen}
 	for _, r := range pending {
-		out.Pending = append(out.Pending, toPBRequest(r, s.sess.Prompt(r)))
+		out.Pending = append(out.Pending, toPBRequest(r, e.sess.Prompt(r)))
 	}
 	for _, r := range rs {
 		out.Rules = append(out.Rules, toPBRule(r))
@@ -113,39 +137,47 @@ func (s *Server) snapshot() *pb.SnapshotReply {
 	return out
 }
 
-func (s *Server) Snapshot(context.Context, *pb.SnapshotRequest) (*pb.SnapshotReply, error) {
-	return s.snapshot(), nil
+func (s *service) Snapshot(ctx context.Context, _ *pb.SnapshotRequest) (*pb.SnapshotReply, error) {
+	e, err := s.lookup(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return e.snapshot(), nil
 }
 
-func (s *Server) Events(req *pb.EventsRequest, stream grpc.ServerStreamingServer[pb.EventBatch]) error {
+func (s *service) Events(req *pb.EventsRequest, stream grpc.ServerStreamingServer[pb.EventBatch]) error {
 	ctx := stream.Context()
-	evs := s.m.Events(monitor.EventOptions{Decided: req.GetDecided(), Done: ctx.Done()})
+	e, err := s.lookup(ctx)
+	if err != nil {
+		return err
+	}
+	evs := e.m.Events(monitor.EventOptions{Decided: req.GetDecided(), Done: ctx.Done()})
 	if req.GetSnapshot() {
-		if err := stream.Send(&pb.EventBatch{Snapshot: s.snapshot()}); err != nil {
+		if err := stream.Send(&pb.EventBatch{Snapshot: e.snapshot()}); err != nil {
 			return err
 		}
 	}
 	for batch := range evs {
 		out := &pb.EventBatch{}
 		for _, ev := range batch {
-			e := &pb.Event{}
+			pe := &pb.Event{}
 			switch {
 			case ev.Opened != nil:
-				e.Kind = &pb.Event_Opened{Opened: toPBRequest(ev.Opened, s.sess.Prompt(ev.Opened))}
+				pe.Kind = &pb.Event_Opened{Opened: toPBRequest(ev.Opened, e.sess.Prompt(ev.Opened))}
 			case ev.Closed != nil:
-				e.Kind = &pb.Event_Closed{Closed: &pb.Closed{Id: ev.Closed.ID, Why: toPBReason(ev.Closed.Why)}}
+				pe.Kind = &pb.Event_Closed{Closed: &pb.Closed{Id: ev.Closed.ID, Why: toPBReason(ev.Closed.Why)}}
 			case ev.Rules != 0:
-				e.Kind = &pb.Event_Rules{Rules: ev.Rules}
+				pe.Kind = &pb.Event_Rules{Rules: ev.Rules}
 			case ev.Decided != nil:
-				e.Kind = &pb.Event_Decided{Decided: toPBDecided(ev.Decided)}
+				pe.Kind = &pb.Event_Decided{Decided: toPBDecided(ev.Decided)}
 			case ev.Warning != "":
-				e.Kind = &pb.Event_Warning{Warning: ev.Warning}
+				pe.Kind = &pb.Event_Warning{Warning: ev.Warning}
 			case ev.Dropped != 0:
-				e.Kind = &pb.Event_Dropped{Dropped: ev.Dropped}
+				pe.Kind = &pb.Event_Dropped{Dropped: ev.Dropped}
 			default:
 				continue
 			}
-			out.Events = append(out.Events, e)
+			out.Events = append(out.Events, pe)
 		}
 		if err := stream.Send(out); err != nil {
 			return err
@@ -154,20 +186,28 @@ func (s *Server) Events(req *pb.EventsRequest, stream grpc.ServerStreamingServer
 	return ctx.Err()
 }
 
-func (s *Server) Apply(_ context.Context, d *pb.Decision) (*pb.ApplyReply, error) {
+func (s *service) Apply(ctx context.Context, d *pb.Decision) (*pb.ApplyReply, error) {
+	e, err := s.lookup(ctx)
+	if err != nil {
+		return nil, err
+	}
 	md, err := fromPBDecision(d)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	gen, err := s.m.Apply(md)
+	gen, err := e.m.Apply(md)
 	if err != nil {
 		return nil, toStatus(err)
 	}
 	return &pb.ApplyReply{Generation: gen}, nil
 }
 
-func (s *Server) Answer(_ context.Context, a *pb.AnswerRequest) (*pb.AnswerReply, error) {
-	if err := s.sess.Answer(a.GetRequest(), a.GetAnswer(), a.GetClient()); err != nil {
+func (s *service) Answer(ctx context.Context, a *pb.AnswerRequest) (*pb.AnswerReply, error) {
+	e, err := s.lookup(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := e.sess.Answer(a.GetRequest(), a.GetAnswer(), a.GetClient()); err != nil {
 		return nil, toStatus(err)
 	}
 	return &pb.AnswerReply{}, nil
