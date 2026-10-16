@@ -1,6 +1,6 @@
-// Records demos/web.mp4: a shell under hallpass on the left (ttyd), `hallpass
+// Records demos/media/web.mp4: a shell under hallpass on the left (ttyd), `hallpass
 // web` on the right, both in one headless Chromium page so they stay in sync.
-// See demos/README.md. Run through `make -C demos web.mp4`.
+// See demos/README.md. Run through `make -C demos web`.
 //
 // Environment:
 //   HALLPASS   hallpass binary (required)

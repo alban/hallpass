@@ -1,10 +1,7 @@
-# Records demos/hallpass.gif. See demos/README.md.
+# Records demos/media/terminal.gif. See demos/README.md.
 #
-# Run `make -C demos hallpass.gif`, or from the repository root, after
-# `go build -o hallpass ./cmd/hallpass`:
-#   vhs demos/hallpass.tape
-
-Output demos/hallpass.gif
+# Run `make -C demos terminal`. The Makefile runs it from the repository
+# root and sets the output with `vhs -o`.
 
 Require copilot
 

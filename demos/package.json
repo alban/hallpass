@@ -1,0 +1,9 @@
+{
+  "name": "hallpass-demos",
+  "private": true,
+  "description": "Dependencies of the browser demos (demos/*/record.js). See demos/README.md.",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "puppeteer-core": "^25.13.0"
+  }
+}
