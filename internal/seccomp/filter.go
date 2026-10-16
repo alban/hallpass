@@ -55,10 +55,9 @@ func buildFilter(arch uint32, x32 uint32, rules []Rule) ([]bpf.RawInstruction, e
 				bpf.RetConstant{Val: ret},
 			)
 		case NotifyIfWrite, ErrnoIfNamespace:
-			mask := uint32(writeIntentMask)
+			mask := r.Mask()
 			hit := uint32(retUserNotif)
 			if r.Kind == ErrnoIfNamespace {
-				mask = namespaceMask
 				hit = retErrno | (r.Errno & 0xffff)
 			}
 			ins = append(ins,

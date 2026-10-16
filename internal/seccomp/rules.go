@@ -88,6 +88,19 @@ func commonRules(allowUserns bool) []Rule {
 	return rules
 }
 
+// Mask returns the flag bits tested in FlagsArg by NotifyIfWrite and
+// ErrnoIfNamespace rules: the rule applies when any of them is set. It is 0
+// for the other kinds.
+func (r Rule) Mask() uint32 {
+	switch r.Kind {
+	case NotifyIfWrite:
+		return writeIntentMask
+	case ErrnoIfNamespace:
+		return namespaceMask
+	}
+	return 0
+}
+
 // RuleFor returns the rule for syscall nr, if any.
 func RuleFor(rules []Rule, nr int32) (Rule, bool) {
 	for _, r := range rules {

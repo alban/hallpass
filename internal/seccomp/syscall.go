@@ -37,6 +37,19 @@ func seccompSetFilter(prog []bpf.RawInstruction) (int, error) {
 	return fd, err
 }
 
+// WaitKillableRecvSupported reports whether the kernel knows
+// SECCOMP_FILTER_FLAG_WAIT_KILLABLE_RECV (Linux 5.19+), without loading a
+// filter: the kernel checks the flags before reading the program, so a known
+// flag fails with EFAULT on a NULL program and an unknown one with EINVAL.
+func WaitKillableRecvSupported() bool {
+	_, _, errno := unix.Syscall(unix.SYS_SECCOMP,
+		secompSetModeFilter,
+		filterFlagNewLister|filterFlagWaitKillableRecv,
+		0,
+	)
+	return errno == unix.EFAULT
+}
+
 func setFilter(prog []bpf.RawInstruction, flags uintptr) (int, error) {
 	fprog := sockFprog{
 		length: uint16(len(prog)),
