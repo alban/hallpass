@@ -1,6 +1,6 @@
 # Web UI
 
-Status: design, not implemented.
+Status: work items 1–3 implemented; `hallpass web` is experimental.
 
 `hallpass web` serves a browser UI to watch and answer the requests of
 every running hallpass session of the user, and to explore them: the
@@ -34,14 +34,29 @@ The monitor API one-to-one, plus what a client needs to list sessions:
 service Session {
   rpc Info(InfoRequest) returns (SessionInfo);        // pid, command, cwd, mode, start time
   rpc Snapshot(SnapshotRequest) returns (SnapshotReply); // pending, rules, generation
-  rpc Events(EventsRequest) returns (stream EventBatch); // EventOptions.Decided
+  rpc Events(EventsRequest) returns (stream EventBatch); // EventOptions.Decided, optional snapshot first
   rpc Apply(Decision) returns (ApplyReply);            // generation, or ErrStale/ErrClosed/ErrUnsupported as status codes
+  rpc Answer(AnswerRequest) returns (AnswerReply);     // a terminal answer (once, temp, always, never, deny)
 }
 ```
 
 Messages mirror `monitor.Request`, `Decided`, `Reason`, `rules.Rule`,
-`Subject` and `Fact`. The socket keeps today's peer check: same uid, and
-no seccomp filter (no sandboxed process can call it).
+`Subject` and `Fact`. Each pending request also carries its `Prompt`: the
+text and the choices the terminal would show.
+
+`EventsRequest.snapshot` makes the server subscribe first and then send
+the snapshot in the first batch, so a client misses no event between the
+two. `Decided` events are batched (500 ms quiet, 2 s at most); `Opened`
+and `Closed` go out at once.
+
+Both ends check each other with `SO_PEERCRED`:
+
+- the server keeps today's peer check: same uid, and no seccomp filter
+  (no sandboxed process can call it);
+- the client (`sessionapi.Dial`) checks the server: same uid, no seccomp
+  filter, and its pid is the one in the socket name. A sandboxed process
+  that binds a fake `<pid>.sock` in the socket directory fails all of
+  them.
 
 `hallpass answer` becomes a gRPC client too, and the line protocol of
 `internal/ui/socket.go` goes away.
@@ -50,18 +65,26 @@ no seccomp filter (no sandboxed process can call it).
 
 Shaped for the UI, not for the monitor, and free to change with it:
 
-- `GET /` and static assets: one page, embedded (`go:embed`), no build step.
+- `GET /pair?token=`: exchanges the pairing token for the cookie.
+- `GET /` and static assets: one page, embedded (`go:embed`), no build
+  step. They need the cookie too: an unpaired browser gets a plain 401.
+- `GET /favicon.svg`: the logo, without the cookie.
 - `GET /api/sessions`: the sessions and their `Info`.
+- `GET /api/sessions/{pid}/snapshot`: pending requests and rules.
 - `GET /api/sessions/{pid}/events`: server-sent events; first the
   snapshot, then the events (Opened, Closed, Rules, Decided).
 - `POST /api/sessions/{pid}/answer`: `{request, answer}` with the same
   answers as the terminal (once, temp, always, never, deny).
 - `POST /api/sessions/{pid}/rules`: remove a rule, or a set.
 
+Request ids are JSON strings (protojson writes 64-bit integers as
+strings).
+
 The answer-to-`Decision` mapping (once, temp and always grants, "never"
-as an exact deny, a grant never shrinks) moves from `cmd/hallpass/prompt.go`
-to a shared package, so the terminal and the browser offer the same
-choices with the same effect.
+as an exact deny, a grant never shrinks) stays in the session, behind the
+`Answer` RPC: the folder scope of a grant depends on the session's
+policy, which clients do not have. The terminal, `hallpass answer` and
+the browser so offer the same choices with the same effect.
 
 ## Views
 
@@ -89,9 +112,13 @@ Measures:
 
 - **Listen on 127.0.0.1 only** (random port by default, `--listen` to
   fix it).
-- **Host and Origin checks**: requests must carry `Host: 127.0.0.1:<port>`
-  or `localhost:<port>`, and state-changing requests and the event
-  stream a matching `Origin`. Stops DNS rebinding and cross-site requests.
+- **Host and Origin checks**: requests must carry a loopback `Host`
+  (`127.0.0.1`, `localhost` or `[::1]`, any port, so an SSH port forward
+  works). POSTs need a matching `Origin`; GETs are checked when the
+  browser sends one. Stops DNS rebinding and cross-site requests.
+- **Headers**: `Content-Security-Policy: default-src 'self';
+  frame-ancestors 'none'`, `X-Frame-Options: DENY`, `Cache-Control:
+  no-store`. The page renders all session data as text, never as HTML.
 - **One-time pairing token**: `hallpass web` prints
   `http://127.0.0.1:<port>/pair?token=<random>` on its own terminal. The
   first request exchanges it for a session cookie (`HttpOnly`,
@@ -130,13 +157,12 @@ Not covered, as today: the sandbox asking a service outside it
 
 ## Work items
 
-1. gRPC session service on the socket; `hallpass answer` ported; the
-   socket line protocol removed.
-2. The terminal prompt is cancelled when another client answers
-   (`ui.Asker.Ask` blocks today); the answer mapping moved to a shared
-   package.
-3. `hallpass web`: sessions, pending, answers, rules, activity; pairing,
-   Host/Origin checks; marked experimental.
+1. Done: gRPC session service on the socket; `hallpass answer` ported;
+   the socket line protocol removed.
+2. Done: the terminal prompt is cancelled when another client answers;
+   the answer mapping served by the `Answer` RPC.
+3. Done: `hallpass web`: sessions, pending, answers, rules, activity;
+   pairing, Host/Origin checks; marked experimental.
 4. Facts filled by the monitor (secret store, listener in sandbox, ...).
 5. Later: a backlog of `Decided` events in the monitor, replayed after
    `Snapshot`, so the activity view starts with the session; remote
@@ -144,13 +170,9 @@ Not covered, as today: the sandbox asking a service outside it
 6. Later: deny `connect` from members to the web port (strict mode
    first, lite mode after the TOCTOU work); drop "experimental".
 
-## Open questions
+## Resolved questions
 
-- Can the sandbox put a fake session socket in the socket directory
-  (`$XDG_RUNTIME_DIR/hallpass/`), for `hallpass web` to list? It is not
-  in the allow list, so file writes there are asked. But `bind()` on a
-  unix socket path creates the inode without a syscall the seccomp
-  filter sees, so lite mode does not catch it (strict mode would, if
-  the LSM's mknod hook covers sockets: to check). `hallpass web` should
-  check that the socket's owner (`SO_PEERCRED`) is the session's
-  supervisor pid, as reported by `Info`.
+- A fake session socket in `$XDG_RUNTIME_DIR/hallpass/`: lite mode may
+  not see the `bind()` that creates it, but `sessionapi.Dial` rejects a
+  server that has a seccomp filter or whose pid is not the one in the
+  socket name (see [Session API](#session-api-grpc)).
