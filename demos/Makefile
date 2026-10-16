@@ -76,7 +76,7 @@ endef
 # run (an agent's answers): check the result before committing it.
 media/%.mp4: %/demo.tape hallpass FORCE
 	$(VHS) validate $<
-	$(call record,cd .. && $(VHS) -o $$dir/raw.webm demos/$<)
+	$(call record,cd .. && DEMO_DIR=$$dir $(VHS) -o $$dir/raw.webm demos/$<)
 
 media/%.mp4: %/record.js hallpass node_modules FORCE
 	$(call record,HALLPASS=../hallpass CHROMIUM=$(CHROMIUM) PROFILE=$(CHROMIUM_PROFILE)-$* \

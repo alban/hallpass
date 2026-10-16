@@ -23,7 +23,7 @@ Every run records again: a demo shows the current hallpass. Some vary from run t
 
 Create `NAME/demo.tape` for a terminal demo or `NAME/record.js` for a browser demo, then `make -C demos NAME`. Both record a raw webm in a fresh directory, which the Makefile encodes with `ffmpeg`.
 
-- A tape runs from the repository root, with `./hallpass` built. The Makefile sets the output with `vhs -o`: leave out the `Output` line.
+- A tape runs from the repository root, with `./hallpass` built, and gets the fresh directory as `$DEMO_DIR`: use it as `HOME` for anything the demo writes outside its project. The Makefile sets the output with `vhs -o`: leave out the `Output` line.
 - A browser script gets its settings from the environment: `HALLPASS` (the binary), `CHROMIUM`, `PROFILE` (a scratch Chromium profile), `WORKDIR` (the fresh directory) and `OUT` (the webm to write). [`web/record.js`](web/record.js) is the model to copy.
 - `NAME/poster-at` holds the second the poster is taken from (default 1): pick a frame that tells what the demo is about.
 
