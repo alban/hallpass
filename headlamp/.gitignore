@@ -1,0 +1,8 @@
+/node_modules/
+/.eslintcache
+/dist/
+/main.wasm
+/main.wasm.gz
+/src/wasm_exec.js
+/package-lock.json
+*.tar.gz

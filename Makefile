@@ -25,6 +25,29 @@ hallpass-node:
 test-kind:
 	test/kind/e2e.sh
 
+# The Headlamp plugin (docs/kubernetes.md): the wasm client of the node
+# agents, and the plugin itself in headlamp/dist. npm uses the registry
+# configured in ~/.npmrc.
+.PHONY: headlamp-wasm
+headlamp-wasm:
+	GOOS=js GOARCH=wasm go build -tags '$(GO_TAGS)' -ldflags='-s -w' -trimpath \
+		-o headlamp/main.wasm ./cmd/headlamp-wasm
+	gzip -9 -n -f -k headlamp/main.wasm
+	cp "$$(go env GOROOT)/lib/wasm/wasm_exec.js" headlamp/src/wasm_exec.js
+
+.PHONY: headlamp
+headlamp: headlamp-wasm
+	cd headlamp && npm install --no-audit --no-fund && npm run build
+
+# Type-check, lint and unit-test the plugin.
+.PHONY: test-headlamp
+test-headlamp: headlamp-wasm
+	cd headlamp && npm install --no-audit --no-fund && npm run tsc && npm run lint && npm test
+
+# Package the plugin as a tarball for Headlamp's plugin directory.
+.PHONY: headlamp-package
+headlamp-package: headlamp
+	cd headlamp && npm run package
 # Run the tests in a VM booting ci-kernels:KERNEL_VERSION, which has BPF-LSM
 # active. Needs vimto (CGO_ENABLED=0 go install lmb.io/vimto@latest) and qemu.
 # Without /dev/kvm, qemu emulates the CPU: slower, but it works. Everything is
