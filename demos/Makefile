@@ -4,8 +4,8 @@
 #   NAME/demo.tape  a terminal demo, recorded with VHS
 #   NAME/record.js  a browser demo, recorded with Puppeteer
 #   NAME/poster-at  optional: the second to take the poster from (default 1)
-# Both write a raw webm, encoded the same way into media/NAME.mp4, with the
-# poster frame in media/NAME.png.
+# Both write a raw webm, encoded the same way into media/NAME.mp4 with the
+# logo in a corner, and the poster frame in media/NAME.png.
 #
 #   make NAME       build hallpass and record one demo
 #   make all        record every demo
@@ -23,6 +23,10 @@ CHROMIUM_PROFILE ?= $(HOME)/snap/chromium/common/hallpass-demo
 # Each recording runs in a fresh directory here, removed after success.
 DEMO_TMPDIR ?= $(or $(TMPDIR),/tmp)
 CRF ?= 30
+# The logo, in the top-right corner (the prompts are at the bottom): a clip
+# shared on its own still says it is hallpass.
+LOGO ?= ../docs/logo.svg
+WATERMARK = [1:v][0:v]scale=w=-1:h=rh/14,format=rgba,colorchannelmixer=aa=0.8[logo];[0:v][logo]overlay=W-w-H/40:H/40
 
 TAPES := $(wildcard */demo.tape)
 SCRIPTS := $(wildcard */record.js)
@@ -65,7 +69,7 @@ define record
 rm -f $@ media/$*.png
 dir=$$(mktemp -d "$(DEMO_TMPDIR)/hp.XXXXXX") && \
 	( $(1) ) && \
-	$(FFMPEG) -v error -i $$dir/raw.webm -c:v libx264 -preset slow -crf $(CRF) \
+	$(FFMPEG) -v error -i $$dir/raw.webm -i $(LOGO) -filter_complex '$(WATERMARK)' -c:v libx264 -preset slow -crf $(CRF) \
 		-pix_fmt yuv420p -movflags +faststart -an $@; \
 	status=$$?; if [ $$status = 0 ]; then rm -rf "$$dir"; else echo "failed, see $$dir" >&2; fi; exit $$status
 test -s $@

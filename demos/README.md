@@ -1,6 +1,6 @@
 # Demos
 
-Each demo is a directory with its recording script. The [Makefile](Makefile) finds them, encodes every recording the same way into `media/NAME.mp4` and takes a poster frame into `media/NAME.png`. The README shows the posters; the [documentation](../docs/index.md) plays the videos (`docs/assets/demos` links to `media/`).
+Each demo is a directory with its recording script. The [Makefile](Makefile) finds them, encodes every recording the same way into `media/NAME.mp4`, with the logo in the top-right corner, and takes a poster frame into `media/NAME.png`. The README shows the posters; the [documentation](../docs/index.md) plays the videos (`docs/assets/demos` links to `media/`).
 
 | Demo | Source | Shown in | Recorded with |
 |------|--------|----------|---------------|
@@ -40,7 +40,7 @@ Then show it in the documentation, the paths relative to the page's URL, with a 
 
 ## Terminal demos
 
-Requirements: `vhs` (with `ttyd` and a Chromium; on arm64 Linux, `snap install chromium`) and `ffmpeg` (with libx264). Title cards and `#` comments typed in the shell explain each step.
+Requirements: `vhs` (with `ttyd` and a Chromium; on arm64 Linux, `snap install chromium`) and `ffmpeg` (with libx264 and librsvg). Title cards and `#` comments typed in the shell explain each step.
 
 - `shell.mp4` (no agent, the same at every run apart from pids): a shell in the sandbox. Writing in the project goes through, appending to `~/.bashrc` is asked and denied, and Ctrl-] shows the session's rules.
 - `coalesce.mp4` (no agent): eight parallel `touch` under one folder outside the project give one prompt; "always" allows the folder, settles all eight, and shows as a rule. It runs with `HOME` in `$DEMO_DIR`.
@@ -60,7 +60,7 @@ $ make -C demos copilot   # about 2 minutes
 
 No agent: [`web/record.js`](web/record.js) scripts the whole timeline, so every recording is the same apart from pids and times. It runs one headless Chromium page that frames a [ttyd](https://github.com/tsl0922/ttyd) terminal and `hallpass web` (whose `frame-ancestors`/`X-Frame-Options` headers it drops in that browser only), types the commands, clicks the answers with a drawn pointer and records the page with Puppeteer's screencast. The session gets its own `HOME`, `XDG_RUNTIME_DIR` and `XDG_CONFIG_HOME` in `WORKDIR`, so `hallpass web` only sees this session and the demo commands never write in your home.
 
-Requirements: Go, `node` and `npm`, `ttyd`, `ffmpeg` (with libx264), and Chromium (on Ubuntu, `snap install chromium`). The Makefile runs `npm ci` in `demos/` to install `puppeteer-core`.
+Requirements: Go, `node` and `npm`, `ttyd`, `ffmpeg` (with libx264 and librsvg), and Chromium (on Ubuntu, `snap install chromium`). The Makefile runs `npm ci` in `demos/` to install `puppeteer-core`.
 
 ```console
 $ make -C demos web   # about 1 minute
@@ -73,6 +73,7 @@ Set with `make VAR=value`:
 - `VHS`, `NODE`, `NPM`, `FFMPEG`: the tools, looked up in `$PATH` (`go install` puts `vhs` in `~/go/bin`).
 - `CHROMIUM`: the browser for browser demos, default `/snap/bin/chromium`.
 - `CRF`: the x264 quality of the encoded videos, default 30 (lower is better and bigger).
+- `LOGO`: the image put in the corner, default `../docs/logo.svg`.
 - `CHROMIUM_PROFILE`: prefix of the scratch profile, `-NAME` appended, created and removed by the recording. The snap can only write under `~/snap/chromium/common/`, hence the default `~/snap/chromium/common/hallpass-demo`; any directory works with a non-snap Chromium.
 - `DEMO_TMPDIR`: where each recording's fresh directory is created with `mktemp`, default `$TMPDIR` or `/tmp`. It is removed after a successful run and kept on failure; a browser demo also leaves a screenshot of the page there (`raw.webm.error.png`). Its path shows in the web video: keep it short.
 - `STRICT_HOST`: the ssh host the strict demo runs on, default `fedora` (an environment variable: the tape reads it).
