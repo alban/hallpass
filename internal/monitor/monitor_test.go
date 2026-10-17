@@ -196,10 +196,11 @@ func (k *fakeKernel) GrantOnce(tid int, paths []string, proc lsm.ProcRule) error
 func (k *fakeKernel) Events(fn func(lsm.Event)) {}
 
 type fixture struct {
-	m   *Monitor
-	f   *fakeNotifier
-	dir string
-	evs <-chan []Event
+	m    *Monitor
+	f    *fakeNotifier
+	dir  string
+	evs  <-chan []Event
+	done <-chan struct{} // the listener is no longer used
 }
 
 func setup(t *testing.T, k Kernel, decided bool) *fixture {
@@ -221,13 +222,19 @@ func setupJournal(t *testing.T, cfg Config, decided bool, j *seccomp.Journal) *f
 	fx := &fixture{m: m, f: newFake(), dir: t.TempDir()}
 	fx.dir, _ = filepath.EvalSymlinks(fx.dir)
 	fx.evs = m.Events(EventOptions{Decided: decided})
-	if err := m.attach(fx.f, os.Getpid(), fx.f.hup, j); err != nil {
+	done, err := m.attach(fx.f, os.Getpid(), fx.f.hup, j)
+	if err != nil {
 		t.Fatal(err)
 	}
+	fx.done = done
 	t.Cleanup(func() {
 		m.Close()
 		close(fx.f.in)
 		runtime.KeepAlive(fx.f.alive)
+		go func() {
+			<-done
+			j.Close()
+		}()
 	})
 	return fx
 }
@@ -586,6 +593,11 @@ func TestFlushOnHangup(t *testing.T) {
 	}
 	if n != 5 {
 		t.Fatalf("%d decided events, want 5", n)
+	}
+	select {
+	case <-fx.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("listener still in use after hangup")
 	}
 	// The workers stop instead of spinning on ENOENT.
 	time.Sleep(50 * time.Millisecond)

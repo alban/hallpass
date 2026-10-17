@@ -230,15 +230,16 @@ func New(cfg Config) (*Monitor, error) {
 // The notifications in flight are in a journal on the heap: nothing
 // recovers them.
 func (m *Monitor) Attach(seccompFD, rootPID int) error {
-	return m.AttachJournal(seccompFD, rootPID, seccomp.NewJournal(seccomp.DefaultSlots))
+	_, err := m.AttachJournal(seccompFD, rootPID, seccomp.NewJournal(seccomp.DefaultSlots))
+	return err
 }
 
 // AttachJournal is Attach with the journal of the notifications in
 // flight, whose size caps them. The notifications it already holds,
 // received by a previous monitor (e.g. before a crash), are handled
-// first. The monitor closes j once no task uses the listener; on an
-// error, j stays the caller's.
-func (m *Monitor) AttachJournal(seccompFD, rootPID int, j *seccomp.Journal) error {
+// first. done is closed once no task uses the listener and the monitor
+// no longer uses seccompFD or j: the caller may then close them.
+func (m *Monitor) AttachJournal(seccompFD, rootPID int, j *seccomp.Journal) (done <-chan struct{}, err error) {
 	l := seccomp.NewListener(seccompFD)
 	hup := make(chan struct{})
 	go func() {
@@ -260,12 +261,12 @@ func (m *Monitor) AttachJournal(seccompFD, rootPID int, j *seccomp.Journal) erro
 }
 
 // attach is Attach for any Notifier; hup is closed when no task uses it.
-func (m *Monitor) attach(n Notifier, root int, hup <-chan struct{}, j *seccomp.Journal) error {
+func (m *Monitor) attach(n Notifier, root int, hup <-chan struct{}, j *seccomp.Journal) (<-chan struct{}, error) {
 	l := &listener{n: n, j: j, root: root, mountFD: -1, hup: hup}
 	m.mu.Lock()
 	if m.closed || m.finished {
 		m.mu.Unlock()
-		return errors.New("monitor: closed")
+		return nil, errors.New("monitor: closed")
 	}
 	m.mu.Unlock()
 	if m.kernel != nil {
@@ -279,7 +280,7 @@ func (m *Monitor) attach(n Notifier, root int, hup <-chan struct{}, j *seccomp.J
 		}
 		m.kmu.Unlock()
 		if err != nil {
-			return fmt.Errorf("strict mode: %w", err)
+			return nil, fmt.Errorf("strict mode: %w", err)
 		}
 	}
 	m.mu.Lock()
@@ -296,6 +297,7 @@ func (m *Monitor) attach(n Notifier, root int, hup <-chan struct{}, j *seccomp.J
 		l.wg.Add(1)
 		go m.receiver(l)
 	}
+	done := make(chan struct{})
 	go func() {
 		<-hup
 		m.mu.Lock()
@@ -305,13 +307,13 @@ func (m *Monitor) attach(n Notifier, root int, hup <-chan struct{}, j *seccomp.J
 		go func() {
 			// The journal outlives its slots in use.
 			l.wg.Wait()
-			l.j.Close()
+			close(done)
 		}()
 		if gone {
 			m.finish()
 		}
 	}()
-	return nil
+	return done, nil
 }
 
 func (m *Monitor) currentRules() []rules.Rule {
