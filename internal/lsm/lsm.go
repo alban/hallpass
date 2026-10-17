@@ -112,7 +112,8 @@ type nodeKey struct {
 	name   string
 }
 
-// LSM is a loaded and attached set of programs, with its rules.
+// LSM is a loaded and attached set of programs. It enforces the rules of
+// any number of sessions (see Session), each with its own members.
 type LSM struct {
 	members, protected, grants, rules, proc, events *ebpf.Map
 	// links keep the programs attached; closing them detaches.
@@ -121,19 +122,43 @@ type LSM struct {
 	linkFDs []int
 	rd      *ringbuf.Reader
 
-	mountinfo string
+	mu sync.Mutex
+	// cookies name the rule nodes. They are shared by all sessions, whose
+	// rule keys also have the session id.
+	cookies  map[nodeKey]uint64
+	next     uint64
+	sessions map[uint32]*Session
+	nextID   uint32
+	// stale are the rules and procs found in the maps by FromFDs, per
+	// session, for ResumeSession; see DropStale.
+	stale      map[uint32]map[nodeKey]hallpassRuleVal
+	staleProcs map[uint32]map[hallpassProcKey]hallpassProcVal
+	reading    bool
+}
 
-	mu      sync.Mutex
-	cookies map[nodeKey]uint64
-	next    uint64
-	nodes   map[nodeKey]hallpassRuleVal
-	procs   map[hallpassProcKey]hallpassProcVal
+// Session is one sandbox: its members are checked against its rules only.
+// Its paths are those seen by a process, its root, which can be in another
+// mount namespace and chroot (a container).
+type Session struct {
+	l  *LSM
+	id uint32
+	// mountinfo is the root's; inRoot resolves paths in its root
+	// directory, "" for this process's.
+	mountinfo string
+	inRoot    string
+
+	mu    sync.Mutex
+	nodes map[nodeKey]hallpassRuleVal
+	procs map[hallpassProcKey]hallpassProcVal
 	// The last rules given to Sync, for re-syncing in GrantOnce.
 	lastRules []Rule
 	lastProcs []ProcRule
 	// once are the grants (see GrantOnce) that may still be in use.
-	once []*grant
-	seq  uint64
+	once   []*grant
+	seq    uint64
+	fn     func(Event)
+	done   chan struct{}
+	closed bool
 }
 
 // grant is one GrantOnce: its paths keep their rule nodes, so their cookies
@@ -146,11 +171,10 @@ type grant struct {
 
 func newLSM() *LSM {
 	return &LSM{
-		mountinfo: "/proc/self/mountinfo",
-		cookies:   map[nodeKey]uint64{},
-		next:      1,
-		nodes:     map[nodeKey]hallpassRuleVal{},
-		procs:     map[hallpassProcKey]hallpassProcVal{},
+		cookies:  map[nodeKey]uint64{},
+		next:     1,
+		sessions: map[uint32]*Session{},
+		nextID:   1,
 	}
 }
 
@@ -354,6 +378,9 @@ func FromFDs(fds []int) (*LSM, error) {
 	if err == nil {
 		err = l.start()
 	}
+	if err == nil {
+		err = l.adopt()
+	}
 	if err != nil {
 		l.Close()
 		return nil, err
@@ -361,7 +388,69 @@ func FromFDs(fds []int) (*LSM, error) {
 	return l, nil
 }
 
-// Close detaches the programs: the sandbox is no longer restricted.
+// adopt reads the rules and procs already in the maps, left by a previous
+// owner of the programs (the node agent before it restarted): new cookies
+// must not reuse theirs, and ResumeSession takes them over.
+func (l *LSM) adopt() error {
+	var k hallpassRuleKey
+	var v hallpassRuleVal
+	it := l.rules.Iterate()
+	for it.Next(&k, &v) {
+		nk := nodeKey{k.Parent, cstr(k.Name[:])}
+		if l.stale == nil {
+			l.stale = map[uint32]map[nodeKey]hallpassRuleVal{}
+		}
+		if l.stale[k.Session] == nil {
+			l.stale[k.Session] = map[nodeKey]hallpassRuleVal{}
+		}
+		l.stale[k.Session][nk] = v
+		if v.Cookie != 0 {
+			l.cookies[nk] = v.Cookie
+			l.next = max(l.next, v.Cookie+1)
+		}
+		l.nextID = max(l.nextID, k.Session+1)
+	}
+	if err := it.Err(); err != nil {
+		return fmt.Errorf("read the rules: %w", err)
+	}
+	var pk hallpassProcKey
+	var pv hallpassProcVal
+	pit := l.proc.Iterate()
+	for pit.Next(&pk, &pv) {
+		if l.staleProcs == nil {
+			l.staleProcs = map[uint32]map[hallpassProcKey]hallpassProcVal{}
+		}
+		if l.staleProcs[pk.Session] == nil {
+			l.staleProcs[pk.Session] = map[hallpassProcKey]hallpassProcVal{}
+		}
+		l.staleProcs[pk.Session][pk] = pv
+		l.nextID = max(l.nextID, pk.Session+1)
+	}
+	if err := pit.Err(); err != nil {
+		return fmt.Errorf("read the proc rules: %w", err)
+	}
+	return nil
+}
+
+// DropStale deletes the rules found by FromFDs of the sessions not resumed
+// (see ResumeSession).
+func (l *LSM) DropStale() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for id, nodes := range l.stale {
+		for k := range nodes {
+			_ = l.rules.Delete(ruleKey(id, k))
+		}
+	}
+	for _, procs := range l.staleProcs {
+		for k := range procs {
+			_ = l.proc.Delete(k)
+		}
+	}
+	l.stale, l.staleProcs = nil, nil
+}
+
+// Close detaches the programs: no sandbox is restricted any more.
 func (l *LSM) Close() error {
 	if l.rd != nil {
 		l.rd.Close()
@@ -374,35 +463,164 @@ func (l *LSM) Close() error {
 			m.Close()
 		}
 	}
-	for _, g := range l.once {
-		unix.Close(g.pidfd)
+	l.mu.Lock()
+	ss := make([]*Session, 0, len(l.sessions))
+	for _, s := range l.sessions {
+		ss = append(ss, s)
 	}
-	l.once = nil
+	l.mu.Unlock()
+	for _, s := range ss {
+		s.release()
+	}
 	return nil
 }
 
-// AddMember puts process pid in the sandbox; the tasks it creates from then
-// on are members too. Threads it already has are not.
-func (l *LSM) AddMember(pid int) error {
-	return l.mark(l.members, pid)
+// NewSession starts a session with no rules: its members may write nothing.
+// Its paths are those seen by process root, or by this process if root is
+// 0.
+func (l *LSM) NewSession(root int) (*Session, error) {
+	return l.newSession(0, root)
 }
 
-// Protect forbids members to signal process pid (all its threads).
+// ResumeSession is NewSession with the given id: that of a session of a
+// previous owner of the programs (see FromFDs), whose members are still
+// marked with it. Its rules stay in force until the first Sync.
+func (l *LSM) ResumeSession(id uint32, root int) (*Session, error) {
+	if id == 0 {
+		return nil, errors.New("session id 0")
+	}
+	return l.newSession(id, root)
+}
+
+// newSession starts session id, or a new one if id is 0.
+func (l *LSM) newSession(id uint32, root int) (*Session, error) {
+	s := &Session{
+		l:         l,
+		mountinfo: "/proc/self/mountinfo",
+		nodes:     map[nodeKey]hallpassRuleVal{},
+		procs:     map[hallpassProcKey]hallpassProcVal{},
+		done:      make(chan struct{}),
+	}
+	if root != 0 {
+		s.mountinfo = fmt.Sprintf("/proc/%d/mountinfo", root)
+		s.inRoot = fmt.Sprintf("/proc/%d/root", root)
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if id == 0 {
+		id = l.nextID
+	}
+	if l.sessions[id] != nil {
+		return nil, fmt.Errorf("session %d exists", id)
+	}
+	s.id = id
+	if n := l.stale[id]; n != nil {
+		s.nodes = n
+		delete(l.stale, id)
+	}
+	if p := l.staleProcs[id]; p != nil {
+		s.procs = p
+		delete(l.staleProcs, id)
+	}
+	l.sessions[id] = s
+	l.nextID = max(l.nextID, id+1)
+	return s, nil
+}
+
+// ID is the session's id in the kernel.
+func (s *Session) ID() uint32 { return s.id }
+
+// Close deletes the session's rules: its remaining members, if any, may
+// write nothing.
+func (s *Session) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	s.lastRules, s.lastProcs = nil, nil
+	var err error
+	for k := range s.nodes {
+		if e := s.l.rules.Delete(ruleKey(s.id, k)); e != nil && !errors.Is(e, ebpf.ErrKeyNotExist) {
+			err = e
+		}
+	}
+	for k := range s.procs {
+		if e := s.l.proc.Delete(k); e != nil && !errors.Is(e, ebpf.ErrKeyNotExist) {
+			err = e
+		}
+	}
+	s.nodes, s.procs = nil, nil
+	s.releaseLocked()
+	return err
+}
+
+// release forgets s without touching the maps (LSM.Close).
+func (s *Session) release() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.releaseLocked()
+}
+
+func (s *Session) releaseLocked() {
+	if s.closed {
+		return
+	}
+	s.closed = true
+	for _, g := range s.once {
+		unix.Close(g.pidfd)
+	}
+	s.once = nil
+	s.l.mu.Lock()
+	if s.l.sessions[s.id] == s {
+		delete(s.l.sessions, s.id)
+	}
+	s.l.mu.Unlock()
+	close(s.done)
+}
+
+// AddMember puts thread tid, or process tid's main thread, in the session;
+// the tasks it creates from then on are members too. Its other threads are
+// not, and an execve from one of them would leave the sandbox: mark the
+// thread that calls execve.
+func (s *Session) AddMember(tid int) error {
+	fd, err := unix.PidfdOpen(tid, unix.PIDFD_THREAD)
+	if err != nil {
+		return fmt.Errorf("pidfd_open %d: %w", tid, err)
+	}
+	defer unix.Close(fd)
+	return s.l.members.Update(uint32(fd), s.id, ebpf.UpdateAny)
+}
+
+// Protect forbids members of all sessions to signal process pid (all its
+// threads).
 func (l *LSM) Protect(pid int) error {
-	return l.mark(l.protected, pid)
-}
-
-func (l *LSM) mark(m *ebpf.Map, pid int) error {
 	fd, err := unix.PidfdOpen(pid, 0)
 	if err != nil {
 		return fmt.Errorf("pidfd_open %d: %w", pid, err)
 	}
 	defer unix.Close(fd)
-	return m.Update(uint32(fd), uint8(1), ebpf.UpdateAny)
+	return l.protected.Update(uint32(fd), uint8(1), ebpf.UpdateAny)
 }
 
-// Events calls fn for each decision reported by the programs, until Close.
-func (l *LSM) Events(fn func(Event)) {
+// Events calls fn for each decision on the session's members reported by
+// the programs, until the session or the LSM is closed.
+func (s *Session) Events(fn func(Event)) {
+	s.mu.Lock()
+	s.fn = fn
+	s.mu.Unlock()
+	s.l.mu.Lock()
+	read := !s.l.reading
+	s.l.reading = true
+	s.l.mu.Unlock()
+	if read {
+		go s.l.read()
+	}
+	<-s.done
+}
+
+// read dispatches the events of the ring buffer to their sessions.
+func (l *LSM) read() {
 	for {
 		rec, err := l.rd.Read()
 		if err != nil {
@@ -410,6 +628,18 @@ func (l *LSM) Events(fn func(Event)) {
 		}
 		var ev hallpassEvent
 		if err := binary.Read(bytes.NewReader(rec.RawSample), binary.NativeEndian, &ev); err != nil {
+			continue
+		}
+		l.mu.Lock()
+		s := l.sessions[ev.Session]
+		l.mu.Unlock()
+		if s == nil {
+			continue
+		}
+		s.mu.Lock()
+		fn := s.fn
+		s.mu.Unlock()
+		if fn == nil {
 			continue
 		}
 		e := Event{PID: ev.Pid, Comm: cstr(ev.Comm[:]), Path: cstr(ev.Path[:]), Allowed: ev.Ret == 0}
@@ -438,22 +668,33 @@ func cstr(b []int8) string {
 	return string(s)
 }
 
-// Sync makes the kernel's rules match these, translating paths with the
-// current mounts. Expired rules are dropped.
-func (l *LSM) Sync(rules []Rule, procs []ProcRule) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.lastRules, l.lastProcs = rules, procs
-	l.pruneOnce()
-	_, err := l.sync()
+// Sync makes the kernel's rules for the session match these, translating
+// paths with the current mounts. Expired rules are dropped.
+func (s *Session) Sync(rules []Rule, procs []ProcRule) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return errors.New("session closed")
+	}
+	s.lastRules, s.lastProcs = rules, procs
+	s.pruneOnce()
+	_, err := s.sync()
 	return err
 }
 
+// mountID is the id of the mount p is on, in the session's root.
+func (s *Session) mountID(p string) uint64 {
+	if s.inRoot == "" {
+		return mountID(p)
+	}
+	return mountIDIn(s.inRoot, p)
+}
+
 // sync pushes lastRules and lastProcs, with nodes for the paths of the
-// grants, and returns the mounts it used. l.mu must be held.
-func (l *LSM) sync() ([]mount, error) {
-	rules, procs := l.lastRules, l.lastProcs
-	mounts, err := readMounts(l.mountinfo)
+// grants, and returns the mounts it used. s.mu must be held.
+func (s *Session) sync() ([]mount, error) {
+	rules, procs := s.lastRules, s.lastProcs
+	mounts, err := readMounts(s.mountinfo)
 	if err != nil {
 		return nil, err
 	}
@@ -469,14 +710,16 @@ func (l *LSM) sync() ([]mount, error) {
 		return mono + uint64(t.Sub(now))
 	}
 
+	s.l.mu.Lock()
+	defer s.l.mu.Unlock()
 	nodes := map[nodeKey]hallpassRuleVal{}
 	for _, r := range rules {
 		exp := expiry(r.Expires)
 		if exp == 0 {
 			continue
 		}
-		for _, lc := range locate(mounts, r.Path, r.Tree, mountID(r.Path)) {
-			k, ok := l.node(nodes, lc)
+		for _, lc := range locate(mounts, r.Path, r.Tree, s.mountID(r.Path)) {
+			k, ok := s.l.node(nodes, lc)
 			if !ok {
 				continue
 			}
@@ -495,29 +738,29 @@ func (l *LSM) sync() ([]mount, error) {
 		}
 	}
 	// The grants' nodes: they allow nothing by themselves.
-	for _, g := range l.once {
+	for _, g := range s.once {
 		for _, p := range g.paths {
-			for _, lc := range locate(mounts, p, false, mountID(p)) {
-				l.node(nodes, lc)
+			for _, lc := range locate(mounts, p, false, s.mountID(p)) {
+				s.l.node(nodes, lc)
 			}
 		}
 	}
 	for k, v := range nodes {
-		if old, ok := l.nodes[k]; ok && old == v {
+		if old, ok := s.nodes[k]; ok && old == v {
 			continue
 		}
-		if err := l.rules.Update(ruleKey(k), v, ebpf.UpdateAny); err != nil {
+		if err := s.l.rules.Update(ruleKey(s.id, k), v, ebpf.UpdateAny); err != nil {
 			return nil, fmt.Errorf("update rule %q: %w", k.name, err)
 		}
 	}
-	for k := range l.nodes {
+	for k := range s.nodes {
 		if _, ok := nodes[k]; !ok {
-			if err := l.rules.Delete(ruleKey(k)); err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
+			if err := s.l.rules.Delete(ruleKey(s.id, k)); err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
 				return nil, err
 			}
 		}
 	}
-	l.nodes = nodes
+	s.nodes = nodes
 
 	pm := map[hallpassProcKey]hallpassProcVal{}
 	for _, r := range procs {
@@ -525,9 +768,7 @@ func (l *LSM) sync() ([]mount, error) {
 		if exp == 0 && !r.Deny {
 			continue
 		}
-		var k hallpassProcKey
-		copyName(k.Name[:], r.Name)
-		copyName(k.Comm[:], r.Comm)
+		k := s.procKey(r.Name, r.Comm)
 		v := pm[k]
 		if r.Deny {
 			v.Deny = 1
@@ -537,79 +778,96 @@ func (l *LSM) sync() ([]mount, error) {
 		pm[k] = v
 	}
 	for k, v := range pm {
-		if old, ok := l.procs[k]; ok && old == v {
+		if old, ok := s.procs[k]; ok && old == v {
 			continue
 		}
-		if err := l.proc.Update(k, v, ebpf.UpdateAny); err != nil {
+		if err := s.l.proc.Update(k, v, ebpf.UpdateAny); err != nil {
 			return nil, err
 		}
 	}
-	for k := range l.procs {
+	for k := range s.procs {
 		if _, ok := pm[k]; !ok {
-			_ = l.proc.Delete(k)
+			_ = s.l.proc.Delete(k)
 		}
 	}
-	l.procs = pm
+	s.procs = pm
 	return mounts, nil
 }
 
-// GrantOnce lets thread tid, blocked in a syscall that seccomp handed to the
-// supervisor, write paths (exactly), and the /proc file of proc when its
-// Name is set, during that syscall only: the kernel removes the grant when
-// the syscall returns, even if it is restarted, and no other thread can use
-// it. It must be called before the syscall is continued.
-func (l *LSM) GrantOnce(tid int, paths []string, proc ProcRule) error {
+func (s *Session) procKey(name, comm string) hallpassProcKey {
+	var k hallpassProcKey
+	copyName(k.Name[:], name)
+	copyName(k.Comm[:], comm)
+	k.Session = s.id
+	return k
+}
+
+// GrantOnce lets thread tid, a member blocked in a syscall that seccomp
+// handed to the supervisor, write paths (exactly), and the /proc file of
+// proc when its Name is set, during that syscall only: the kernel removes
+// the grant when the syscall returns, even if it is restarted, and no other
+// thread can use it. It must be called before the syscall is continued.
+func (s *Session) GrantOnce(tid int, paths []string, proc ProcRule) error {
 	fd, err := unix.PidfdOpen(tid, unix.PIDFD_THREAD)
 	if err != nil {
 		return fmt.Errorf("pidfd_open %d: %w", tid, err)
 	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.pruneOnce()
-	l.seq++
-	g := &grant{pidfd: fd, seq: l.seq, paths: paths}
-	l.once = append(l.once, g)
-	mounts, err := l.sync()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		unix.Close(fd)
+		return errors.New("session closed")
+	}
+	s.pruneOnce()
+	s.seq++
+	g := &grant{pidfd: fd, seq: s.seq, paths: paths}
+	s.once = append(s.once, g)
+	mounts, err := s.sync()
 	if err != nil {
 		return err
 	}
 	v := hallpassHpGrant{Seq: g.seq}
 	n := 0
+	s.l.mu.Lock()
 	for _, p := range paths {
-		for _, lc := range locate(mounts, p, false, mountID(p)) {
-			c, ok := l.cookie(lc)
+		for _, lc := range locate(mounts, p, false, s.mountID(p)) {
+			c, ok := s.l.cookie(lc)
 			if !ok {
 				continue
 			}
 			if n == len(v.Nodes) {
+				s.l.mu.Unlock()
 				return fmt.Errorf("allow once: too many paths (%d)", len(paths))
 			}
 			v.Nodes[n] = c
 			n++
 		}
 	}
-	copyName(v.Proc.Name[:], proc.Name)
-	copyName(v.Proc.Comm[:], proc.Comm)
-	return l.grants.Update(uint32(fd), v, ebpf.UpdateAny)
+	s.l.mu.Unlock()
+	if proc.Name != "" {
+		v.Proc = s.procKey(proc.Name, proc.Comm)
+	}
+	return s.l.grants.Update(uint32(fd), v, ebpf.UpdateAny)
 }
 
 // pruneOnce forgets the grants the kernel has removed: their syscall
-// returned, or their thread exited. l.mu must be held.
-func (l *LSM) pruneOnce() {
-	once := l.once[:0]
-	for _, g := range l.once {
+// returned, or their thread exited. s.mu must be held.
+func (s *Session) pruneOnce() {
+	once := s.once[:0]
+	for _, g := range s.once {
 		var v hallpassHpGrant
-		if err := l.grants.Lookup(uint32(g.pidfd), &v); err == nil && v.Seq == g.seq {
+		if err := s.l.grants.Lookup(uint32(g.pidfd), &v); err == nil && v.Seq == g.seq {
 			once = append(once, g)
 			continue
 		}
 		unix.Close(g.pidfd)
 	}
-	clear(l.once[len(once):])
-	l.once = once
+	clear(s.once[len(once):])
+	s.once = once
 }
 
-// cookie returns the cookie of the node of lc, if it has one.
+// cookie returns the cookie of the node of lc, if it has one. l.mu must be
+// held.
 func (l *LSM) cookie(lc loc) (uint64, bool) {
 	parent := rootCookie | uint64(lc.dev)
 	c := uint64(0)
@@ -626,7 +884,7 @@ func (l *LSM) cookie(lc loc) (uint64, bool) {
 }
 
 // node adds the nodes leading to lc to nodes and returns the key of its last
-// one. Cookies are stable for the life of the session.
+// one. Cookies are stable for the life of the LSM. l.mu must be held.
 func (l *LSM) node(nodes map[nodeKey]hallpassRuleVal, lc loc) (nodeKey, bool) {
 	parent := rootCookie | uint64(lc.dev)
 	var comps []string
@@ -659,9 +917,10 @@ func (l *LSM) node(nodes map[nodeKey]hallpassRuleVal, lc loc) (nodeKey, bool) {
 	return k, true
 }
 
-func ruleKey(k nodeKey) hallpassRuleKey {
+func ruleKey(session uint32, k nodeKey) hallpassRuleKey {
 	var rk hallpassRuleKey
 	rk.Parent = k.parent
+	rk.Session = session
 	copyName(rk.Name[:], k.name)
 	return rk
 }

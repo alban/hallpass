@@ -14,15 +14,15 @@ import (
 )
 
 type hallpassEvent struct {
-	_    structs.HostLayout
-	Ts   uint64
-	Pid  uint32
-	Op   uint32
-	Ret  int32
-	Pad  uint32
-	Comm [16]int8
-	Name [256]int8
-	Path [4096]int8
+	_       structs.HostLayout
+	Ts      uint64
+	Pid     uint32
+	Op      uint32
+	Ret     int32
+	Session uint32
+	Comm    [16]int8
+	Name    [256]int8
+	Path    [4096]int8
 }
 
 type hallpassHpGrant struct {
@@ -41,9 +41,11 @@ type hallpassHpScratch struct {
 }
 
 type hallpassProcKey struct {
-	_    structs.HostLayout
-	Name [32]int8
-	Comm [16]int8
+	_       structs.HostLayout
+	Name    [32]int8
+	Comm    [16]int8
+	Session uint32
+	Pad     uint32
 }
 
 type hallpassProcVal struct {
@@ -54,9 +56,11 @@ type hallpassProcVal struct {
 }
 
 type hallpassRuleKey struct {
-	_      structs.HostLayout
-	Parent uint64
-	Name   [256]int8
+	_       structs.HostLayout
+	Parent  uint64
+	Session uint32
+	Pad     uint32
+	Name    [256]int8
 }
 
 type hallpassRuleVal struct {

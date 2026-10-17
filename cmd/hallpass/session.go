@@ -77,7 +77,12 @@ type session struct {
 func runSession(cfg sessionConfig) (int, error) {
 	var kernel monitor.Kernel
 	if cfg.LSM != nil {
-		kernel = cfg.LSM
+		ks, err := cfg.LSM.NewSession(0)
+		if err != nil {
+			return 0, err
+		}
+		defer ks.Close()
+		kernel = ks
 	}
 	m, err := monitor.New(monitor.Config{Kernel: kernel})
 	if err != nil {

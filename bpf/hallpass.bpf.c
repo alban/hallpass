@@ -6,10 +6,12 @@
  * objects the kernel is about to modify, after any symlink, bind mount or
  * rename race has been resolved.
  *
- * Only tasks of the sandbox ("members") are checked. A file is named by the
+ * Only tasks of a sandbox ("members") are checked, each against the rules of
+ * its session: one instance of the programs serves every session of a node
+ * (the containers of the node agent). A file is named by the
  * path inside its filesystem: the d_parent chain from the dentry up to the
  * filesystem root, without crossing mounts. The supervisor translates its
- * rules (host paths) to these names with /proc/self/mountinfo, so a rule
+ * rules to these names with the session's mountinfo, so a rule
  * follows the files whichever bind mount or mount namespace they are reached
  * through.
  */
@@ -47,6 +49,8 @@
  */
 struct rule_key {
 	__u64 parent;
+	__u32 session;
+	__u32 pad;
 	char name[NAME_LEN];
 };
 
@@ -59,10 +63,15 @@ struct rule_val {
 	__u8 pad[6];
 };
 
-/* Writes to /proc/<pid>/<name> of a process outside the sandbox. */
+/*
+ * Writes to /proc/<pid>/<name> of a process outside the sandbox. A multiple
+ * of 8 bytes: proc_granted compares it word by word.
+ */
 struct proc_key {
 	char name[PROC_NAME_LEN];
 	char comm[COMM_LEN];
+	__u32 session;
+	__u32 pad;
 };
 
 struct proc_val {
@@ -103,7 +112,7 @@ struct event {
 	__u32 pid; /* tgid, initial pid namespace */
 	__u32 op;
 	__s32 ret;
-	__u32 pad;
+	__u32 session;
 	char comm[COMM_LEN];
 	char name[NAME_LEN]; /* last component, for operations on a directory entry */
 	char path[PATH_LEN]; /* d_path of the file or of its directory */
@@ -131,11 +140,12 @@ struct {
 	__type(value, struct hp_scratch);
 } scratch SEC(".maps");
 
+/* The session of each member; never 0. */
 struct {
 	__uint(type, BPF_MAP_TYPE_TASK_STORAGE);
 	__uint(map_flags, BPF_F_NO_PREALLOC);
 	__type(key, int);
-	__type(value, __u8);
+	__type(value, __u32);
 } members SEC(".maps");
 
 /*
@@ -171,12 +181,15 @@ struct {
 	__type(value, struct proc_val);
 } proc SEC(".maps");
 
-/* Superblocks created by members (tmpfs, overlay, ... in their namespaces). */
+/*
+ * Superblocks created by members (tmpfs, overlay, ... in their namespaces),
+ * and their session.
+ */
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__uint(max_entries, 4096);
 	__type(key, __u64);
-	__type(value, __u8);
+	__type(value, __u32);
 } owned_sbs SEC(".maps");
 
 struct {
@@ -187,9 +200,17 @@ struct {
 /* Set by the supervisor: also report allowed operations. */
 const volatile bool log_allowed = false;
 
-static __always_inline bool is_member(void)
+/* The session of task, 0 if it is not a member. */
+static __always_inline __u32 session_of(struct task_struct *task)
 {
-	return bpf_task_storage_get(&members, bpf_get_current_task_btf(), 0, 0) != 0;
+	__u32 *s = bpf_task_storage_get(&members, task, 0, 0);
+
+	return s ? *s : 0;
+}
+
+static __always_inline __u32 current_session(void)
+{
+	return session_of(bpf_get_current_task_btf());
 }
 
 static __always_inline bool live(__u64 expiry, __u64 now)
@@ -214,20 +235,22 @@ static __always_inline bool granted(struct hp_grant *g, __u64 cookie)
 
 /* Returns 0 to allow or -EACCES. Preemption must be disabled. */
 static __always_inline int walk(struct hp_scratch *r, struct dentry *target,
-				 struct hp_grant *g)
+				 struct hp_grant *g, __u32 session)
 {
 	struct super_block *sb = BPF_CORE_READ(target, d_sb);
 	__u64 sbkey = (__u64)sb;
 	__u64 cur = (__u64)target;
 	__u64 now, cookie, leaf = 0;
 	struct rule_val *v;
+	__u32 *owner;
 	bool allow = false, deny = false;
 	__u32 n;
 
 	/* Pipes, sockets, memfds: not reachable by path. */
 	if (BPF_CORE_READ(sb, s_flags) & SB_NOUSER)
 		return 0;
-	if (bpf_map_lookup_elem(&owned_sbs, &sbkey))
+	owner = bpf_map_lookup_elem(&owned_sbs, &sbkey);
+	if (owner && *owner == session)
 		return 0;
 
 	r->depth = MAX_DEPTH;
@@ -251,6 +274,8 @@ static __always_inline int walk(struct hp_scratch *r, struct dentry *target,
 	cookie = ROOT_COOKIE | BPF_CORE_READ(sb, s_dev);
 
 	r->key.parent = cookie;
+	r->key.session = session;
+	r->key.pad = 0;
 	__builtin_memset(r->key.name, 0, NAME_LEN);
 	v = bpf_map_lookup_elem(&rules, &r->key);
 	if (v) {
@@ -290,7 +315,7 @@ static __always_inline int walk(struct hp_scratch *r, struct dentry *target,
 }
 
 /* Returns 0 to allow or -EACCES. */
-static __always_inline int check_dentry(struct dentry *target)
+static __always_inline int check_dentry(struct dentry *target, __u32 session)
 {
 	__u32 zero = 0;
 	struct hp_scratch *r;
@@ -300,7 +325,7 @@ static __always_inline int check_dentry(struct dentry *target)
 	bpf_preempt_disable();
 	r = bpf_map_lookup_elem(&scratch, &zero);
 	if (r)
-		ret = walk(r, target, g);
+		ret = walk(r, target, g, session);
 	bpf_preempt_enable();
 	return ret;
 }
@@ -320,18 +345,18 @@ static __always_inline bool proc_granted(struct hp_grant *g, struct proc_key *k)
 }
 
 /*
- * Files under /proc/<pid>/: processes of the sandbox may write each other's
- * files; for other processes, the proc map decides. Returns 1 when inode is
- * not such a file.
+ * Files under /proc/<pid>/: processes of the same sandbox may write each
+ * other's files; for other processes, the proc map decides. Returns 1 when
+ * inode is not such a file.
  */
-static __always_inline int check_proc(struct dentry *dentry, struct inode *inode)
+static __always_inline int check_proc(struct dentry *dentry, struct inode *inode, __u32 session)
 {
 	struct proc_inode *pi;
 	struct task_struct *task;
 	struct proc_key key = {};
 	struct proc_val *v;
 	struct pid *pid;
-	bool member;
+	__u32 owner;
 
 	if (BPF_CORE_READ(inode, i_sb, s_magic) != PROC_SUPER_MAGIC)
 		return 1;
@@ -347,12 +372,13 @@ static __always_inline int check_proc(struct dentry *dentry, struct inode *inode
 		bpf_task_release(task);
 		return -EACCES;
 	}
-	member = bpf_task_storage_get(&members, task, 0, 0) != 0;
+	owner = session_of(task);
 	bpf_probe_read_kernel(key.comm, COMM_LEN, task->comm);
 	bpf_task_release(task);
-	if (member)
+	if (owner == session)
 		return 0;
 
+	key.session = session;
 	bpf_probe_read_kernel_str(key.name, PROC_NAME_LEN, BPF_CORE_READ(dentry, d_name.name));
 	v = bpf_map_lookup_elem(&proc, &key);
 	if (v && v->deny)
@@ -369,7 +395,7 @@ static __always_inline int check_proc(struct dentry *dentry, struct inode *inode
  * full the event is lost, not the decision.
  */
 static __always_inline int finish(__u32 op, int ret, const struct path *path,
-				  struct dentry *named)
+				  struct dentry *named, __u32 session)
 {
 	struct event *e;
 
@@ -382,6 +408,7 @@ static __always_inline int finish(__u32 op, int ret, const struct path *path,
 	e->pid = bpf_get_current_pid_tgid() >> 32;
 	e->op = op;
 	e->ret = ret;
+	e->session = session;
 	bpf_get_current_comm(e->comm, COMM_LEN);
 	e->path[0] = 0;
 	if (path)
@@ -397,33 +424,42 @@ static __always_inline int finish(__u32 op, int ret, const struct path *path,
 static __always_inline int check_one(__u32 op, const struct path *path, struct dentry *dentry,
 				     bool named)
 {
-	if (!is_member())
+	__u32 s = current_session();
+
+	if (!s)
 		return 0;
-	return finish(op, check_dentry(dentry), path, named ? dentry : 0);
+	return finish(op, check_dentry(dentry, s), path, named ? dentry : 0, s);
 }
 
 /* Two dentries (link, rename): both must be allowed. */
 static __always_inline int check_two(__u32 op, const struct path *old_dir, struct dentry *old,
 				     const struct path *new_dir, struct dentry *new)
 {
+	__u32 s = current_session();
 	int ret;
 
-	if (!is_member())
+	if (!s)
 		return 0;
-	ret = check_dentry(old);
+	ret = check_dentry(old, s);
 	if (ret)
-		return finish(op, ret, old_dir, old);
-	return finish(op, check_dentry(new), new_dir, new);
+		return finish(op, ret, old_dir, old, s);
+	return finish(op, check_dentry(new, s), new_dir, new, s);
 }
 
 SEC("lsm/task_alloc")
 int BPF_PROG(hp_task_alloc, struct task_struct *task, __u64 clone_flags, int ret)
 {
+	__u32 s, *child;
+
 	if (ret)
 		return ret;
-	if (is_member() &&
-	    !bpf_task_storage_get(&members, task, 0, BPF_LOCAL_STORAGE_GET_F_CREATE))
+	s = current_session();
+	if (!s)
+		return 0;
+	child = bpf_task_storage_get(&members, task, 0, BPF_LOCAL_STORAGE_GET_F_CREATE);
+	if (!child)
 		return -EACCES; /* never let a member spawn an unmarked task */
+	*child = s;
 	return 0;
 }
 
@@ -451,7 +487,7 @@ int BPF_PROG(hp_task_kill, struct task_struct *p, struct kernel_siginfo *info, i
 {
 	if (ret)
 		return ret;
-	if (sig && is_member() && is_protected(p))
+	if (sig && current_session() && is_protected(p))
 		return -EPERM;
 	return 0;
 }
@@ -476,11 +512,12 @@ SEC("lsm/sb_alloc_security")
 int BPF_PROG(hp_sb_alloc, struct super_block *sb, int ret)
 {
 	__u64 key = (__u64)sb;
-	__u8 one = 1;
+	__u32 s;
 
 	if (ret)
 		return ret;
-	if (is_member() && bpf_map_update_elem(&owned_sbs, &key, &one, BPF_ANY))
+	s = current_session();
+	if (s && bpf_map_update_elem(&owned_sbs, &key, &s, BPF_ANY))
 		return -EACCES;
 	return 0;
 }
@@ -505,7 +542,7 @@ int BPF_PROG(hp_sb_kern_mount, struct super_block *sb, int ret)
 {
 	if (ret)
 		return ret;
-	if (is_member() && sb->s_magic == OVERLAYFS_SUPER_MAGIC)
+	if (current_session() && sb->s_magic == OVERLAYFS_SUPER_MAGIC)
 		return -EPERM;
 	return 0;
 }
@@ -531,18 +568,21 @@ static __always_inline bool on_overlay_layer(struct file *file)
 SEC("lsm/file_open")
 int BPF_PROG(hp_file_open, struct file *file, int ret)
 {
+	__u32 s;
+
 	if (ret)
 		return ret;
 	if (!(file->f_mode & FMODE_WRITE) && !(file->f_flags & O_TRUNC))
 		return 0;
 	if (on_overlay_layer(file))
 		return 0;
-	if (!is_member())
+	s = current_session();
+	if (!s)
 		return 0;
-	ret = check_proc(file->f_path.dentry, file->f_inode);
+	ret = check_proc(file->f_path.dentry, file->f_inode, s);
 	if (ret == 1)
-		ret = check_dentry(file->f_path.dentry);
-	return finish(HP_OP_OPEN, ret, &file->f_path, 0);
+		ret = check_dentry(file->f_path.dentry, s);
+	return finish(HP_OP_OPEN, ret, &file->f_path, 0, s);
 }
 
 SEC("lsm/path_mknod")

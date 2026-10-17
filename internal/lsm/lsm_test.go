@@ -9,9 +9,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/cilium/ebpf"
 	"golang.org/x/sys/unix"
 )
 
@@ -33,6 +35,17 @@ func skip(t *testing.T, args ...any) {
 	t.Skip(args...)
 }
 
+// newSession starts a session of l, closed with the test.
+func newSession(t *testing.T, l *LSM) *Session {
+	t.Helper()
+	s, err := l.NewSession(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	return s
+}
+
 // TestLoad runs the verifier and attaches, which works even where BPF-LSM is
 // built but not active.
 func TestLoad(t *testing.T) {
@@ -45,7 +58,7 @@ func TestLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer l.Close()
-	if err := l.Sync([]Rule{{Path: "/tmp", Tree: true}}, nil); err != nil {
+	if err := newSession(t, l).Sync([]Rule{{Path: "/tmp", Tree: true}}, nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -78,7 +91,7 @@ func TestFromFDs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := l2.Sync([]Rule{{Path: "/tmp", Tree: true}}, nil); err != nil {
+	if err := newSession(t, l2).Sync([]Rule{{Path: "/tmp", Tree: true}}, nil); err != nil {
 		t.Error(err)
 	}
 	l2.Close()
@@ -111,10 +124,11 @@ func TestGrantOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer l.Close()
-	if err := l.Sync(nil, nil); err != nil {
+	s := newSession(t, l)
+	if err := s.Sync(nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	go l.Events(func(e Event) { t.Logf("event: %+v", e) })
+	go s.Events(func(e Event) { t.Logf("event: %+v", e) })
 
 	sh := exec.Command("sh", "-c", `read go; if echo > "$0/f"; then echo ok; else echo fail; fi`, dir)
 	stdin, _ := sh.StdinPipe()
@@ -123,18 +137,18 @@ func TestGrantOnce(t *testing.T) {
 	if err := sh.Start(); err != nil {
 		t.Fatal(err)
 	}
-	if err := l.AddMember(sh.Process.Pid); err != nil {
+	if err := s.AddMember(sh.Process.Pid); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(200 * time.Millisecond) // blocked in read
-	if err := l.GrantOnce(sh.Process.Pid, []string{dir + "/f"}, ProcRule{}); err != nil {
+	if err := s.GrantOnce(sh.Process.Pid, []string{dir + "/f"}, ProcRule{}); err != nil {
 		t.Fatal(err)
 	}
-	l.mu.Lock()
-	if len(l.once) != 1 {
-		t.Errorf("%d grants pending, want 1", len(l.once))
+	s.mu.Lock()
+	if len(s.once) != 1 {
+		t.Errorf("%d grants pending, want 1", len(s.once))
 	}
-	l.mu.Unlock()
+	s.mu.Unlock()
 	stdin.Write([]byte("go\n"))
 	stdin.Close()
 	if err := sh.Wait(); err != nil {
@@ -143,11 +157,11 @@ func TestGrantOnce(t *testing.T) {
 	if got := strings.TrimSpace(out.String()); got != "fail" {
 		t.Errorf("write after the granted syscall: %s, want fail", got)
 	}
-	if err := l.Sync(nil, nil); err != nil {
+	if err := s.Sync(nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if len(l.once) != 0 || len(l.nodes) != 0 {
-		t.Errorf("used grant not forgotten: %d grants, %d nodes", len(l.once), len(l.nodes))
+	if len(s.once) != 0 || len(s.nodes) != 0 {
+		t.Errorf("used grant not forgotten: %d grants, %d nodes", len(s.once), len(s.nodes))
 	}
 }
 
@@ -188,7 +202,8 @@ func TestEnforce(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer l.Close()
-	if err := l.Sync([]Rule{
+	s := newSession(t, l)
+	if err := s.Sync([]Rule{
 		{Path: allowed, Tree: true},
 		{Path: allowed + "/secret", Tree: true, Deny: true},
 		{Path: other + "/once", Expires: time.Now().Add(5 * time.Second)},
@@ -196,7 +211,7 @@ func TestEnforce(t *testing.T) {
 	}, nil); err != nil {
 		t.Fatal(err)
 	}
-	go l.Events(func(e Event) { t.Logf("event: %+v", e) })
+	go s.Events(func(e Event) { t.Logf("event: %+v", e) })
 
 	cases := []struct {
 		name, cmd string
@@ -239,7 +254,7 @@ func TestEnforce(t *testing.T) {
 	if err := sh.Start(); err != nil {
 		t.Fatal(err)
 	}
-	if err := l.AddMember(sh.Process.Pid); err != nil {
+	if err := s.AddMember(sh.Process.Pid); err != nil {
 		t.Fatal(err)
 	}
 	stdin.Write([]byte("go\n"))
@@ -264,4 +279,164 @@ func TestEnforce(t *testing.T) {
 		t.Error("planted file in the denied dir")
 	}
 	time.Sleep(100 * time.Millisecond) // let the events be logged
+}
+
+// member starts sh -c script as a member of s. It runs once go is closed,
+// and its output is returned by the func returned.
+func member(t *testing.T, s *Session, script string) (pid int, run func() string) {
+	t.Helper()
+	sh := exec.Command("sh", "-c", "read go\n"+script)
+	stdin, _ := sh.StdinPipe()
+	var out strings.Builder
+	sh.Stdout = &out
+	if err := sh.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddMember(sh.Process.Pid); err != nil {
+		sh.Process.Kill()
+		t.Fatal(err)
+	}
+	return sh.Process.Pid, func() string {
+		stdin.Write([]byte("go\n"))
+		stdin.Close()
+		if err := sh.Wait(); err != nil {
+			t.Fatalf("sh: %v\n%s", err, out.String())
+		}
+		return strings.TrimSpace(out.String())
+	}
+}
+
+const try = `try() { if (eval "$1") 2>/dev/null; then echo ok; else echo fail; fi; }
+`
+
+// devNull lets the try scripts discard their errors.
+var devNull = Rule{Path: "/dev/null", Tree: true}
+
+// TestSessions checks that the members of two sessions get the rules of
+// their own session, may only write the /proc files of their own session,
+// and that each session gets its own events.
+func TestSessions(t *testing.T) {
+	needRoot(t)
+	if err := Active(); err != nil {
+		skip(t, err)
+	}
+	a, b := t.TempDir(), t.TempDir()
+	l, err := Load(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	sa, sb := newSession(t, l), newSession(t, l)
+	if sa.ID() == sb.ID() {
+		t.Fatalf("same session id %d", sa.ID())
+	}
+	if err := sa.Sync([]Rule{{Path: a, Tree: true}, devNull}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := sb.Sync([]Rule{{Path: b, Tree: true}, devNull}, nil); err != nil {
+		t.Fatal(err)
+	}
+	events := map[*Session][]Event{}
+	var mu sync.Mutex
+	for _, s := range []*Session{sa, sb} {
+		go s.Events(func(e Event) {
+			if !strings.HasPrefix(e.Path, a) && !strings.HasPrefix(e.Path, b) && !strings.HasPrefix(e.Path, "/proc/") {
+				return // sh probing /dev/tty
+			}
+			mu.Lock()
+			events[s] = append(events[s], e)
+			mu.Unlock()
+		})
+	}
+
+	pb, runB := member(t, sb, try+fmt.Sprintf(`try "echo > %s/f"; try "echo > %s/f"; try "echo 0 > /proc/$$/oom_score_adj"`, b, a))
+	_, runA := member(t, sa, try+fmt.Sprintf(`try "echo > %s/f"; try "echo > %s/f"; try "echo 0 > /proc/%d/oom_score_adj"`, a, b, pb))
+	if got := strings.Join(strings.Fields(runA()), " "); got != "ok fail fail" {
+		t.Errorf("session A: own dir, other dir, other session's proc: %s, want ok fail fail", got)
+	}
+	if got := strings.Join(strings.Fields(runB()), " "); got != "ok fail ok" {
+		t.Errorf("session B: own dir, other dir, own proc: %s, want ok fail ok", got)
+	}
+	time.Sleep(100 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(events[sa]) != 2 || len(events[sb]) != 1 {
+		t.Errorf("events: A %v, B %v; want 2 denials for A, 1 for B", events[sa], events[sb])
+	}
+}
+
+// TestResume checks that a new owner of the programs (FromFDs) can take
+// over a session and its members, and drop the rules of the others.
+func TestResume(t *testing.T) {
+	needRoot(t)
+	if err := Active(); err != nil {
+		skip(t, err)
+	}
+	a, b := t.TempDir(), t.TempDir()
+	l, err := Load(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := newSession(t, l)
+	if err := s.Sync([]Rule{{Path: a, Tree: true}, devNull}, nil); err != nil {
+		t.Fatal(err)
+	}
+	gone := newSession(t, l)
+	if err := gone.Sync([]Rule{{Path: b, Tree: true}}, []ProcRule{{Name: "comm", Comm: "x"}}); err != nil {
+		t.Fatal(err)
+	}
+	script := try + fmt.Sprintf(`try "echo > %s/f"; try "echo > %s/f"`, a, b)
+	_, before := member(t, s, script)
+	_, after := member(t, s, script)
+	var fds []int
+	for _, fd := range l.FDs() {
+		d, err := unix.FcntlInt(uintptr(fd), unix.F_DUPFD_CLOEXEC, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fds = append(fds, d)
+	}
+	l2, err := FromFDs(fds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l2.Close()
+	l.Close() // the programs stay attached by l2's links
+	s2, err := l2.ResumeSession(s.ID(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+	if n, err := l2.NewSession(0); err != nil || n.ID() <= gone.ID() {
+		t.Errorf("new session after resume: %v, %v", n, err)
+	} else {
+		n.Close()
+	}
+	l2.DropStale()
+	count := func(m *ebpf.Map) (n int) {
+		var k, v []byte
+		it := m.Iterate()
+		for it.Next(&k, &v) {
+			n++
+		}
+		return n
+	}
+	if n := count(l2.rules); n != len(s2.nodes) {
+		t.Errorf("%d rules after DropStale, want the resumed session's %d", n, len(s2.nodes))
+	}
+	if n := count(l2.proc); n != 0 {
+		t.Errorf("%d proc rules after DropStale, want 0", n)
+	}
+	// The old owner's rules are still in force for the resumed session.
+	if got := strings.Join(strings.Fields(before()), " "); got != "ok fail" {
+		t.Errorf("resumed, not synced: %s, want ok fail", got)
+	}
+	// The new owner's rules: a cookie reused from the old ones would match
+	// the wrong node.
+	if err := s2.Sync([]Rule{{Path: b, Tree: true}, devNull}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(strings.Fields(after()), " "); got != "fail ok" {
+		t.Errorf("resynced to b: %s, want fail ok", got)
+	}
 }

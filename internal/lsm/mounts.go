@@ -106,6 +106,35 @@ func mountID(p string) uint64 {
 	}
 }
 
+// mountIDIn is mountID for path p in root directory root (/proc/<pid>/root):
+// symlinks are resolved inside it, as the process sees them.
+func mountIDIn(root, p string) uint64 {
+	rfd, err := unix.Open(root, unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return 0
+	}
+	defer unix.Close(rfd)
+	for {
+		fd, err := unix.Openat2(rfd, p, &unix.OpenHow{
+			Flags:   unix.O_PATH | unix.O_NOFOLLOW | unix.O_CLOEXEC,
+			Resolve: unix.RESOLVE_IN_ROOT | unix.RESOLVE_NO_MAGICLINKS,
+		})
+		if err == nil {
+			var st unix.Statx_t
+			err = unix.Statx(fd, "", unix.AT_EMPTY_PATH|unix.AT_SYMLINK_NOFOLLOW, unix.STATX_MNT_ID, &st)
+			unix.Close(fd)
+			if err == nil && st.Mask&unix.STATX_MNT_ID != 0 {
+				return st.Mnt_id
+			}
+			return 0
+		}
+		if p == "/" {
+			return 0
+		}
+		p = path.Dir(p)
+	}
+}
+
 // locate translates the absolute, cleaned host path p, on the mount with the
 // given id. The first result is the filesystem p is on. For a tree rule, it is
 // followed by the roots of the filesystems mounted below p, which the rule

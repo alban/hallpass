@@ -420,7 +420,22 @@ func (m *Monitor) toBPF(l *listener, n seccomp.Notif, sc seccomp.Rule, op rules.
 // report emits a Decided event, if a subscriber wants them.
 // exec continues an execve or execveat: what to check on exec is not
 // designed yet. Its path is read for Decided events only, best effort.
+//
+// In strict mode, the calling thread is first made a member of the
+// session: it may be one the sandbox started before it was marked (the
+// container runtime's init), or a thread that is not the one marked, whose
+// execve would otherwise leave the sandbox. It stays blocked meanwhile, so
+// the new program never runs unmarked.
 func (m *Monitor) exec(l *listener, n seccomp.Notif, sc seccomp.Rule) {
+	if m.kernel != nil {
+		if err := m.kernel.AddMember(int(n.PID)); err != nil {
+			if l.n.IDValid(n.ID) {
+				m.warn(fmt.Sprintf("strict mode: %s: %v", sc.Name, err))
+			}
+			_ = l.n.Deny(n.ID, int32(unix.EPERM))
+			return
+		}
+	}
 	m.mu.Lock()
 	want := m.decided > 0
 	m.mu.Unlock()
