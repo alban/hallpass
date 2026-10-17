@@ -1,10 +1,11 @@
 # Copyright The hallpass Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# The node agent: one per node. It holds the seccomp listeners of the
-# mediated containers, so restarting it breaks them (their mediated
-# syscalls fail with ENOSYS): updates are manual (OnDelete), after the
-# mediated pods are gone or with their restart in mind.
+# The node agent: one per node. It mediates the containers through their
+# seccomp listeners, which it keeps in hallpass-fd-store: restarting the
+# agent keeps the running containers mediated, and their pending requests.
+# While it is down, containers that opt in fail to start. Updates are
+# manual (OnDelete): delete the agent pods one node at a time.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -89,8 +90,8 @@ spec:
           securityContext:
             privileged: true
           # Ready once registered with NRI and with the namespace and
-          # HallpassPolicy caches synced. No liveness probe: restarting the
-          # agent drops the listeners of the running containers.
+          # HallpassPolicy caches synced. No liveness probe: while the
+          # agent restarts, opted-in containers fail to start.
           readinessProbe:
             exec:
               command: [/hallpass-node, ready]
@@ -111,7 +112,61 @@ spec:
             path: /var/run/nri
             type: DirectoryOrCreate
         # The agent socket: runc, on the host, connects to the same path.
+        # The fd-store socket too.
         - name: agent
+          hostPath:
+            path: /run/hallpass
+            type: DirectoryOrCreate
+---
+# Keeps the node agent's seccomp listeners, and the journals of their
+# notifications in flight, while the agent restarts. Without it, the
+# mediated syscalls of running containers fail with ENOSYS when the agent
+# restarts. Rarely updated (OnDelete): restarting it alone loses nothing,
+# the agent stores its listeners again; restarting both at once does.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: hallpass-fd-store
+  namespace: hallpass-system
+  labels:
+    app.kubernetes.io/name: hallpass-fd-store
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: hallpass-fd-store
+  updateStrategy:
+    type: OnDelete
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: hallpass-fd-store
+    spec:
+      automountServiceAccountToken: false
+      priorityClassName: system-node-critical
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: fd-store
+          image: ghcr.io/alban/hallpass-node:latest
+          imagePullPolicy: IfNotPresent
+          args: [fd-store]
+          # Root, as the owner of /run/hallpass and the only peer it
+          # accepts; no capability.
+          securityContext:
+            runAsUser: 0
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: run
+              mountPath: /run/hallpass
+          resources:
+            requests:
+              cpu: 1m
+              memory: 8Mi
+      volumes:
+        - name: run
           hostPath:
             path: /run/hallpass
             type: DirectoryOrCreate

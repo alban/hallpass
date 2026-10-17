@@ -247,11 +247,11 @@ the syscall with `SECCOMP_IOCTL_NOTIF_ADDFD` and
 
 ## Lifetime
 
-- The notify fd lives in the agent. If the agent dies, the mediated
-  syscalls of running containers fail with `ENOSYS` until the containers
-  are restarted. v1: DaemonSet `updateStrategy: OnDelete`, documented.
-  Later: keep the fds in a small, rarely updated holder process
-  (fd-store, below).
+- The notify fds live in the agent, with copies in `hallpass-fd-store`
+  (below): the agent can crash or be upgraded, the next one takes the
+  sessions over. Without fd-store (`--fd-store=""`), the mediated
+  syscalls of running containers fail with `ENOSYS` when the agent dies.
+  Both DaemonSets are `updateStrategy: OnDelete`.
 - If the agent is not running when a container starts, its NRI plugin is
   not registered (the registration lives as long as its connection to
   containerd), so the container starts without hallpass: open by
@@ -265,7 +265,7 @@ the syscall with `SECCOMP_IOCTL_NOTIF_ADDFD` and
   start.
 - Restarting a container gives a new session.
 
-## fd-store (planned)
+## fd-store
 
 A separate DaemonSet, `hallpass-fd-store` (`updateStrategy: OnDelete`,
 rarely updated), keeps the agent's file descriptors across agent crashes
@@ -338,6 +338,30 @@ its copies) and gets them again when it is back. Both crashing: the
 waiting threads fail with `ENOSYS`, as without fd-store. Upgrading
 fd-store itself: not handled (`OnDelete`, rarely updated).
 
+**Implementation.** `internal/fdstore`: a `SOCK_SEQPACKET` socket
+(`/run/hallpass/fd-store.sock`, directory 0700, peer uid checked with
+`SO_PEERCRED`); each message is a JSON header (`put`, `delete`, `list`,
+`end`, `reply`) with the fds as `SCM_RIGHTS`. `put` replaces an entry
+and closes its old fds; `list` sends copies, entries stay. An entry is
+keyed by container id; its fds are a sealed memfd with the session
+state as JSON (start, metadata, policy, rules, pids), then a listener
+and its journal per listener.
+
+The agent (`cmd/hallpass-node/store.go`) connects before serving its
+listener socket,
+then checks the connection every second and reconnects. On each
+connection it lists the entries, adopts those it does not know, then
+`Put`s all its sessions again (that also refills a restarted fd-store).
+Adopting restores the session with its saved policy (not re-read: the
+caches may not be synced yet) and its unexpired rules, and attaches
+each listener with its journal, which replays the in-flight
+notifications. Request ids restart from 1 and ask timers restart.
+Stale entries heal themselves: a listener whose container is gone hangs
+up, and the session's end `Delete`s the entry. The agent `Put`s after a
+session starts, after each new or ended listener and after each rule
+change; `AttachJournal` returns a channel closed when the listener hangs
+up, then the agent closes its copies.
+
 ## Privileges
 
 `hallpass-node` runs privileged with `hostPID` (it reads
@@ -362,7 +386,8 @@ headless browser.
    the node); `HallpassPolicy`; manifests; kind e2e. Lite mode.
 2. Strict mode on the node: one BPF load with session ids.
 3. `headlamp`: the cluster API (A) and the plugin (`headlamp/`).
-4. Later: the fd holder; CRI-O.
+4. `fd-store`: keep the listeners across agent restarts.
+5. Later: CRI-O.
 
 ## Open questions
 

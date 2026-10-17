@@ -1,0 +1,26 @@
+# Copyright The hallpass Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# The agent restart test (test/kind/e2e.sh): /usr/always is answered
+# "always", the agent restarts while /etc/pending waits for an answer, then
+# the grant for /usr must still hold.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: restart
+  namespace: hallpass-e2e
+  annotations:
+    hallpass.io/policy: e2e
+spec:
+  restartPolicy: Never
+  containers:
+    - name: agent
+      image: BUSYBOX
+      command:
+        - sh
+        - -c
+        - |
+          try() { if echo x > "$1" 2>/dev/null; then echo "$2=ok"; else echo "$2=denied"; fi; }
+          try /usr/always always1
+          try /etc/pending pending
+          try /usr/always always2

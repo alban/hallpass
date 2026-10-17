@@ -18,6 +18,7 @@ import (
 	"github.com/alban/hallpass/internal/defaults"
 	"github.com/alban/hallpass/internal/monitor"
 	"github.com/alban/hallpass/internal/rules"
+	"github.com/alban/hallpass/internal/seccomp"
 	"github.com/alban/hallpass/internal/sessionapi"
 	pb "github.com/alban/hallpass/internal/sessionpb"
 	"github.com/alban/hallpass/internal/ui"
@@ -46,17 +47,32 @@ type session struct {
 
 	mu     sync.Mutex
 	timers map[uint64]*time.Timer
+
+	// listeners are the attached listeners, guarded by agent.mu.
+	listeners []*attached
+	// onRules is called when the rules change.
+	onRules func()
 }
 
-// newSession creates the monitor of container id with policy p. The
-// caller attaches the listeners.
-func newSession(id string, pid int, md metadata, p *Policy, log *slog.Logger, rec recorder) (*session, error) {
+// attached is a listener the session's monitor uses.
+type attached struct {
+	pid int
+	fd  int
+	j   *seccomp.Journal
+}
+
+// newSession creates the monitor of container id with policy p and rules
+// rs, or the policy's if nil. The caller attaches the listeners.
+func newSession(id string, pid int, md metadata, p *Policy, rs []rules.Rule, log *slog.Logger, rec recorder) (*session, error) {
 	m, err := monitor.New(monitor.Config{ProcRoot: true})
 	if err != nil {
 		return nil, err
 	}
 	d := defaultsFor(p, md.Home)
-	if _, err := m.Apply(monitor.Decision{AddRules: d.Rules(), Client: client}); err != nil {
+	if rs == nil {
+		rs = d.Rules()
+	}
+	if _, err := m.Apply(monitor.Decision{AddRules: rs, Client: client}); err != nil {
 		m.Close()
 		return nil, err
 	}
@@ -91,6 +107,10 @@ func (s *session) run() {
 				s.closed(ev.Closed)
 			case ev.Decided != nil:
 				s.decided(ev.Decided)
+			case ev.Rules != 0:
+				if s.onRules != nil {
+					s.onRules()
+				}
 			case ev.Dropped != 0:
 				s.log.Debug("decided accesses not counted", "dropped", ev.Dropped)
 			case ev.Warning != "":

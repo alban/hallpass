@@ -11,7 +11,10 @@
 # test answers "once" to the first and "deny" to the second through the
 # session API (kubectl port-forward), and checks the pod's output. A pod
 # without the annotation and an annotated pod in a namespace the agent does
-# not select must run unmediated.
+# not select must run unmediated. Then (without E2E_ANSWER) it restarts the
+# agent while a request is pending (test/kind/e2e-restart.yaml): the new
+# agent must get the request, and the rules granted before, from the
+# fd-store.
 #
 # Needs docker, kind, kubectl and go; the node pulls busybox from Docker Hub.
 #
@@ -44,12 +47,14 @@ log() { echo "--- $*"; }
 fail() {
 	echo "FAIL: $*" >&2
 	"${KUBECTL[@]}" -n hallpass-system logs ds/hallpass-node --tail=50 >&2 || true
+	"${KUBECTL[@]}" -n hallpass-system logs ds/hallpass-fd-store --tail=20 >&2 || true
 	exit 1
 }
 
 cleanup() {
 	[ -n "$pf" ] && kill "$pf" 2>/dev/null || true
 	"${KUBECTL[@]}" delete --ignore-not-found --wait=false -f "$WORK/e2e.yaml" >/dev/null 2>&1 || true
+	"${KUBECTL[@]}" delete --ignore-not-found --wait=false -f "$WORK/e2e-restart.yaml" >/dev/null 2>&1 || true
 	if [ "$created" = 1 ] && [ "${KEEP_CLUSTER:-}" != 1 ]; then
 		kind delete cluster --name "$CLUSTER"
 	fi
@@ -93,8 +98,8 @@ CGO_ENABLED=0 go build -o "$CLIENT" ./cmd/hallpass-node
 log "deploying hallpass-node"
 "${KUBECTL[@]}" apply -k test/kind
 "${KUBECTL[@]}" wait --for=condition=Established crd/hallpasspolicies.hallpass.io --timeout=60s
-# updateStrategy is OnDelete: replace the agent to run the image just loaded.
-"${KUBECTL[@]}" -n hallpass-system delete pod -l app.kubernetes.io/name=hallpass-node --wait=true
+# updateStrategy is OnDelete: replace the pods to run the image just loaded.
+"${KUBECTL[@]}" -n hallpass-system delete pod -l 'app.kubernetes.io/name in (hallpass-node,hallpass-fd-store)' --wait=true
 # Ready: registered with NRI and caches synced (hallpass-node ready).
 agent_ready() {
 	"${KUBECTL[@]}" -n hallpass-system wait pod -l app.kubernetes.io/name=hallpass-node \
@@ -107,22 +112,26 @@ sed "s|BUSYBOX|$BUSYBOX|" test/kind/e2e.yaml >"$WORK/e2e.yaml"
 "${KUBECTL[@]}" delete --ignore-not-found --wait=true -f "$WORK/e2e.yaml" >/dev/null
 "${KUBECTL[@]}" apply -f "$WORK/e2e.yaml"
 
-"${KUBECTL[@]}" -n hallpass-system port-forward ds/hallpass-node "$PORT:7323" >"$WORK/port-forward.log" 2>&1 &
-pf=$!
+port_forward() {
+	"${KUBECTL[@]}" -n hallpass-system port-forward ds/hallpass-node "$PORT:7323" >"$WORK/port-forward.log" 2>&1 &
+	pf=$!
+	wait_for 30 api_ready || fail "session API not reachable through port-forward"
+}
 api_ready() { "$CLIENT" sessions --addr "$ADDR" >/dev/null 2>&1; }
-wait_for 30 api_ready || fail "session API not reachable through port-forward"
+port_forward
 
-# request_for <path>: the id of the mediated pod's pending request for path.
+# request_for <path> [pod]: the id of the pod's pending request for path.
 request_for() {
-	"$CLIENT" pending --addr "$ADDR" hallpass-e2e/mediated/agent 2>/dev/null |
+	"$CLIENT" pending --addr "$ADDR" "hallpass-e2e/${2:-mediated}/agent" 2>/dev/null |
 		awk -v p="$1" '$3 == p { print $1; exit }'
 }
+# answer <path> <answer> [pod]
 answer() {
-	local path=$1 ans=$2 id=
-	has_request() { id=$(request_for "$path") && [ -n "$id" ]; }
+	local path=$1 ans=$2 pod=${3:-mediated} id=
+	has_request() { id=$(request_for "$path" "$pod") && [ -n "$id" ]; }
 	wait_for 180 has_request || fail "no request for $path"
-	log "answering $ans to request $id ($path)"
-	"$CLIENT" answer --addr "$ADDR" hallpass-e2e/mediated/agent "$id" "$ans"
+	log "answering $ans to request $id ($pod: $path)"
+	"$CLIENT" answer --addr "$ADDR" "hallpass-e2e/$pod/agent" "$id" "$ans"
 }
 if [ -n "${E2E_ANSWER:-}" ]; then
 	# Another client answers, e.g. the Headlamp plugin (test/kind/headlamp).
@@ -170,5 +179,27 @@ if grep -Eq 'msg="(session started|mediating container)".*pod=(plain|unselected)
 fi
 no_session() { ! "$CLIENT" sessions --addr "$ADDR" | grep -q hallpass-e2e/mediated; }
 wait_for 30 no_session || fail "the mediated pod's session did not end"
+
+if [ -z "${E2E_ANSWER:-}" ]; then
+	log "restarting the agent with a request pending"
+	sed "s|BUSYBOX|$BUSYBOX|" test/kind/e2e-restart.yaml >"$WORK/e2e-restart.yaml"
+	"${KUBECTL[@]}" delete --ignore-not-found --wait=true -f "$WORK/e2e-restart.yaml" >/dev/null
+	"${KUBECTL[@]}" apply -f "$WORK/e2e-restart.yaml"
+	answer /usr/always always restart
+	pending() { [ -n "$(request_for /etc/pending restart)" ]; }
+	wait_for 60 pending || fail "no request for /etc/pending"
+	kill "$pf" 2>/dev/null || true
+	"${KUBECTL[@]}" -n hallpass-system delete pod -l app.kubernetes.io/name=hallpass-node --wait=true
+	wait_for 120 agent_ready || fail "hallpass-node is not ready after its restart"
+	port_forward
+	answer /etc/pending once restart
+	wait_for 60 succeeded hallpass-e2e restart || fail "pod hallpass-e2e/restart did not succeed"
+	check_log hallpass-e2e restart always1=ok
+	check_log hallpass-e2e restart pending=ok
+	check_log hallpass-e2e restart always2=ok
+	"${KUBECTL[@]}" -n hallpass-system logs ds/hallpass-node >"$WORK/agent.log"
+	grep -q 'msg="session restored".*namespace=hallpass-e2e pod=restart' "$WORK/agent.log" ||
+		fail "the restart pod's session was not restored"
+fi
 
 log "PASS"

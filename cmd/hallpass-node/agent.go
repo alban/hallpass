@@ -12,12 +12,15 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
 
+	"github.com/alban/hallpass/internal/fdstore"
+	"github.com/alban/hallpass/internal/seccomp"
 	"github.com/alban/hallpass/internal/sessionapi"
 )
 
@@ -32,13 +35,20 @@ type agent struct {
 	node    *sessionapi.Node
 	log     *slog.Logger
 	rec     recorder
+	// maxInflight is the journal size of a listener: the most
+	// notifications in flight (most waiting for an answer).
+	maxInflight int
 
 	mu       sync.Mutex
 	sessions map[string]*session // by container id
+
+	// pmu orders the fd-store updates, and guards store. Taken before mu.
+	pmu   sync.Mutex
+	store *fdstore.Client // nil: not connected
 }
 
-func newAgent(c cluster, node *sessionapi.Node, log *slog.Logger, rec recorder) *agent {
-	return &agent{cluster: c, node: node, log: log, rec: rec, sessions: map[string]*session{}}
+func newAgent(c cluster, node *sessionapi.Node, log *slog.Logger, rec recorder, maxInflight int) *agent {
+	return &agent{cluster: c, node: node, log: log, rec: rec, maxInflight: maxInflight, sessions: map[string]*session{}}
 }
 
 // listen creates the agent socket. Its directory is root-only: whoever can
@@ -135,17 +145,19 @@ func (a *agent) attach(st *specs.ContainerProcessState, fd int) error {
 		return fmt.Errorf("incomplete container process state")
 	}
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	s := a.sessions[id]
 	if s != nil {
-		if err := s.m.Attach(fd, st.Pid); err == nil {
+		if err := a.attachLocked(s, fd, st.Pid, nil); err == nil {
+			a.mu.Unlock()
 			a.log.Info("attached process", "container", id, "pid", st.Pid)
+			a.persist(s)
 			return nil
 		}
 		// The session is ending: its last process exited.
 	}
 	var md metadata
 	if err := json.Unmarshal([]byte(st.Metadata), &md); err != nil {
+		a.mu.Unlock()
 		return fmt.Errorf("listener metadata: %w", err)
 	}
 	pol, err := a.cluster.Policy(md.Policy)
@@ -154,27 +166,77 @@ func (a *agent) attach(st *specs.ContainerProcessState, fd int) error {
 		a.log.Error("no policy, denying", "container", id, "err", err)
 		pol = &Policy{Name: md.Policy}
 	}
-	s, err = newSession(id, st.Pid, md, pol, a.log, a.rec)
+	s, err = newSession(id, st.Pid, md, pol, nil, a.log, a.rec)
 	if err != nil {
+		a.mu.Unlock()
 		return err
 	}
-	if err := s.m.Attach(fd, st.Pid); err != nil {
+	if err := a.attachLocked(s, fd, st.Pid, nil); err != nil {
+		a.mu.Unlock()
 		s.m.Close()
 		return err
 	}
+	a.startLocked(s)
+	a.mu.Unlock()
+	a.log.Info("session started", "container", id, "namespace", md.Namespace, "pod", md.Pod, "name", md.Container, "policy", pol.Name, "pid", st.Pid)
+	a.persist(s)
+	return nil
+}
+
+// attachLocked attaches listener fd of process pid to s, with journal j,
+// or a new one if nil. On an error, fd stays the caller's, j is closed.
+func (a *agent) attachLocked(s *session, fd, pid int, j *seccomp.Journal) error {
+	if j == nil {
+		var err error
+		// Without a journal, a crash would lose the notifications in
+		// flight: fail closed instead.
+		if j, err = seccomp.NewMemfdJournal("hallpass-"+s.id, a.maxInflight); err != nil {
+			return fmt.Errorf("journal: %w", err)
+		}
+	}
+	done, err := s.m.AttachJournal(fd, pid, j)
+	if err != nil {
+		j.Close()
+		return err
+	}
+	l := &attached{pid: pid, fd: fd, j: j}
+	s.listeners = append(s.listeners, l)
+	go func() {
+		<-done
+		a.pmu.Lock()
+		a.mu.Lock()
+		s.listeners = slices.DeleteFunc(s.listeners, func(x *attached) bool { return x == l })
+		a.mu.Unlock()
+		// Under pmu: persist does not send them once closed.
+		unix.Close(l.fd)
+		l.j.Close()
+		a.pmu.Unlock()
+		a.persist(s)
+	}()
+	return nil
+}
+
+// startLocked registers s, until its last process exits.
+func (a *agent) startLocked(s *session) {
+	id := s.id
+	s.onRules = func() { a.persist(s) }
 	a.sessions[id] = s
 	a.node.Add(id, s.m, s)
-	a.log.Info("session started", "container", id, "namespace", md.Namespace, "pod", md.Pod, "name", md.Container, "policy", pol.Name, "pid", st.Pid)
 	go func() {
 		s.run()
+		a.pmu.Lock()
 		a.mu.Lock()
-		if a.sessions[id] == s {
+		mine := a.sessions[id] == s
+		if mine {
 			delete(a.sessions, id)
 			a.node.Remove(id)
 		}
 		a.mu.Unlock()
+		if mine {
+			a.forget(id)
+		}
+		a.pmu.Unlock()
 		s.m.Close()
 		a.log.Info("session ended", "container", id)
 	}()
-	return nil
 }

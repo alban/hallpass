@@ -23,13 +23,17 @@ import (
 	"github.com/containerd/nri/pkg/stub"
 	"k8s.io/apimachinery/pkg/labels"
 
+	"github.com/alban/hallpass/internal/seccomp"
 	"github.com/alban/hallpass/internal/sessionapi"
 )
+
+const defaultFDStore = "/run/hallpass/fd-store.sock"
 
 const usage = `usage: hallpass-node <command> [flags]
 
 commands:
   run       run the node agent (in the DaemonSet)
+  fd-store  keep the agent's listeners while it restarts (in its own DaemonSet)
   sessions  list the sessions of a node agent
   pending   list the pending requests of a session
   answer    answer a pending request: once, temp, always, deny or never
@@ -47,6 +51,8 @@ func main() {
 	switch cmd, args := os.Args[1], os.Args[2:]; cmd {
 	case "run":
 		err = runAgent(args)
+	case "fd-store":
+		err = runFDStore(args)
 	case "sessions":
 		err = cmdSessions(args)
 	case "pending":
@@ -72,6 +78,8 @@ func runAgent(args []string) error {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	nriSocket := fs.String("nri-socket", "/var/run/nri/nri.sock", "containerd's NRI socket")
 	socket := fs.String("socket", "/run/hallpass/agent.sock", "the seccomp agent socket, the same path on the host (its directory is made root-only)")
+	fdStore := fs.String("fd-store", defaultFDStore, `the fd-store socket, that keeps the listeners while the agent restarts ("": none)`)
+	maxInflight := fs.Int("max-inflight", seccomp.DefaultSlots, "the most notifications in flight per listener, most of them waiting for an answer; more wait in the kernel")
 	listenAddr := fs.String("listen", "127.0.0.1:7323", "the session API address (keep it on the pod's loopback: clients are not authenticated)")
 	nsSelector := fs.String("namespace-selector", "hallpass.io/enabled=true", "label selector of the namespaces whose pods may opt in")
 	kubeconfig := fs.String("kubeconfig", "", "kubeconfig file (default: in-cluster)")
@@ -83,6 +91,9 @@ func runAgent(args []string) error {
 	_ = fs.Parse(args)
 	if fs.NArg() != 0 {
 		return fmt.Errorf("run: unexpected arguments %v", fs.Args())
+	}
+	if *maxInflight < 1 {
+		return fmt.Errorf("--max-inflight: %d, want at least 1", *maxInflight)
 	}
 
 	level := slog.LevelInfo
@@ -122,7 +133,15 @@ func runAgent(args []string) error {
 	}()
 	defer node.Stop()
 
-	ag := newAgent(k, node, log, k.recorder(ctx))
+	ag := newAgent(k, node, log, k.recorder(ctx), *maxInflight)
+	if *fdStore != "" {
+		// Adopt the sessions of a previous agent before runc hands their
+		// next listeners.
+		if err := ag.connectStore(*fdStore); err != nil {
+			log.Warn("no fd-store: the requests in flight are lost if the agent restarts", "err", err)
+		}
+		go ag.keepStore(ctx, *fdStore)
+	}
 	ln, err := listen(*socket)
 	if err != nil {
 		return err

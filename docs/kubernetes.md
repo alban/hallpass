@@ -44,7 +44,10 @@ This creates:
 - the `HallpassPolicy` CRD (`hallpasspolicies.hallpass.io`, cluster-scoped);
 - the namespace `hallpass-system`, with the `hallpass-node` DaemonSet,
   its service account and a cluster role reading namespaces and
-  `hallpasspolicies`.
+  `hallpasspolicies`;
+- the `hallpass-fd-store` DaemonSet: it keeps copies of the agent's
+  seccomp file descriptors and session state, so the agent can restart
+  without breaking the mediated containers. It has no Kubernetes access.
 
 The DaemonSet runs privileged with `hostPID`, mounts `/var/run/nri` and
 `/run/hallpass` from the host, and uses the pod network: its session
@@ -211,10 +214,17 @@ mediated pods. The sandbox action also needs to list
 
 ## Limitations
 
-- **Agent restarts.** The seccomp notify fds live in the agent: if it
-  stops, the mediated syscalls of running containers fail with `ENOSYS`
-  until they restart. Hence `updateStrategy: OnDelete`: to upgrade,
-  delete the agent pod of a node when no mediated pod runs there.
+- **Agent restarts** (experimental). The next agent takes the running
+  sessions over from `hallpass-fd-store`: their rules are kept, pending
+  requests are asked again (with new ids and a new `askTimeout`). To
+  upgrade, delete the agent pod (`updateStrategy: OnDelete`). If both
+  the agent and `hallpass-fd-store` stop, or with `--fd-store=""`, the
+  mediated syscalls of running containers fail with `ENOSYS` until they
+  restart. Upgrading `hallpass-fd-store` itself has the same effect: do
+  it when no mediated pod runs on the node.
+- **In-flight cap.** At most `--max-inflight` (default 1024) mediated
+  syscalls wait per container or `exec` at a time; further ones wait in
+  the kernel until one is answered.
 - **Fail open.** A container created while the agent is not running is
   not mediated. To fail closed, enable the NRI default validator and list
   the plugin (`hallpass`) in its `required_plugins`, or add the annotation
