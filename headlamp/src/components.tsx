@@ -15,6 +15,7 @@ import { Badge, Box, Button, ButtonGroup, IconButton, Tooltip, Typography } from
 import { useSnackbar } from 'notistack';
 import { useState, useSyncExternalStore } from 'react';
 import { getStore, Hallpass, useHallpass } from './hooks';
+import { policyAnnotation } from './sandbox';
 import { pendingCount } from './store';
 import {
   AgentState,
@@ -26,8 +27,6 @@ import {
   Session,
   sessionName,
 } from './types';
-
-export const policyAnnotation = 'hallpass.io/policy';
 
 const answerHelp: Record<Answer, string> = {
   once: 'Allow this request only',

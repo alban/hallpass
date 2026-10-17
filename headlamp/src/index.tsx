@@ -7,12 +7,14 @@
 
 import {
   registerAppBarAction,
+  registerDetailsViewHeaderAction,
   registerDetailsViewSection,
   registerResourceTableColumnsProcessor,
   registerRoute,
   registerSidebarEntry,
 } from '@kinvolk/headlamp-plugin/lib';
 import { HallpassView, PendingBadge, PodColumn, PodSection, podStatusNow } from './components';
+import { SandboxAction } from './SandboxAction';
 
 registerSidebarEntry({
   parent: null,
@@ -31,6 +33,8 @@ registerRoute({
 });
 
 registerAppBarAction(<PendingBadge />);
+
+registerDetailsViewHeaderAction(SandboxAction);
 
 registerDetailsViewSection(({ resource }) => {
   if (resource?.kind !== 'Pod') {
