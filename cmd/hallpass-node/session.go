@@ -17,6 +17,7 @@ import (
 	pb "github.com/alban/hallpass/api/session/v1"
 	"github.com/alban/hallpass/internal/answer"
 	"github.com/alban/hallpass/internal/defaults"
+	"github.com/alban/hallpass/internal/lsm"
 	"github.com/alban/hallpass/internal/monitor"
 	"github.com/alban/hallpass/internal/rules"
 	"github.com/alban/hallpass/internal/seccomp"
@@ -39,6 +40,8 @@ type session struct {
 	policy *Policy
 	d      *defaults.Defaults
 	m      *monitor.Monitor
+	// ks is the session in the kernel, strict mode only. Closed after m.
+	ks     *lsm.Session
 	evs    <-chan []monitor.Event
 	start  time.Time
 	log    *slog.Logger
@@ -62,10 +65,18 @@ type attached struct {
 }
 
 // newSession creates the monitor of container id with policy p and rules
-// rs, or the policy's if nil. The caller attaches the listeners.
-func newSession(id string, pid int, md metadata, p *Policy, rs []rules.Rule, log *slog.Logger, rec recorder) (*session, error) {
-	m, err := monitor.New(monitor.Config{ProcRoot: true})
+// rs, or the policy's if nil, enforced by kernel session ks too if not nil
+// (strict). The caller attaches the listeners. On an error, ks is closed.
+func newSession(id string, pid int, md metadata, p *Policy, rs []rules.Rule, ks *lsm.Session, log *slog.Logger, rec recorder) (*session, error) {
+	cfg := monitor.Config{ProcRoot: true}
+	if ks != nil {
+		cfg.Kernel = ks
+	}
+	m, err := monitor.New(cfg)
 	if err != nil {
+		if ks != nil {
+			ks.Close()
+		}
 		return nil, err
 	}
 	d := defaultsFor(p, md.Home)
@@ -74,10 +85,13 @@ func newSession(id string, pid int, md metadata, p *Policy, rs []rules.Rule, log
 	}
 	if _, err := m.Apply(monitor.Decision{AddRules: rs, Client: client}); err != nil {
 		m.Close()
+		if ks != nil {
+			ks.Close()
+		}
 		return nil, err
 	}
 	s := &session{
-		id: id, pid: pid, md: md, policy: p, d: d, m: m,
+		id: id, pid: pid, md: md, policy: p, d: d, m: m, ks: ks,
 		// Subscribed before the first Attach: no request is missed.
 		// Decided: to report the automatic denials.
 		evs:    m.Events(monitor.EventOptions{Decided: true}),
@@ -93,6 +107,14 @@ func newSession(id string, pid int, md metadata, p *Policy, rs []rules.Rule, log
 // event emits an Event on the container's pod.
 func (s *session) event(warning bool, reason, msg string) {
 	s.rec.event(s.md, warning, reason, "container "+s.md.Container+": "+msg)
+}
+
+// close stops mediating, then deletes the kernel's rules (strict).
+func (s *session) close() {
+	s.m.Close()
+	if s.ks != nil {
+		s.ks.Close()
+	}
 }
 
 // run handles the requests until the container is gone: without ask, they

@@ -20,6 +20,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/alban/hallpass/internal/fdstore"
+	"github.com/alban/hallpass/internal/lsm"
 	"github.com/alban/hallpass/internal/seccomp"
 	"github.com/alban/hallpass/internal/sessionapi"
 )
@@ -38,6 +39,14 @@ type agent struct {
 	// maxInflight is the journal size of a listener: the most
 	// notifications in flight (most waiting for an answer).
 	maxInflight int
+	// lsm enforces strict mode: loaded, or adopted from a previous agent
+	// (its strict sessions keep it). Set before the agent serves.
+	lsm *lsm.LSM
+	// strict: new sessions are in strict mode (lsm is set).
+	strict bool
+	// lsmAdopted: lsm came from the fd-store, and its stale sessions are
+	// dropped once those of the store are adopted.
+	lsmAdopted bool
 
 	mu       sync.Mutex
 	sessions map[string]*session // by container id
@@ -49,6 +58,55 @@ type agent struct {
 
 func newAgent(c cluster, node *sessionapi.Node, log *slog.Logger, rec recorder, maxInflight int) *agent {
 	return &agent{cluster: c, node: node, log: log, rec: rec, maxInflight: maxInflight, sessions: map[string]*session{}}
+}
+
+// setupStrict decides whether new sessions are in strict mode, for --mode
+// auto, lite or strict, and loads the programs unless adopted from the
+// fd-store. hostRoot holds the host's active LSM list. Called before the
+// agent serves.
+func (a *agent) setupStrict(mode, hostRoot string) error {
+	var why error
+	switch mode {
+	case "lite":
+		why = errors.New("--mode=lite")
+	case "auto", "strict":
+		why = lsm.ActiveIn(hostRoot)
+	default:
+		return fmt.Errorf("--mode %q: want auto, lite or strict", mode)
+	}
+	a.mu.Lock()
+	l := a.lsm
+	a.mu.Unlock()
+	if why == nil && l == nil {
+		var err error
+		if l, err = lsm.Load(false); err != nil {
+			why = fmt.Errorf("loading the BPF programs: %w", err)
+		} else {
+			a.mu.Lock()
+			a.lsm = l
+			a.mu.Unlock()
+			a.persistLSM()
+		}
+	}
+	if why != nil && mode == "strict" {
+		return fmt.Errorf("--mode=strict: %w", why)
+	}
+	if l != nil {
+		// Members of the strict sessions, adopted ones included, may not
+		// signal the agent.
+		if err := l.Protect(os.Getpid()); err != nil {
+			return fmt.Errorf("strict mode: %w", err)
+		}
+	}
+	a.mu.Lock()
+	a.strict = why == nil
+	a.mu.Unlock()
+	if why != nil {
+		a.log.Info("lite mode", "why", why)
+	} else {
+		a.log.Info("strict mode")
+	}
+	return nil
 }
 
 // listen creates the agent socket. Its directory is root-only: whoever can
@@ -166,19 +224,26 @@ func (a *agent) attach(st *specs.ContainerProcessState, fd int) error {
 		a.log.Error("no policy, denying", "container", id, "err", err)
 		pol = &Policy{Name: md.Policy}
 	}
-	s, err = newSession(id, st.Pid, md, pol, nil, a.log, a.rec)
+	var ks *lsm.Session
+	if a.strict {
+		if ks, err = a.lsm.NewSession(st.Pid); err != nil {
+			a.mu.Unlock()
+			return fmt.Errorf("strict mode: %w", err)
+		}
+	}
+	s, err = newSession(id, st.Pid, md, pol, nil, ks, a.log, a.rec)
 	if err != nil {
 		a.mu.Unlock()
 		return err
 	}
 	if err := a.attachLocked(s, fd, st.Pid, nil); err != nil {
 		a.mu.Unlock()
-		s.m.Close()
+		s.close()
 		return err
 	}
 	a.startLocked(s)
 	a.mu.Unlock()
-	a.log.Info("session started", "container", id, "namespace", md.Namespace, "pod", md.Pod, "name", md.Container, "policy", pol.Name, "pid", st.Pid)
+	a.log.Info("session started", "container", id, "namespace", md.Namespace, "pod", md.Pod, "name", md.Container, "policy", pol.Name, "strict", ks != nil, "pid", st.Pid)
 	a.persist(s)
 	return nil
 }
@@ -236,7 +301,7 @@ func (a *agent) startLocked(s *session) {
 			a.forget(id)
 		}
 		a.pmu.Unlock()
-		s.m.Close()
+		s.close()
 		a.log.Info("session ended", "container", id)
 	}()
 }

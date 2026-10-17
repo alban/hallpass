@@ -19,6 +19,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -92,10 +93,16 @@ func Supported() error {
 // must be supported, and bpf must be in the active LSM list, otherwise
 // programs attach but are never called.
 func Active() error {
+	return ActiveIn("/")
+}
+
+// ActiveIn is Active, reading the active LSM list in root directory root:
+// the host's, for a process in a container (/proc/1/root).
+func ActiveIn(root string) error {
 	if err := Supported(); err != nil {
 		return err
 	}
-	b, err := os.ReadFile("/sys/kernel/security/lsm")
+	b, err := os.ReadFile(filepath.Join(root, "/sys/kernel/security/lsm"))
 	if err != nil {
 		return fmt.Errorf("cannot read the active LSMs: %w", err)
 	}

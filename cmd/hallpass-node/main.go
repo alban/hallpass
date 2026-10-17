@@ -87,6 +87,7 @@ func runAgent(args []string) error {
 	hostRoot := fs.String("host-root", "/proc/1/root", "the host's root, to run runc features in")
 	runc := fs.String("runc", "", "runc's path on the host (default: search the usual paths)")
 	pluginIdx := fs.String("plugin-index", "50", "NRI plugin index")
+	mode := fs.String("mode", "auto", "lite (seccomp only) | strict (the kernel also enforces the answers with BPF-LSM; fail without it) | auto (strict if the node has BPF-LSM)")
 	verbose := fs.Bool("v", false, "debug logs")
 	_ = fs.Parse(args)
 	if fs.NArg() != 0 {
@@ -141,6 +142,9 @@ func runAgent(args []string) error {
 			log.Warn("no fd-store: the requests in flight are lost if the agent restarts", "err", err)
 		}
 		go ag.keepStore(ctx, *fdStore)
+	}
+	if err := ag.setupStrict(*mode, *hostRoot); err != nil {
+		return err
 	}
 	ln, err := listen(*socket)
 	if err != nil {

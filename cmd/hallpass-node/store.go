@@ -18,13 +18,16 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/alban/hallpass/internal/fdstore"
+	"github.com/alban/hallpass/internal/lsm"
 	"github.com/alban/hallpass/internal/rules"
 	"github.com/alban/hallpass/internal/seccomp"
 )
 
 // The fd-store keeps, for each session, an entry keyed by container id:
 // fds [state, listener, journal, listener, journal, ...], where state is a
-// sealed memfd holding a saved session.
+// sealed memfd holding a saved session. Strict mode's programs and maps
+// are kept under lsmKey (see lsm.FDs), which no container id can be.
+const lsmKey = "hallpass:lsm"
 
 // saved is what recreates a session after the agent restarts.
 type saved struct {
@@ -33,7 +36,8 @@ type saved struct {
 	Metadata metadata     `json:"metadata"`
 	Policy   Policy       `json:"policy"`
 	Rules    []rules.Rule `json:"rules"`
-	Pids     []int        `json:"pids"` // of the listeners, in fd order
+	Pids     []int        `json:"pids"`             // of the listeners, in fd order
+	Kernel   uint32       `json:"kernel,omitempty"` // the session id in the kernel, strict mode
 }
 
 // maxSaved bounds a saved session.
@@ -89,13 +93,32 @@ func (a *agent) connectStore(path string) error {
 		c.Close()
 		return err
 	}
+	// The programs first: the strict sessions need them.
+	for i, e := range es {
+		if e.Key == lsmKey {
+			a.adoptLSM(e)
+			es = append(es[:i:i], es[i+1:]...)
+			break
+		}
+	}
 	for _, e := range es {
 		a.adopt(c, e)
+	}
+	a.mu.Lock()
+	l := a.lsm
+	if a.lsmAdopted {
+		a.lsmAdopted = false
+		a.mu.Unlock()
+		// The sessions of containers that ended while the agent was away.
+		l.DropStale()
+	} else {
+		a.mu.Unlock()
 	}
 	a.pmu.Lock()
 	a.store = c
 	a.pmu.Unlock()
 	a.log.Info("fd-store connected", "entries", len(es))
+	a.persistLSM()
 	a.mu.Lock()
 	ss := make([]*session, 0, len(a.sessions))
 	for _, s := range a.sessions {
@@ -106,6 +129,41 @@ func (a *agent) connectStore(path string) error {
 		a.persist(s)
 	}
 	return nil
+}
+
+// adoptLSM takes over the programs of a previous agent, which still
+// enforce strict mode on its containers, unless the agent has its own.
+func (a *agent) adoptLSM(e fdstore.Entry) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.lsm != nil {
+		fdstore.CloseAll(e.FDs)
+		return
+	}
+	l, err := lsm.FromFDs(e.FDs)
+	if err != nil {
+		// Detached once the store drops them: the strict sessions are
+		// dropped too (adopt).
+		a.log.Error("strict mode: adopting the BPF programs", "err", err)
+		return
+	}
+	a.lsm, a.lsmAdopted = l, true
+	a.log.Info("strict mode: BPF programs adopted from the fd-store")
+}
+
+// persistLSM stores the programs in the fd-store, if any and connected.
+func (a *agent) persistLSM() {
+	a.mu.Lock()
+	l := a.lsm
+	a.mu.Unlock()
+	if l == nil {
+		return
+	}
+	a.pmu.Lock()
+	defer a.pmu.Unlock()
+	if a.store != nil {
+		a.storeFailed(lsmKey, a.store.Put(lsmKey, l.FDs()))
+	}
 }
 
 // adopt recreates the session of entry e, left by a previous agent, unless
@@ -149,7 +207,23 @@ func (a *agent) adopt(c *fdstore.Client, e fdstore.Entry) {
 		}
 	}
 	pol := sv.Policy
-	s, err := newSession(e.Key, sv.Pid, sv.Metadata, &pol, rs, a.log, a.rec)
+	var ks *lsm.Session
+	if sv.Kernel != 0 {
+		a.mu.Lock()
+		l := a.lsm
+		a.mu.Unlock()
+		if l == nil {
+			err = errors.New("strict session, and the BPF programs are lost")
+		} else {
+			ks, err = l.ResumeSession(sv.Kernel, sv.Pid)
+		}
+		if err != nil {
+			fdstore.CloseAll(e.FDs[1:])
+			drop("restore session", err)
+			return
+		}
+	}
+	s, err := newSession(e.Key, sv.Pid, sv.Metadata, &pol, rs, ks, a.log, a.rec)
 	if err != nil {
 		fdstore.CloseAll(e.FDs[1:])
 		drop("restore session", err)
@@ -173,7 +247,7 @@ func (a *agent) adopt(c *fdstore.Client, e fdstore.Entry) {
 	}
 	if len(s.listeners) == 0 {
 		a.mu.Unlock()
-		s.m.Close()
+		s.close()
 		drop("restore session", errors.New("no listener left"))
 		return
 	}
@@ -198,6 +272,9 @@ func (a *agent) persist(s *session) {
 	}
 	_, rs, _ := s.m.Snapshot()
 	sv := saved{Start: s.start, Pid: s.pid, Metadata: s.md, Policy: *s.policy, Rules: rs}
+	if s.ks != nil {
+		sv.Kernel = s.ks.ID()
+	}
 	for _, l := range ls {
 		sv.Pids = append(sv.Pids, l.pid)
 	}
