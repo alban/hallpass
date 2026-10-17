@@ -8,8 +8,11 @@ package hubclient
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"google.golang.org/grpc"
@@ -33,6 +36,21 @@ var connectParams = grpc.ConnectParams{
 // port-forward.
 func Dial(addr string) (*grpc.ClientConn, pb.SessionClient, error) {
 	return dial(addr)
+}
+
+// DialConn speaks to a hub over conn, e.g. a port-forward stream. Such a
+// stream carries one connection: once it fails, so does the client, and
+// the caller opens a new stream and calls DialConn again.
+func DialConn(conn net.Conn) (*grpc.ClientConn, pb.SessionClient, error) {
+	var once sync.Once
+	return dial("passthrough:///hallpass-node", grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
+		var c net.Conn
+		once.Do(func() { c = conn })
+		if c == nil {
+			return nil, errors.New("port-forward stream closed")
+		}
+		return c, nil
+	}))
 }
 
 func dial(target string, opts ...grpc.DialOption) (*grpc.ClientConn, pb.SessionClient, error) {
