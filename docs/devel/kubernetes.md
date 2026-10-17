@@ -390,6 +390,11 @@ Branch `headlamp`, on top of `nri`:
   cluster is open. A store per cluster holds their state; the React
   components read it with `useSyncExternalStore`. Exceptions in the
   callbacks Go calls are caught: they would stop the wasm program.
+  The four methods given to JS for a connection (`deliver`, `closed`,
+  `answer`, `close`) are created once, with `js.FuncOf`, and bound to the
+  connection's id (`Function.prototype.bind`): a `js.Func` per
+  connection would leak, since releasing one that JS still calls
+  panics, and the plugin reconnects for as long as a page is open.
 - **UI.** The sidebar view has the pending requests, the sessions and
   the agents' state; the app bar badge, the pod details section (policy,
   pending requests, rules per container) and the pod list column
