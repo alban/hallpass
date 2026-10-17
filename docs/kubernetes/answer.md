@@ -16,12 +16,13 @@ hallpass-node pending agents/agent/agent            # namespace/pod/container, o
 hallpass-node answer agents/agent/agent 1 once
 ```
 
-Answers are those of `hallpass`: `once`, `temp` (until the session
-ends), `always` (a rule for the session's lifetime: nothing is written
-back to the policy), `deny` and `never`. `--addr` selects another
-address than `127.0.0.1:7323`.
+The answers are the same as on a workstation: `once`, `temp` (5
+minutes), `always` (for the session's lifetime: nothing is written back
+to the policy), `deny` and `never`; see
+[Answers and rules](../answers.md). `--addr` selects another address
+than `127.0.0.1:7323`.
 
-`hallpass web` does the same in a browser, through the same
+[`hallpass web`](../web.md) does the same in a browser, through the same
 port-forward: the pending requests, the activity and the rules of every
 session on that node, named `namespace/pod/container`.
 

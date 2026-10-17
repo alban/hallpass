@@ -48,22 +48,6 @@ Sometimes hallpass cannot read the path a syscall passes, for example when the p
 
 While a prompt is pending, the paused thread only reacts to fatal signals (Linux 5.19 and later): a Ctrl-C or other handled signal is delivered once you answer, instead of restarting the syscall and asking again.
 
-## Strict mode
-
-Strict mode builds on lite mode: it still pauses writes and asks you interactively, exactly as lite mode does, and the workload waits for your answer. The BPF-LSM program is an added layer, not a replacement: it enforces each answer in the kernel on the real file. It is not a silent, pre-configured policy.
-
-Strict mode enforces your answers in the kernel with a BPF-LSM program, on the real file the kernel is about to modify. This closes the TOCTOU race that lite mode cannot: with seccomp, the kernel re-resolves the path after the check, so a malicious multi-threaded process can swap it in between (via a symlink, bind mount or rename). The LSM hook runs after that resolution, so there is no window to race.
-
-"Allow once" in strict mode allows exactly the paused syscall: the kernel grants it to that thread only, and drops the grant when the syscall returns. Another thread, or a retry of the same write later, is asked again. Dropping the grant needs a `sys_exit` tracepoint, which slows down every syscall on the host a little (about 200 ns) while strict mode runs.
-
-Run hallpass as your user; only loading the BPF programs needs root:
-
-```console
-hallpass --mode=strict -- copilot
-```
-
-hallpass starts a short-lived copy of itself as root (`--escalate`: `auto` picks pkexec in a graphical session, else sudo, run0 or doas; `manual` prints the command for you to run as root and waits for Enter). Without `--escalate`, hallpass uses the choice saved in `~/.config/hallpass/config` (`escalate = sudo`), or else asks on the terminal which tool to use and whether to remember it; `--escalate=ask` asks again. The config directory is `$XDG_CONFIG_HOME/hallpass` when that variable is set to an absolute path, otherwise `~/.config/hallpass`. The sandbox can never write it. The helper checks it was started for a hallpass of the invoking user, loads and attaches the programs, hands their file descriptors back to the supervisor and exits. The supervisor makes itself non-dumpable, and the LSM denies signals from the sandbox to it.
-
 ## Using hallpass with agent CLIs
 
 Wrap the top-level command; there is nothing to configure in the agent:
@@ -98,62 +82,10 @@ hallpass --ask=answer -- copilot     # in one terminal
 hallpass answer                      # in another, to see prompts and reply
 ```
 
-`hallpass answer` connects to the running session's socket, shows each pending request (path, the `by:` command line and its parents) and lets you allow once, allow temporarily, allow always, deny or refuse forever. Every client answers the same requests: the first answer wins, and the others take their prompt down, the terminal overlay included.
+`hallpass answer` connects to the running session's socket, shows each pending request (path, the `by:` command line and its parents) and lets you give the same [answers](../answers.md) as the terminal. Every client answers the same requests: the first answer wins, and the others take their prompt down, the terminal overlay included.
 
 `hallpass answer` is mainly a testing and debugging aid, and a fallback for the headless case above; the terminal overlay is the normal way to answer. The socket serves a gRPC API (`internal/sessionpb/session.proto`) to follow and answer the session. It only accepts a client of the same user that is not itself sandboxed (it rejects any peer running under a seccomp filter), so the sandbox cannot answer its own prompts through it.
 
-### Web UI (experimental)
+The [web UI](../web.md) (`hallpass web`, experimental) does the same in a browser, for every session of the user.
 
-```console
-hallpass web
-```
-
-`hallpass web` serves a page on 127.0.0.1 that shows every session of the user: the pending requests with the same answers as the terminal, the activity (every decided access, filterable) and the rules, which can be removed. It prints a pairing link that works once; press Enter in its terminal for a new one. `--open` opens it with `xdg-open`, `--listen` picks the address (loopback only). `--node ADDR` follows the sessions of a Kubernetes node agent instead of this user's (see [Kubernetes](kubernetes/answer.md)).
-
-<video src="../assets/demos/web.mp4" poster="../assets/demos/web.png" controls muted playsinline aria-label="a shell under hallpass on the left and hallpass web on the right: a write to ~/.bashrc denied from the browser, then ~/.local/bin allowed always"></video>
-
-*The same request shows in the terminal and in the browser; answering in the browser takes the terminal prompt down.*
-
-It is experimental: the browser keeps a cookie that a sandboxed agent could read from the profile, then use to answer its own requests. See [docs/devel/web.md](devel/web.md#security).
-
-## Requirements
-
-- Linux with seccomp user notification (5.0+; `SECCOMP_USER_NOTIF_FLAG_CONTINUE` needs 5.5+). Check `/proc/sys/kernel/seccomp/actions_avail` contains `user_notif`.
-- arm64 or amd64.
-- Strict mode: BPF-LSM active, i.e. `bpf` listed in `/sys/kernel/security/lsm`. Fedora enables it by default; Ubuntu builds it but does not activate it (add `bpf` to the `lsm=` kernel parameter). The programs also need the `bpf_path_d_path` kfunc (upstream 6.12; they also use `bpf_preempt_disable` from 6.10); the verifier rejects them otherwise. Tested on 7.2.
-- Desktop prompts: a session D-Bus with an `org.freedesktop.Notifications` service supporting actions (GNOME, KDE, most notification daemons).
-
-## Building
-
-```console
-go build ./cmd/hallpass
-```
-
-`make` adds the `grpcnotrace` build tag, which leaves gRPC's debug tracing out of the binary (4 MB smaller).
-
-## Limitations
-
-hallpass is a proof of concept. It mediates filesystem writes; it does not yet mediate
-`execve` or `connect`, in either mode. A sandboxed process can therefore reach
-a service that acts on its behalf *outside* the sandbox, and so write anywhere
-that service can, without a prompt. For example `systemd-run --user`, or
-`docker`/`podman run` talking to a daemon, or a process connecting directly to
-the systemd or D-Bus session socket. These are trivial, known escapes until
-`connect`/`execve` policy exists; treat the current build as "ask me about
-honest mistakes", not "contain a hostile agent".
-
-Lite mode is best effort:
-
-- Only writes are mediated (write-intent `open`, create, delete, rename, link, `truncate`, `mknod`). Reading secrets is not blocked in lite mode.
-- Allowed syscalls continue with `SECCOMP_USER_NOTIF_FLAG_CONTINUE`, so a malicious multi-threaded process can change the path between the check and the kernel acting on it (TOCTOU). Strict mode (BPF-LSM) closes this.
-- Pre-existing hard links to protected files are not detected.
-- `chmod`, `chown`, extended attributes and timestamps are not mediated yet.
-- Network and `execve` policy are not implemented yet (see above).
-
-Strict mode:
-
-- The supervisor holds writable fds of the BPF maps, so the user running hallpass can put any process, including other users', under the policy or under signal protection. Choosing an escalation tool is the administrator's consent to that.
-- If the supervisor dies, the programs are detached. Seccomp then fails the sandbox's mediated syscalls closed, but nothing else is enforced on processes left behind.
-- When the helper runs without a recognised escalation tool in its environment (`--escalate=manual`, or `su`, which clears `SUDO_UID`/`PKEXEC_UID`/`DOAS_USER`), it cannot tell which user invoked it and only checks that the target runs the same hallpass binary.
-- `kernel.yama.ptrace_scope=3` prevents the helper from fetching the socket (`pidfd_getfd`); run hallpass as root instead.
-- Sandboxed processes cannot mount overlayfs (for example rootless podman or buildah with the native overlay driver): overlayfs writes to its layers without going through the hooks hallpass checks. fuse-overlayfs works.
+See [Limitations](../design.md#limitations) for what hallpass does not cover.

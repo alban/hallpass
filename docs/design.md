@@ -14,7 +14,7 @@ This is what lets hallpass *ask* instead of just failing the call. It is best ef
 
 In practice lite mode is still useful, because that gap only matters against a process *deliberately* racing the check. Most agent escapes are accidents — a wrong path, an overeager script, a command run in the wrong directory — not adversarial races, and lite mode catches those reliably. Strict mode closes the TOCTOU race so filesystem enforcement also holds against a deliberate racer.
 
-Neither mode contains a hostile agent today: `execve` and `connect` are not mediated, so a sandboxed process can still ask a service outside the sandbox (`systemd-run --user`, a container daemon, the systemd or D-Bus socket) to write for it. See [Limitations](usage.md#limitations).
+Neither mode contains a hostile agent today: `execve` and `connect` are not mediated, so a sandboxed process can still ask a service outside the sandbox (`systemd-run --user`, a container daemon, the systemd or D-Bus socket) to write for it. See [Limitations](#limitations).
 
 ## Strict mode: BPF-LSM
 
@@ -30,19 +30,41 @@ Strict mode adds an eBPF program on the kernel's LSM hooks, which run at the mom
 
 Overlayfs is the exception: it writes to its lower and upper layers with the kernel's internal calls (copy-up, create, unlink, rename), which skip the path hooks. An overlay mounted by a sandboxed process with a protected directory as its upper layer would write there unchecked, so the LSM denies sandboxed processes mounting overlayfs; fuse-overlayfs, which goes through the normal hooks, still works. Overlays set up outside the sandbox, such as a container's root, are used normally: the files opened through the overlay are checked, and the layer accesses behind them are not checked a second time.
 
-Only loading the BPF programs needs root. hallpass starts a short-lived copy of itself as root, which loads and attaches the programs, hands their file descriptors back to the unprivileged supervisor and exits. The supervisor makes itself non-dumpable, and the LSM denies signals from the sandbox to it. See [Strict mode](usage.md#strict-mode) for how the root step is run.
+Only loading the BPF programs needs root. hallpass starts a short-lived copy of itself as root, which loads and attaches the programs, hands their file descriptors back to the unprivileged supervisor and exits. The supervisor makes itself non-dumpable, and the LSM denies signals from the sandbox to it. See [Strict mode](workstation/strict.md) for how the root step is run.
 
-## Prompts that don't flood you
+## Prompts
 
-Prompts are designed not to overwhelm you:
+Prompts are designed not to overwhelm you: one question at a time, concurrent requests of a process for the same path coalesced, and pending requests settled by a new rule. See [Answers and rules](answers.md#prompts-that-dont-flood-you).
 
-- one notification per session, updated in place;
-- one question at a time, oldest first; the terminal prompt counts the requests waiting behind it, "(+3 waiting)", and updates the count as they arrive or close;
-- **coalescing:** concurrent requests from the same process for the same operation on the same path become one request, and one answer releases them all. Requests from different processes are never merged, because the prompt names one process and your answer must not reach another one you didn't see;
-- **settling:** an "allow for 5 minutes" or "always" answer adds a rule for the folder the prompt names ("[t] and [a] allow: ~/.cache/thumbs"), and every pending request that rule allows is settled at once, without a question, as if it had arrived after the rule. "Once", "deny" and "never" add no folder rule, so they settle nothing else.
+## Limitations
 
-<video src="../assets/demos/coalesce.mp4" poster="../assets/demos/coalesce.png" controls muted playsinline aria-label="eight parallel writes under ~/.cache/thumbs give one prompt; answering always creates all eight files and shows as a rule"></video>
+hallpass is a proof of concept. It mediates filesystem writes; it does not yet mediate
+`execve` or `connect`, in either mode. A sandboxed process can therefore reach
+a service that acts on its behalf *outside* the sandbox, and so write anywhere
+that service can, without a prompt. For example `systemd-run --user`, or
+`docker`/`podman run` talking to a daemon, or a process connecting directly to
+the systemd or D-Bus session socket. These are trivial, known escapes until
+`connect`/`execve` policy exists; treat the current build as "ask me about
+honest mistakes", not "contain a hostile agent".
 
-*Eight parallel writes under one folder: one question, and "always" settles all eight.*
+### Lite mode
 
-The prompt shows the target path and, as a `by:` line, the command that tried the write and its parent chain (for example `cp hello ~/.local/bin/hello ← make ← copilot`), so you can see who is really behind the access. Press Ctrl-] inside a session to see its current rules, including the answers given so far.
+Lite mode is best effort:
+
+- Only writes are mediated (write-intent `open`, create, delete, rename, link, `truncate`, `mknod`). Reading secrets is not blocked in lite mode.
+- Allowed syscalls continue with `SECCOMP_USER_NOTIF_FLAG_CONTINUE`, so a malicious multi-threaded process can change the path between the check and the kernel acting on it (TOCTOU). Strict mode (BPF-LSM) closes this.
+- Pre-existing hard links to protected files are not detected.
+- `chmod`, `chown`, extended attributes and timestamps are not mediated yet.
+- Network and `execve` policy are not implemented yet (see above).
+
+### Strict mode
+
+- The supervisor holds writable fds of the BPF maps, so the user running hallpass can put any process, including other users', under the policy or under signal protection. Choosing an escalation tool is the administrator's consent to that.
+- If the supervisor dies, the programs are detached. Seccomp then fails the sandbox's mediated syscalls closed, but nothing else is enforced on processes left behind.
+- When the helper runs without a recognised escalation tool in its environment (`--escalate=manual`, or `su`, which clears `SUDO_UID`/`PKEXEC_UID`/`DOAS_USER`), it cannot tell which user invoked it and only checks that the target runs the same hallpass binary.
+- `kernel.yama.ptrace_scope=3` prevents the helper from fetching the socket (`pidfd_getfd`); run hallpass as root instead.
+- Sandboxed processes cannot mount overlayfs (for example rootless podman or buildah with the native overlay driver): overlayfs writes to its layers without going through the hooks hallpass checks. fuse-overlayfs works.
+
+### Kubernetes
+
+See [Kubernetes limitations](kubernetes/index.md#limitations).

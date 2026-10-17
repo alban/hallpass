@@ -31,6 +31,6 @@ $ go build ./cmd/hallpass
 $ ./hallpass -- copilot
 ```
 
-See [How it works](design.md) for the design, [Usage](usage.md) for the flags, the default policy and running with agent CLIs, and [Use cases](use-cases.md) for auditing, checking a tool's declared paths, CI and more.
+See [Install](workstation/install.md) to build it, [Usage](workstation/usage.md) for the flags, the default policy and running with agent CLIs, [Answers and rules](answers.md) for what to answer, and [Use cases](workstation/use-cases.md) for auditing, checking a tool's declared paths, CI and more. To sandbox agents running in pods, see [Kubernetes](kubernetes/index.md). [How it works](design.md) explains the design and its limitations.
 
 The user-space code is Apache-2.0 licensed; the BPF programs are GPL-2.0-only OR BSD-2-Clause. The source is on [GitHub](https://github.com/alban/hallpass).

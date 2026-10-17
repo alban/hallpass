@@ -77,4 +77,4 @@ Lite mode is about honest mistakes: a deliberately malicious process can race it
 $ hallpass --mode=strict -- copilot
 ```
 
-It asks just like lite mode. See [strict mode](usage.md#strict-mode) for the requirements, and [limitations](usage.md#limitations) for what neither mode covers yet.
+It asks just like lite mode. See [strict mode](strict.md) for the requirements, and [limitations](../design.md#limitations) for what neither mode covers yet.

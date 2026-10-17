@@ -92,7 +92,7 @@ hallpass web [--listen ADDR] [--open] [--node ADDR]  # follow and answer every s
 
 By default, only `~/.config/hallpass` is denied (the sandbox must not change what hallpass runs next time); the project, a private `$TMPDIR` for the session (removed at exit if empty) and the usual `/dev` nodes are writable; anything else is asked, including the shared `/tmp`, `/var/tmp` and `/dev/shm` (answer "always" to allow them). Writes to known secret stores (`~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.config/gh`, `~/.kube`, `~/.docker`, `~/.netrc`, `~/.git-credentials`) are asked too, with a red warning label. Press Ctrl-] inside a session to see its current rules, including answers given so far; any key closes the overlay.
 
-Background processes the command leaves behind stay supervised while hallpass runs; `--wait=all` keeps supervising them after the command exits. For auditing (`--ask=allow`), checking a tool against the paths it declares (`--no-implicit`), CI and more, see [docs/use-cases.md](docs/use-cases.md).
+Background processes the command leaves behind stay supervised while hallpass runs; `--wait=all` keeps supervising them after the command exits. For auditing (`--ask=allow`), checking a tool against the paths it declares (`--no-implicit`), CI and more, see [docs/workstation/use-cases.md](docs/workstation/use-cases.md).
 
 ### Strict mode
 
@@ -106,7 +106,7 @@ hallpass --mode=strict -- copilot
 
 hallpass starts a short-lived copy of itself as root (`--escalate`: `auto` picks pkexec in a graphical session, else sudo, run0 or doas; `manual` prints the command for you to run as root and waits for Enter). Without `--escalate`, hallpass uses the choice saved in `~/.config/hallpass/config` (`escalate = sudo`), or else asks on the terminal which tool to use and whether to remember it; `--escalate=ask` asks again. The config directory is `$XDG_CONFIG_HOME/hallpass` when that variable is set to an absolute path, otherwise `~/.config/hallpass`. The sandbox can never write it. The helper checks it was started for a hallpass of the invoking user, loads and attaches the programs, hands their file descriptors back to the supervisor and exits. The supervisor makes itself non-dumpable, and the LSM denies signals from the sandbox to it.
 
-See [docs/usage.md](docs/usage.md).
+See [docs/workstation/strict.md](docs/workstation/strict.md).
 
 ## Using hallpass with agent CLIs
 
@@ -120,7 +120,7 @@ hallpass -C ~/src/app -- codex
 
 Things to know:
 
-- **Full-screen TUIs**: hallpass draws its question over the agent's screen and repaints it afterwards; the agent's terminal is never resized. This also works over ssh. Without a terminal, use the desktop prompt or `hallpass answer` from another terminal ([docs/usage.md](docs/usage.md#over-ssh)).
+- **Full-screen TUIs**: hallpass draws its question over the agent's screen and repaints it afterwards; the agent's terminal is never resized. This also works over ssh. Without a terminal, use the desktop prompt or `hallpass answer` from another terminal ([docs/workstation/usage.md](docs/workstation/usage.md#over-ssh)).
 - **Agents' own sandboxes**: some agents run commands inside their own bubblewrap sandbox (for example Codex), which creates user and mount namespaces. hallpass lite mode blocks new namespaces by default, because inside a private mount namespace a process could bind-mount a protected directory somewhere that looks harmless. The agent's own sandbox will then fail to start or fall back; disable it in the agent, pass `--allow-userns` and accept the weaker lite-mode guarantees, or use strict mode, which allows namespaces because it checks real inodes.
 - **Agents that use seccomp user notification themselves** cannot install their own listener under hallpass: the kernel allows only one listener per filter chain and returns `EBUSY`. This fails closed.
 - **sudo** does not work inside the sandbox (`no_new_privs`), in either mode, by design.
