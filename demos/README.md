@@ -9,6 +9,7 @@ Each demo is a directory with its recording script. The [Makefile](Makefile) fin
 | Coalesce | [`coalesce/demo.tape`](coalesce/demo.tape) | How it works | VHS |
 | Strict | [`strict/demo.tape`](strict/demo.tape) | How it works | VHS, over ssh |
 | Web UI | [`web/record.js`](web/record.js) | Usage | Puppeteer |
+| Headlamp | [`headlamp/record.js`](headlamp/record.js) | Kubernetes | Puppeteer, on kind |
 
 [`example/`](example) is a small C project that the demos work in.
 
@@ -64,6 +65,17 @@ Requirements: Go, `node` and `npm`, `ttyd`, `ffmpeg` (with libx264 and librsvg),
 
 ```console
 $ make -C demos web   # about 1 minute
+```
+
+## Headlamp
+
+`headlamp.mp4` shows a shell in a pod (left, `kubectl exec`) and Headlamp with the hallpass plugin (right). "Sandbox with hallpass" sets the policy on the `agent` Deployment ([`headlamp/demo.yaml`](headlamp/demo.yaml)); in its new pod, a write in `/workspace` goes through, appending to `/etc/profile` shows in the app bar badge and is denied from the hallpass view, and a write to `/etc/agent.conf` is allowed once. The pod's details show its hallpass section.
+
+It runs Headlamp in docker on a kind cluster with the agent, as `make test-kind` leaves it:
+
+```console
+$ KEEP_CLUSTER=1 make test-kind
+$ make -C demos headlamp
 ```
 
 ## Variables

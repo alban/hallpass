@@ -34,7 +34,7 @@ TERMINAL := $(TAPES:%/demo.tape=%)
 BROWSER := $(SCRIPTS:%/record.js=%)
 DEMOS := $(TERMINAL) $(BROWSER)
 
-.PHONY: all list validate posters hallpass FORCE $(DEMOS)
+.PHONY: all list validate posters hallpass headlamp-plugin FORCE $(DEMOS)
 
 all: $(DEMOS)
 
@@ -49,6 +49,9 @@ $(DEMOS): %: media/%.mp4
 
 hallpass:
 	$(MAKE) -C ..
+
+headlamp-plugin:
+	$(MAKE) -C .. headlamp
 
 node_modules: package.json package-lock.json
 	$(NPM) ci --no-audit --no-fund
@@ -84,4 +87,10 @@ media/%.mp4: %/demo.tape hallpass FORCE
 
 media/%.mp4: %/record.js hallpass node_modules FORCE
 	$(call record,HALLPASS=../hallpass CHROMIUM=$(CHROMIUM) PROFILE=$(CHROMIUM_PROFILE)-$* \
+		WORKDIR=$$dir OUT=$$dir/raw.webm $(NODE) $<)
+
+# Headlamp with the plugin, on the kind cluster that `KEEP_CLUSTER=1 make
+# test-kind` leaves running.
+media/headlamp.mp4: media/%.mp4: %/record.js headlamp-plugin node_modules FORCE
+	$(call record,CHROMIUM=$(CHROMIUM) PROFILE=$(CHROMIUM_PROFILE)-$* \
 		WORKDIR=$$dir OUT=$$dir/raw.webm $(NODE) $<)
