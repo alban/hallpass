@@ -237,7 +237,7 @@ func (m *Monitor) open(l *listener, n seccomp.Notif, syscall string, op rules.Op
 	if v, id, ok := rules.Eval(m.rules, op, obj, m.now()); ok && v != rules.Ask {
 		return nil, Reason{Rule: id}, v == rules.Allow
 	}
-	key := requestKey(op, obj, n.ID)
+	key := requestKey(op, obj, **subject, n.ID)
 	if r := m.byKey[key]; r != nil {
 		r.waiters = append(r.waiters, waiter{l, n.ID})
 		return r, Reason{}, false
@@ -438,17 +438,23 @@ func buildSubject(tid uint32, root int) rules.Subject {
 	return rules.Subject{Chain: chain}
 }
 
-// requestKey coalesces concurrent requests: same op and object, whatever
-// the subject. Unreadable paths are never coalesced (id is the
-// notification's).
-func requestKey(op rules.Op, obj rules.Object, id uint64) string {
-	switch {
-	case obj.Path != nil:
-		return fmt.Sprintf("%d\x00path\x00%s", op, obj.Path.Path)
-	case obj.Proc != nil:
-		return fmt.Sprintf("%d\x00proc\x00%s\x00%s", op, obj.Proc.Name, obj.Proc.Target.Chain[0].Comm)
+// requestKey coalesces concurrent requests: same op and object, from the
+// same process (thread group). The prompt shows one process only, so an
+// answer must not reach another one. Unreadable paths, and processes whose
+// thread group is unknown, are never coalesced (id is the notification's).
+func requestKey(op rules.Op, obj rules.Object, subject rules.Subject, id uint64) string {
+	tgid := 0
+	if len(subject.Chain) > 0 {
+		tgid = subject.Chain[0].PID
 	}
-	return fmt.Sprintf("unknown\x00%d", id)
+	switch {
+	case tgid <= 0:
+	case obj.Path != nil:
+		return fmt.Sprintf("%d\x00%d\x00path\x00%s", tgid, op, obj.Path.Path)
+	case obj.Proc != nil:
+		return fmt.Sprintf("%d\x00%d\x00proc\x00%s\x00%s", tgid, op, obj.Proc.Name, obj.Proc.Target.Chain[0].Comm)
+	}
+	return fmt.Sprintf("unique\x00%d", id)
 }
 
 // restartKey identifies a syscall of a thread, with what it would write.

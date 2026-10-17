@@ -452,9 +452,10 @@ const (
   wins; the others get `Closed` and drop the prompt. A verdict on a closed
   request returns `ErrClosed`. A gRPC/HTTP adapter maps batches and
   `Apply` one-to-one to messages.
-- **Coalescing**: concurrent requests with the same op and objects are one
-  `Request`, whatever the subject: two processes writing the same file
-  share a prompt. A syscall restarted after a signal is answered from a
+- **Coalescing**: concurrent requests from the same thread group with
+  the same op and objects are one `Request`. Two processes writing the
+  same file get two: the prompt names one process, so an answer must not
+  release another. A syscall restarted after a signal is answered from a
   restart cache without a new `Request`.
 - **Serialization** is the UX's: the monitor does not hold requests back
   while one is being answered. After each `Apply` it closes the pending

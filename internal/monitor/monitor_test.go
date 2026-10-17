@@ -314,6 +314,29 @@ func TestCoalesce(t *testing.T) {
 	}
 }
 
+func TestRequestKey(t *testing.T) {
+	path := func(p string) rules.Object { return rules.Object{Path: &rules.PathObject{Path: p}} }
+	by := func(pid int) rules.Subject { return rules.Subject{Chain: []rules.Task{{PID: pid, TID: pid + 1}}} }
+	unknown := rules.Object{Unknown: errors.New("unreadable")}
+	for _, tc := range []struct {
+		name string
+		a, b string
+		same bool
+	}{
+		{"same process, same path", requestKey(rules.OpMkdir, path("/x"), by(10), 1), requestKey(rules.OpMkdir, path("/x"), by(10), 2), true},
+		{"other process", requestKey(rules.OpMkdir, path("/x"), by(10), 1), requestKey(rules.OpMkdir, path("/x"), by(11), 2), false},
+		{"other path", requestKey(rules.OpMkdir, path("/x"), by(10), 1), requestKey(rules.OpMkdir, path("/y"), by(10), 2), false},
+		{"other op", requestKey(rules.OpMkdir, path("/x"), by(10), 1), requestKey(rules.OpDelete, path("/x"), by(10), 2), false},
+		{"unknown process", requestKey(rules.OpMkdir, path("/x"), by(0), 1), requestKey(rules.OpMkdir, path("/x"), by(0), 2), false},
+		{"no subject", requestKey(rules.OpMkdir, path("/x"), rules.Subject{}, 1), requestKey(rules.OpMkdir, path("/x"), rules.Subject{}, 2), false},
+		{"unknown path", requestKey(rules.OpMkdir, unknown, by(10), 1), requestKey(rules.OpMkdir, unknown, by(10), 2), false},
+	} {
+		if got := tc.a == tc.b; got != tc.same {
+			t.Errorf("%s: same key %v, want %v (%q, %q)", tc.name, got, tc.same, tc.a, tc.b)
+		}
+	}
+}
+
 func TestRuleSettlesPending(t *testing.T) {
 	fx := setup(t, nil, false)
 	sub := filepath.Join(fx.dir, "sub")
