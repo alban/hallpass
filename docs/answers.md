@@ -2,6 +2,26 @@
 
 The same answers apply everywhere: the terminal prompt, desktop notifications, `hallpass answer`, the [web UI](web.md), and in [Kubernetes](kubernetes/answer.md) the `hallpass-node` client and the Headlamp plugin.
 
+## The prompt
+
+In a terminal, hallpass asks in a bar drawn over the bottom of the screen, like a tmux status line:
+
+```
+ hallpass: node (pid 41237) wants to write
+ /home/me/.npm/_cacache/tmp/x
+ by: npm install ← bash ← copilot
+ [t] and [a] allow: /home/me/.npm/_cacache
+ [o] allow once  [t] for 5m0s  [a] always  [d] deny  [n] never  [Esc] dismiss
+```
+
+The `by:` line shows the command line of the process and the commands it was started from. The process can change both, so they help you understand the request but prove nothing.
+
+The program runs on a pseudo-terminal that hallpass relays, so it cannot see or answer the question. Its output, and that of its background jobs, keeps showing above the bar, and when you answer, your terminal ends up exactly as if the bar had never been there. Keys typed in the first half second are ignored, so typing meant for the program does not answer by accident.
+
+Without a terminal, hallpass asks with a desktop notification. It has room for three buttons only: Allow once, Allow 5 min and Deny (or Allow once, Deny and Never when there is no folder to offer).
+
+## Answers
+
 | Key | Answer | Effect |
 |---|---|---|
 | `o` | once | allow this access only |
@@ -21,6 +41,8 @@ A request with no answer before the timeout (`--timeout`, or the policy's `askTi
 - elsewhere, the first two components (`/usr/local`, `/etc/apt`).
 
 They are not offered for a file directly in your home or in `/`, nor when the folder would contain your home, a denied path or a flagged secret store (such as `~/.config/gh` under `~/.config`): then answer `once`.
+
+Processes of the sandbox may write each other's `/proc/<pid>` files (agents tune `oom_score_adj`, for example). Writing those of a process outside the sandbox is asked about, and `t`, `a` and `n` then apply to that file for every process with the same command name.
 
 Rules live as long as the session: nothing is written back to the command line or to the policy. Press Ctrl-] in a terminal session to see them; the web UI can remove them.
 

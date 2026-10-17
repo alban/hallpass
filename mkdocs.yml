@@ -1,5 +1,5 @@
 site_name: hallpass
-site_description: Run an AI coding agent in your shell, and get asked before it writes outside your project.
+site_description: Run a program in your shell, and get asked before it writes outside your project.
 site_url: https://alban.github.io/hallpass/
 repo_url: https://github.com/alban/hallpass
 repo_name: alban/hallpass
@@ -27,10 +27,10 @@ theme:
         icon: material/weather-sunny
         name: Switch to light mode
   features:
-    - navigation.sections
+    - navigation.indexes
+    - navigation.expand
     - navigation.top
     - content.code.copy
-    - toc.integrate
 
 exclude_docs: |
   devel/
@@ -38,6 +38,7 @@ exclude_docs: |
 nav:
   - Home: index.md
   - Workstation:
+      - workstation/index.md
       - Install: workstation/install.md
       - Usage: workstation/usage.md
       - Strict mode: workstation/strict.md

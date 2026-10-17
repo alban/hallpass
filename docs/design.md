@@ -4,7 +4,26 @@ hallpass wraps a command and puts it, and everything it starts, under a sandbox.
 
 ## Why from the kernel
 
-Agent CLIs have their own permission prompts and sandboxes, but those are enforced by the agent process itself and configured by files the agent can often write. hallpass is enforced by the kernel, from outside the agent, so it does not depend on the agent being well-behaved. It complements the agent's own controls rather than replacing them.
+Any program you run can write wherever your user can. Some have their own permission prompts and sandboxes, such as AI agent CLIs, but those are enforced by the program itself and configured by files it can often write. hallpass is enforced by the kernel, from outside the program, so it does not depend on the program being well-behaved. It complements the program's own controls rather than replacing them.
+
+## Security model
+
+hallpass is a proof of concept. It is meant to catch **honest mistakes**: a wrong path, an overeager install script, a command run in the wrong directory, by the program or anything it starts, even when the program skips its own prompts.
+
+What it protects:
+
+- Writes outside the project, in both modes: paused and asked, or denied by your rules. The sandbox cannot change hallpass itself (its binary and config are denied), nor answer its own prompts: it cannot see the terminal prompt, and the session socket refuses sandboxed clients.
+- In strict mode, also against a process that deliberately races the check (TOCTOU), or hides the target behind symlinks, bind mounts or other mount namespaces: the kernel checks the real file.
+
+What it does not protect:
+
+- Reads: a program can read your secrets, and send them away (the network is not mediated).
+- Writes done for the sandbox by a service outside it (`systemd-run --user`, a container daemon, D-Bus): `connect` and `execve` are not mediated yet. This is why hallpass does not contain a hostile program today.
+- Permissions, owners, extended attributes and timestamps.
+- In lite mode, a deliberate TOCTOU race.
+- Your answers: an `always` on a broad folder allows everything under it. The `by:` line of a prompt is set by the process and proves nothing.
+
+The details are in [Limitations](#limitations).
 
 ## Lite mode: seccomp user notification
 
@@ -12,7 +31,7 @@ Lite mode is unprivileged. A seccomp filter pauses the syscalls that modify the 
 
 This is what lets hallpass *ask* instead of just failing the call. It is best effort: because the allowed syscall is re-executed by the kernel, a malicious multi-threaded process can change the path between the check and the kernel acting on it (a TOCTOU race). Strict mode closes that.
 
-In practice lite mode is still useful, because that gap only matters against a process *deliberately* racing the check. Most agent escapes are accidents — a wrong path, an overeager script, a command run in the wrong directory — not adversarial races, and lite mode catches those reliably. Strict mode closes the TOCTOU race so filesystem enforcement also holds against a deliberate racer.
+In practice lite mode is still useful, because that gap only matters against a process *deliberately* racing the check. Most escapes are accidents — a wrong path, an overeager script, a command run in the wrong directory — not adversarial races, and lite mode catches those reliably. Strict mode closes the TOCTOU race so filesystem enforcement also holds against a deliberate racer.
 
 Neither mode contains a hostile agent today: `execve` and `connect` are not mediated, so a sandboxed process can still ask a service outside the sandbox (`systemd-run --user`, a container daemon, the systemd or D-Bus socket) to write for it. See [Limitations](#limitations).
 
@@ -26,7 +45,7 @@ Strict mode exists to close the TOCTOU race that lite mode is inherently exposed
 
 *A process flips one byte of the path it opens, between a file in the project and `~/.bashrc`. Lite mode lets the write through in under a second; strict mode never does ([source](https://github.com/alban/hallpass/blob/main/demos/strict/race/main.go)).*
 
-Strict mode adds an eBPF program on the kernel's LSM hooks, which run at the moment of the action, on the real file (inode) the kernel is about to modify — after any symlink, bind mount, mount-namespace or rename trick has already been resolved. There is no second resolution to race, so the same bypasses that defeat lite mode (symlink races, bind mounts, other mount namespaces, `io_uring`) do not apply. Your answers to the prompts are pushed to the kernel before the paused syscall continues, so the enforcement and the question stay in sync.
+Strict mode adds an eBPF program on the kernel's LSM hooks, which run at the moment of the action, on the real file (inode) the kernel is about to modify — after any symlink, bind mount, mount-namespace or rename trick has already been resolved. There is no second resolution to race, so the same bypasses that defeat lite mode (symlink races, bind mounts, other mount namespaces) do not apply. `io_uring`, which performs I/O without the syscalls seccomp sees, is refused in both modes (`io_uring_setup` fails with `EPERM`). Your answers to the prompts are pushed to the kernel before the paused syscall continues, so the enforcement and the question stay in sync.
 
 Overlayfs is the exception: it writes to its lower and upper layers with the kernel's internal calls (copy-up, create, unlink, rename), which skip the path hooks. An overlay mounted by a sandboxed process with a protected directory as its upper layer would write there unchecked, so the LSM denies sandboxed processes mounting overlayfs; fuse-overlayfs, which goes through the normal hooks, still works. Overlays set up outside the sandbox, such as a container's root, are used normally: the files opened through the overlay are checked, and the layer accesses behind them are not checked a second time.
 
@@ -47,14 +66,15 @@ the systemd or D-Bus session socket. These are trivial, known escapes until
 `connect`/`execve` policy exists; treat the current build as "ask me about
 honest mistakes", not "contain a hostile agent".
 
+In both modes, only writes are mediated: reading files, secrets included, is not restricted. `chmod`, `chown`, extended attributes and timestamps are not mediated yet.
+
 ### Lite mode
 
 Lite mode is best effort:
 
-- Only writes are mediated (write-intent `open`, create, delete, rename, link, `truncate`, `mknod`). Reading secrets is not blocked in lite mode.
+- Only writes are mediated (write-intent `open`, create, delete, rename, link, `truncate`, `mknod`).
 - Allowed syscalls continue with `SECCOMP_USER_NOTIF_FLAG_CONTINUE`, so a malicious multi-threaded process can change the path between the check and the kernel acting on it (TOCTOU). Strict mode (BPF-LSM) closes this.
 - Pre-existing hard links to protected files are not detected.
-- `chmod`, `chown`, extended attributes and timestamps are not mediated yet.
 - Network and `execve` policy are not implemented yet (see above).
 
 ### Strict mode

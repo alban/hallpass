@@ -1,7 +1,8 @@
 # Kubernetes
 
-`hallpass-node` runs AI agents in pods under hallpass, in lite mode
-(seccomp user notification). It is a DaemonSet: on each node, an
+`hallpass-node` sandboxes workloads in pods (AI agents, for example)
+with hallpass, in lite mode (seccomp user notification). It is a
+DaemonSet: on each node, an
 [NRI](https://github.com/containerd/nri) plugin adds a seccomp policy to
 the containers that opt in, and a seccomp agent mediates their file
 writes as `hallpass` does on a workstation. You answer their requests

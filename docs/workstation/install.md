@@ -15,7 +15,7 @@ go build ./cmd/hallpass
 
 `make` adds the `grpcnotrace` build tag, which leaves gRPC's debug tracing out of the binary (4 MB smaller).
 
-Then run an agent, or a shell, from your project:
+Then run a program, or a shell, from your project:
 
 ```console
 $ cd ~/src/myproject
