@@ -10,6 +10,7 @@ Each demo is a directory with its recording script. The [Makefile](Makefile) fin
 | Strict | [`strict/demo.tape`](strict/demo.tape) | How it works | VHS, over ssh |
 | Web UI | [`web/record.js`](web/record.js) | Usage | Puppeteer |
 | Headlamp | [`headlamp/record.js`](headlamp/record.js) | Kubernetes | Puppeteer, on kind |
+| Web UI on Kubernetes | [`kube-web/record.js`](kube-web/record.js) | Kubernetes | Puppeteer, on kind |
 
 [`example/`](example) is a small C project that the demos work in.
 
@@ -76,6 +77,17 @@ It runs Headlamp in docker on a kind cluster with the agent, as `make test-kind`
 ```console
 $ KEEP_CLUSTER=1 make test-kind
 $ make -C demos headlamp
+```
+
+## Web UI on Kubernetes
+
+`kube-web.mp4` shows a shell in a sandboxed pod (left, `kubectl exec`) and [`hallpass web --node`](../docs/kubernetes.md#answer-requests) (right), connected to the agent of the pod's node through `kubectl port-forward`. The `agent` Deployment ([`kube-web/demo.yaml`](kube-web/demo.yaml)) is sandboxed from the start: a write in `/workspace` goes through, appending to `/etc/profile` is denied from the browser, and a write to `/etc/agent.conf` is allowed once. The Activity and Rules views show the result.
+
+Same cluster as the Headlamp demo, and `ttyd` as for the web UI demo:
+
+```console
+$ KEEP_CLUSTER=1 make test-kind
+$ make -C demos kube-web
 ```
 
 ## Variables

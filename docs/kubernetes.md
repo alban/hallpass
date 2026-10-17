@@ -124,6 +124,10 @@ session on that node, named `namespace/pod/container`.
 hallpass web --node 127.0.0.1:7323                  # prints a pairing link
 ```
 
+<video src="../assets/demos/kube-web.mp4" poster="../assets/demos/kube-web.png" controls muted playsinline aria-label="kubectl exec into a sandboxed pod on the left and hallpass web --node on the right: a write in /workspace goes through, a write to /etc/profile is denied from the browser, a write to /etc/agent.conf is allowed once"></video>
+
+*The pod's shell waits while the question is in the browser on another machine; denying it fails the write in the pod.*
+
 The agent also logs every request, answer and session
 (`kubectl -n hallpass-system logs`).
 
@@ -134,6 +138,10 @@ The [Headlamp](https://headlamp.dev) plugin in
 requests from the browser. It connects to every `hallpass-node` pod
 through the API server's port-forward, as `kubectl port-forward` does,
 and needs nothing more in the cluster.
+
+<video src="../assets/demos/headlamp.mp4" poster="../assets/demos/headlamp.png" controls muted playsinline aria-label="kubectl exec on the left and Headlamp on the right: Sandbox with hallpass sets the policy on a Deployment, then a write to /etc/profile in its new pod is denied from the hallpass view and a write to /etc/agent.conf is allowed once"></video>
+
+*Sandboxing a Deployment is a pod action; its requests then show in the app bar badge, on every page.*
 
 Build it (Go, Node.js and npm):
 

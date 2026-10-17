@@ -1,0 +1,54 @@
+# Copyright The hallpass Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# The workload of the kube-web demo (record.js): an "agent" Deployment,
+# sandboxed by hallpass-node.
+apiVersion: hallpass.io/v1alpha1
+kind: HallpassPolicy
+metadata:
+  name: kube-web
+spec:
+  allow: [/workspace/**]
+  ask: true
+  askTimeout: 5m
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kube-web
+  labels:
+    hallpass.io/enabled: "true"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent
+  namespace: kube-web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: agent
+  template:
+    metadata:
+      labels:
+        app: agent
+      annotations:
+        hallpass.io/policy: kube-web
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+        - name: agent
+          image: BUSYBOX
+          command: [sleep, infinity]
+          workingDir: /workspace
+          # The shell's history goes to $HOME: keep it in the workspace.
+          env:
+            - name: HOME
+              value: /workspace
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+      volumes:
+        - name: workspace
+          emptyDir: {}
