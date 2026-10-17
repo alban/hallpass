@@ -48,6 +48,14 @@ test-headlamp: headlamp-wasm
 .PHONY: headlamp-package
 headlamp-package: headlamp
 	cd headlamp && npm run package
+
+# The kind e2e test, answering through Headlamp with the plugin, driven by
+# Puppeteer (test/kind/headlamp). Also needs Chromium (CHROMIUM, default
+# /snap/bin/chromium) and the Headlamp image.
+.PHONY: test-headlamp-kind
+test-headlamp-kind: headlamp
+	E2E_ANSWER=$(CURDIR)/test/kind/headlamp/answer.sh test/kind/e2e.sh
+
 # Run the tests in a VM booting ci-kernels:KERNEL_VERSION, which has BPF-LSM
 # active. Needs vimto (CGO_ENABLED=0 go install lmb.io/vimto@latest) and qemu.
 # Without /dev/kvm, qemu emulates the CPU: slower, but it works. Everything is

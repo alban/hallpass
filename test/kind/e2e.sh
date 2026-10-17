@@ -22,6 +22,8 @@
 #   KEEP_CLUSTER=1   keep a cluster this script created
 #   BUSYBOX          test image (default busybox:1.37)
 #   HALLPASS_E2E_WORK  parent of the scratch directory (default: the repository)
+#   E2E_ANSWER       command that answers the two requests instead of the
+#                    CLI, with KUBECONTEXT and WORK set (test/kind/headlamp)
 
 set -euo pipefail
 
@@ -120,8 +122,14 @@ answer() {
 	log "answering $ans to request $id ($path)"
 	"$CLIENT" answer --addr "$ADDR" hallpass-e2e/mediated/agent "$id" "$ans"
 }
-answer /etc/once once
-answer /etc/denied deny
+if [ -n "${E2E_ANSWER:-}" ]; then
+	# Another client answers, e.g. the Headlamp plugin (test/kind/headlamp).
+	log "answering with $E2E_ANSWER"
+	KUBECONTEXT="kind-$CLUSTER" WORK=$WORK "$E2E_ANSWER" || fail "$E2E_ANSWER failed"
+else
+	answer /etc/once once
+	answer /etc/denied deny
+fi
 
 succeeded() {
 	[ "$("${KUBECTL[@]}" -n "$1" get pod "$2" -o jsonpath='{.status.phase}')" = Succeeded ]

@@ -1,0 +1,9 @@
+{
+  "name": "hallpass-headlamp-e2e",
+  "private": true,
+  "description": "Drives Headlamp with the hallpass plugin in the kind e2e (test/kind/headlamp/answer.sh).",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "puppeteer-core": "^25.13.0"
+  }
+}
