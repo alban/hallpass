@@ -1,24 +1,6 @@
 # Answers and rules
 
-The same answers apply everywhere: the terminal prompt, desktop notifications, `hallpass answer`, the [web UI](web.md), and in [Kubernetes](kubernetes/answer.md) the `hallpass-node` client and the Headlamp plugin.
-
-## The prompt
-
-In a terminal, hallpass asks in a bar drawn over the bottom of the screen, like a tmux status line:
-
-```
- hallpass: node (pid 41237) wants to write
- /home/me/.npm/_cacache/tmp/x
- by: npm install ← bash ← copilot
- [t] and [a] allow: /home/me/.npm/_cacache
- [o] allow once  [t] for 5m0s  [a] always  [d] deny  [n] never  [Esc] dismiss
-```
-
-The `by:` line shows the command line of the process and the commands it was started from. The process can change both, so they help you understand the request but prove nothing.
-
-The program runs on a pseudo-terminal that hallpass relays, so it cannot see or answer the question. Its output, and that of its background jobs, keeps showing above the bar, and when you answer, your terminal ends up exactly as if the bar had never been there. Keys typed in the first half second are ignored, so typing meant for the program does not answer by accident.
-
-Without a terminal, hallpass asks with a desktop notification. It has room for three buttons only: Allow once, Allow 5 min and Deny (or Allow once, Deny and Never when there is no folder to offer).
+When a write needs a human, the session holds it as a **pending request**: what is written, by which process and its parents, and what each answer would cover. Every client shows the same requests and gives the same answers: the terminal prompt, desktop notifications, `hallpass answer`, the [web UI](web.md), and in [Kubernetes](../kubernetes/answer.md) the `hallpass-node` client and the Headlamp plugin. The first answer wins, and the other clients take their prompt down. See [Where to answer](clients.md) for what each client offers, and [Write a client](api.md) for the API they share.
 
 ## Answers
 
@@ -58,7 +40,3 @@ Prompts are designed not to overwhelm you:
 <video src="../assets/demos/coalesce.mp4" poster="../assets/demos/coalesce.png" controls muted playsinline aria-label="eight parallel writes under ~/.cache/thumbs give one prompt; answering always creates all eight files and shows as a rule"></video>
 
 *Eight parallel writes under one folder: one question, and "always" settles all eight.*
-
-The prompt shows the target path and, as a `by:` line, the command that tried the write and its parent chain (for example `cp hello ~/.local/bin/hello ← make ← copilot`), so you can see who is really behind the access.
-
-Every client answers the same requests: the first answer wins, and the others take their prompt down.

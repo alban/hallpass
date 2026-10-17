@@ -48,8 +48,11 @@ nav:
       - Install and operate: kubernetes/install.md
       - Opt in and policies: kubernetes/policies.md
       - Answer requests: kubernetes/answer.md
-  - Answers and rules: answers.md
-  - Web UI: web.md
+  - Answers:
+      - answers/index.md
+      - Where to answer: answers/clients.md
+      - Web UI: answers/web.md
+      - Write a client: answers/api.md
   - How it works: design.md
 
 markdown_extensions:

@@ -58,7 +58,7 @@ On [alban.github.io/hallpass](https://alban.github.io/hallpass/):
 
 - [Install](https://alban.github.io/hallpass/workstation/install/), [Usage](https://alban.github.io/hallpass/workstation/usage/) (flags, default policy, agent CLIs, over ssh), [Strict mode](https://alban.github.io/hallpass/workstation/strict/), [Use cases](https://alban.github.io/hallpass/workstation/use-cases/) (audit, CI, checking a tool's declared paths)
 - [Kubernetes](https://alban.github.io/hallpass/kubernetes/): sandbox pods with a node agent and answer from Headlamp
-- [Answers and rules](https://alban.github.io/hallpass/answers/), [Web UI](https://alban.github.io/hallpass/web/)
+- [Answers and rules](https://alban.github.io/hallpass/answers/), [Web UI](https://alban.github.io/hallpass/answers/web/), [Write a client](https://alban.github.io/hallpass/answers/api/) for the session API
 - [How it works](https://alban.github.io/hallpass/design/): design, security model and limitations
 
 Developer notes are in [docs/devel/](docs/devel/).

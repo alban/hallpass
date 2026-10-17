@@ -53,7 +53,7 @@ Only loading the BPF programs needs root. hallpass starts a short-lived copy of 
 
 ## Prompts
 
-Prompts are designed not to overwhelm you: one question at a time, concurrent requests of a process for the same path coalesced, and pending requests settled by a new rule. See [Answers and rules](answers.md#prompts-that-dont-flood-you).
+Prompts are designed not to overwhelm you: one question at a time, concurrent requests of a process for the same path coalesced, and pending requests settled by a new rule. See [Answers and rules](answers/index.md#prompts-that-dont-flood-you).
 
 ## Limitations
 
