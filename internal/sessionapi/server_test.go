@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/alban/hallpass/internal/hubclient"
 	"github.com/alban/hallpass/internal/monitor"
 	pb "github.com/alban/hallpass/internal/sessionpb"
 )
@@ -115,7 +116,7 @@ func TestHub(t *testing.T) {
 		h.Add(id, m, labeled{name: "session " + id})
 	}
 
-	conn, c, err := DialHub(ln.Addr().String())
+	conn, c, err := hubclient.Dial(ln.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,18 +126,18 @@ func TestHub(t *testing.T) {
 	if err != nil || len(l.Sessions) != 2 || l.Sessions[0].Id != "a" || l.Sessions[1].Labels["name"] != "session b" {
 		t.Fatalf("List: %v, %v", l, err)
 	}
-	info, err := c.Info(WithSession(ctx, "b"), &pb.InfoRequest{})
+	info, err := c.Info(hubclient.WithSession(ctx, "b"), &pb.InfoRequest{})
 	if err != nil || info.Labels["name"] != "session b" {
 		t.Fatalf("Info: %v, %v", info, err)
 	}
-	if _, err := c.Snapshot(WithSession(ctx, "a"), &pb.SnapshotRequest{}); err != nil {
+	if _, err := c.Snapshot(hubclient.WithSession(ctx, "a"), &pb.SnapshotRequest{}); err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
 	if _, err := c.Info(ctx, &pb.InfoRequest{}); status.Code(err) != codes.InvalidArgument {
 		t.Errorf("Info without a session: %v", err)
 	}
 	h.Remove("b")
-	if _, err := c.Info(WithSession(ctx, "b"), &pb.InfoRequest{}); status.Code(err) != codes.NotFound {
+	if _, err := c.Info(hubclient.WithSession(ctx, "b"), &pb.InfoRequest{}); status.Code(err) != codes.NotFound {
 		t.Errorf("Info of a removed session: %v", err)
 	}
 }

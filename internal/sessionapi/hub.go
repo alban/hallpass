@@ -11,19 +11,20 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
+	"github.com/alban/hallpass/internal/hubclient"
 	"github.com/alban/hallpass/internal/monitor"
 	pb "github.com/alban/hallpass/internal/sessionpb"
 )
 
 // SessionKey is the gRPC metadata that selects a session on a Hub.
-const SessionKey = "hallpass-session"
+const SessionKey = hubclient.SessionKey
 
 // Hub serves several sessions on one listener (the node agent's): List
 // describes them, the other calls select one with the SessionKey metadata.
+// Package hubclient is its client.
 type Hub struct {
 	service
 	srv *grpc.Server
@@ -96,22 +97,4 @@ func (h *Hub) infos() []*pb.SessionInfo {
 		out = append(out, info)
 	}
 	return out
-}
-
-// DialHub connects to the hub at addr (host:port), without transport
-// security: see Hub.Serve.
-func DialHub(addr string) (*grpc.ClientConn, pb.SessionClient, error) {
-	conn, err := grpc.NewClient(addr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithConnectParams(connectParams))
-	if err != nil {
-		return nil, nil, err
-	}
-	return conn, pb.NewSessionClient(conn), nil
-}
-
-// WithSession selects session id on a hub for the calls made with the
-// returned context.
-func WithSession(ctx context.Context, id string) context.Context {
-	return metadata.AppendToOutgoingContext(ctx, SessionKey, id)
 }
