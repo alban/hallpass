@@ -25,6 +25,12 @@
 //   - answer(session, request, answer): answers a pending request, as
 //     `hallpass-node answer`; returns a Promise;
 //   - close(): ends the connection.
+//
+// These four are bound functions (Function.prototype.bind) of four
+// js.Funcs made once, with the connection's id: JavaScript collects them
+// like any object, while a js.Func per connection would stay in the Go
+// runtime's table until released, and calling a released one panics.
+// Calls for a connection that ended are ignored (answer rejects).
 package main
 
 import (
@@ -32,6 +38,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
+	"sync"
 	"syscall/js"
 	"time"
 
@@ -46,6 +53,79 @@ func main() {
 
 // listInterval is how often the sessions are listed.
 const listInterval = 2 * time.Second
+
+// link is a connection to an agent.
+type link struct {
+	pc     *pfConn
+	c      pb.SessionClient
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+var (
+	linksMu sync.Mutex
+	links   = map[int]*link{}
+	nextID  int
+)
+
+func lookup(args []js.Value) *link {
+	linksMu.Lock()
+	defer linksMu.Unlock()
+	return links[args[0].Int()]
+}
+
+var errClosed = errors.New("connection closed")
+
+// The methods of the object connect returns, as js.Funcs taking the
+// connection's id first.
+var (
+	deliverFn = js.FuncOf(func(_ js.Value, args []js.Value) any {
+		l := lookup(args)
+		if l == nil {
+			return nil
+		}
+		view := js.Global().Get("Uint8Array").New(args[1])
+		b := make([]byte, view.Get("length").Int())
+		js.CopyBytesToGo(b, view)
+		l.pc.deliver(b)
+		return nil
+	})
+	closedFn = js.FuncOf(func(_ js.Value, args []js.Value) any {
+		l := lookup(args)
+		if l == nil {
+			return nil
+		}
+		reason := "port-forward closed"
+		if len(args) > 1 && args[1].Type() == js.TypeString && args[1].String() != "" {
+			reason = args[1].String()
+		}
+		l.pc.closeWithError(errors.New(reason))
+		return nil
+	})
+	answerFn = js.FuncOf(func(_ js.Value, args []js.Value) any {
+		l := lookup(args)
+		session, request, answer := args[1].String(), args[2].String(), args[3].String()
+		return promise(func() error {
+			if l == nil {
+				return errClosed
+			}
+			id, err := strconv.ParseUint(request, 10, 64)
+			if err != nil {
+				return err
+			}
+			actx, acancel := context.WithTimeout(hubclient.WithSession(l.ctx, session), 10*time.Second)
+			defer acancel()
+			_, err = l.c.Answer(actx, &pb.AnswerRequest{Request: id, Answer: answer, Client: "headlamp"})
+			return err
+		})
+	})
+	closeFn = js.FuncOf(func(_ js.Value, args []js.Value) any {
+		if l := lookup(args); l != nil {
+			l.cancel()
+		}
+		return nil
+	})
+)
 
 func connect(_ js.Value, args []js.Value) any {
 	if len(args) != 2 {
@@ -69,11 +149,13 @@ func connect(_ js.Value, args []js.Value) any {
 		go cb.Call("onClose", err.Error())
 		return nil
 	}
-	// The functions are not released: the plugin may still call them
-	// after onClose.
-	fn := func(f func(args []js.Value) any) js.Func {
-		return js.FuncOf(func(_ js.Value, args []js.Value) any { return f(args) })
-	}
+	l := &link{pc: pc, c: c, ctx: ctx, cancel: cancel}
+	linksMu.Lock()
+	nextID++
+	id := nextID
+	links[id] = l
+	linksMu.Unlock()
+
 	go func() {
 		err := hubclient.Watch(ctx, c, listInterval, func(st hubclient.State) {
 			b, err := json.Marshal(st)
@@ -82,6 +164,9 @@ func connect(_ js.Value, args []js.Value) any {
 			}
 			cb.Call("onState", string(b))
 		})
+		linksMu.Lock()
+		delete(links, id)
+		linksMu.Unlock()
 		cancel()
 		conn.Close()
 		msg := ""
@@ -91,39 +176,12 @@ func connect(_ js.Value, args []js.Value) any {
 		cb.Call("onClose", msg)
 	}()
 
+	bind := func(f js.Func) js.Value { return f.Call("bind", js.Null(), id) }
 	res := js.Global().Get("Object").New()
-	res.Set("deliver", fn(func(args []js.Value) any {
-		view := uint8Array.New(args[0])
-		b := make([]byte, view.Get("length").Int())
-		js.CopyBytesToGo(b, view)
-		pc.deliver(b)
-		return nil
-	}))
-	res.Set("closed", fn(func(args []js.Value) any {
-		reason := "port-forward closed"
-		if len(args) > 0 && args[0].Type() == js.TypeString && args[0].String() != "" {
-			reason = args[0].String()
-		}
-		pc.closeWithError(errors.New(reason))
-		return nil
-	}))
-	res.Set("answer", fn(func(args []js.Value) any {
-		session, request, answer := args[0].String(), args[1].String(), args[2].String()
-		return promise(func() error {
-			id, err := strconv.ParseUint(request, 10, 64)
-			if err != nil {
-				return err
-			}
-			actx, acancel := context.WithTimeout(hubclient.WithSession(ctx, session), 10*time.Second)
-			defer acancel()
-			_, err = c.Answer(actx, &pb.AnswerRequest{Request: id, Answer: answer, Client: "headlamp"})
-			return err
-		})
-	}))
-	res.Set("close", fn(func([]js.Value) any {
-		cancel()
-		return nil
-	}))
+	res.Set("deliver", bind(deliverFn))
+	res.Set("closed", bind(closedFn))
+	res.Set("answer", bind(answerFn))
+	res.Set("close", bind(closeFn))
 	return res
 }
 
