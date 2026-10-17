@@ -5,7 +5,8 @@
 # Answers the kind e2e's requests through the Headlamp plugin: the
 # E2E_ANSWER command of test/kind/e2e.sh (make test-headlamp-kind). Runs
 # Headlamp with the plugin from headlamp/dist in docker, on the host
-# network, and drives it with Puppeteer (e2e.js).
+# network, and drives it with Puppeteer (e2e.js). Then sandboxes a
+# Deployment with the plugin's pod action.
 #
 # Environment, from e2e.sh:
 #   KUBECONTEXT      the kind cluster's context
@@ -54,7 +55,21 @@ until curl -sf "http://127.0.0.1:$PORT/config" >/dev/null; do
 done
 
 status=0
-URL="http://127.0.0.1:$PORT" CLUSTER="$KUBECONTEXT" SHOTS="$WORK/shots" node e2e.js || status=$?
+# A Deployment for the "Sandbox with hallpass" action, which adds the
+# policy annotation to its pod template.
+kubectl --context "$KUBECONTEXT" -n hallpass-e2e create deployment sandboxed \
+	--image "${BUSYBOX:-busybox:1.37}" -- sleep 3600 >/dev/null
+kubectl --context "$KUBECONTEXT" -n hallpass-e2e rollout status deployment/sandboxed --timeout=120s >/dev/null
+SANDBOX_POD=$(kubectl --context "$KUBECONTEXT" -n hallpass-e2e get pod -l app=sandboxed \
+	-o jsonpath='{.items[0].metadata.name}')
+URL="http://127.0.0.1:$PORT" CLUSTER="$KUBECONTEXT" SHOTS="$WORK/shots" SANDBOX_POD=$SANDBOX_POD \
+	node e2e.js || status=$?
+if [ $status = 0 ]; then
+	got=$(kubectl --context "$KUBECONTEXT" -n hallpass-e2e get deployment sandboxed \
+		-o jsonpath='{.spec.template.metadata.annotations.hallpass\.io/policy}')
+	[ "$got" = e2e ] || { echo "deployment sandboxed: policy annotation '$got', want e2e" >&2; status=1; }
+fi
+kubectl --context "$KUBECONTEXT" -n hallpass-e2e delete deployment sandboxed --wait=false >/dev/null || true
 if [ -n "${HEADLAMP_E2E_KEEP:-}" ]; then
 	mkdir -p "$HEADLAMP_E2E_KEEP"
 	cp -r "$WORK/shots" "$HEADLAMP_E2E_KEEP/"

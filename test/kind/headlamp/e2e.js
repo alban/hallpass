@@ -4,12 +4,15 @@
 // Drives Headlamp with the hallpass plugin through the kind e2e's
 // requests (see answer.sh): checks the app-bar badge, the pod list column
 // and the pod details section, answers "once" to /etc/once from the pod
-// details and "deny" to /etc/denied from the hallpass view.
+// details and "deny" to /etc/denied from the hallpass view. Then sandboxes
+// the Deployment of SANDBOX_POD with the policy e2e and waits for the
+// session of its new pod.
 //
 // Environment:
 //   URL       Headlamp's URL
 //   CLUSTER   the cluster's name in Headlamp (the kubeconfig context)
 //   SHOTS     directory for screenshots
+//   SANDBOX_POD  a pod of the Deployment hallpass-e2e/sandboxed
 //   CHROMIUM  browser to drive (default /snap/bin/chromium)
 //   PROFILE   browser profile directory, created and removed here
 "use strict";
@@ -22,6 +25,7 @@ const puppeteer = require("puppeteer-core");
 const URL = need("URL");
 const CLUSTER = need("CLUSTER");
 const SHOTS = path.resolve(need("SHOTS"));
+const SANDBOX_POD = need("SANDBOX_POD");
 const CHROMIUM = process.env.CHROMIUM || "/snap/bin/chromium";
 const PROFILE = path.resolve(
   process.env.PROFILE || path.join(os.homedir(), "snap/chromium/common/hallpass-headlamp-e2e"));
@@ -110,6 +114,26 @@ async function main() {
     await click(page, "deny /etc/denied");
     await waitText(page, "No pending requests.", 30_000);
     await screenshot(page, "view-done");
+
+    log(`pod action: sandboxing the Deployment of ${SANDBOX_POD}`);
+    await page.goto(`${c}/pods/hallpass-e2e/${SANDBOX_POD}`);
+    await click(page, "Sandbox with hallpass");
+    await waitText(page, "Deployment sandboxed", 30_000);
+    await page.click('[role="combobox"][aria-labelledby~="hallpass-policy"]');
+    await page.waitForSelector('li[data-value="e2e"]', { timeout: 10_000 });
+    await page.click('li[data-value="e2e"]');
+    await screenshot(page, "sandbox");
+    await page.evaluate(() => {
+      const b = [...document.querySelectorAll("button")].find(b => b.textContent.trim() === "Apply");
+      if (!b || b.disabled) throw new Error("no enabled Apply button");
+      b.click();
+    });
+    await waitText(page, "now uses the hallpass policy e2e", 30_000);
+
+    log("hallpass view: waiting for the session of the sandboxed pod");
+    await page.goto(`${c}/hallpass`);
+    await waitText(page, "hallpass-e2e/sandboxed-", 120_000);
+    await screenshot(page, "view-sandboxed");
     if (errors.length) log("page errors:", errors.join("\n"));
     log("ok");
   } catch (e) {
