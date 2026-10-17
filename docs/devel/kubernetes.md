@@ -250,7 +250,8 @@ the syscall with `SECCOMP_IOCTL_NOTIF_ADDFD` and
 - The notify fd lives in the agent. If the agent dies, the mediated
   syscalls of running containers fail with `ENOSYS` until the containers
   are restarted. v1: DaemonSet `updateStrategy: OnDelete`, documented.
-  Later: keep the fds in a small, rarely updated holder process.
+  Later: keep the fds in a small, rarely updated holder process
+  (fd-store, below).
 - If the agent is not running when a container starts, its NRI plugin is
   not registered (the registration lives as long as its connection to
   containerd), so the container starts without hallpass: open by
@@ -263,6 +264,58 @@ the syscall with `SECCOMP_IOCTL_NOTIF_ADDFD` and
   makes runc fail to connect to `listenerPath`: that container fails to
   start.
 - Restarting a container gives a new session.
+
+## fd-store (planned)
+
+A separate DaemonSet, `hallpass-fd-store` (`updateStrategy: OnDelete`,
+rarely updated), keeps the agent's file descriptors across agent crashes
+and upgrades, so the running containers stay mediated. It is generic and
+has no Kubernetes client: `Put(key, fds, blob)`, `Delete(key)`, `List`
+over SCM_RIGHTS on a root-only socket in `/run/hallpass`, keyed by
+container id. Strict mode adds its BPF object fds later (no pinning).
+
+Per container it holds the seccomp listener and a memfd: the journal of
+in-flight notifications and the session's rules.
+
+**Why a journal.** `SECCOMP_IOCTL_NOTIF_RECV` returns only notifications
+not yet received, and marks them received (`kernel/seccomp.c`,
+`seccomp_notify_recv`); nothing lists the received ones. While a copy of
+the listener stays open, their threads stay blocked (no `ENOSYS`), so
+the new agent must answer them, and only knows them from the journal.
+`NOTIF_SEND` and `NOTIF_ID_VALID` work from any copy of the fd.
+
+**Slots.** Each worker (today `max(4, NumCPU)` per listener, each
+handling one notification at a time, blocked while a human decides)
+owns one 80-byte slot, a `struct seccomp_notif`, in its own
+page-aligned area. The worker:
+
+1. zeroes the whole slot;
+2. calls `NOTIF_RECV` with the slot as buffer, so the kernel writes the
+   notification into the journal before the ioctl returns (no gap
+   between received and journalled; a SIGKILL takes effect only after
+   the copy);
+3. handles it and sends the answer;
+4. clears the slot with one atomic 64-bit store of `id = 0` (offset 0,
+   aligned); the other bytes are ignored when `id` is 0.
+
+A partial copy (`EFAULT`) could leave a real id with a truncated rest,
+and the kernel hands that notification to another worker. It is made
+impossible rather than handled: the memfd is sized with `ftruncate`
+and sealed with `F_SEAL_SHRINK`, the mapping is populated and
+`mlock`ed, and no slot crosses a page, so the copy cannot fault.
+
+**Recovery.** The new agent gets the listener and the memfd back, and
+for each slot with a non-zero id: `NOTIF_ID_VALID` fails → answered or
+the thread died, clear it; otherwise handle it again (the thread is
+blocked, so its pid and `/proc/<pid>/mem` are unchanged; a question
+reappears). The same id in two slots should not happen: log it, replay
+one (a second `NOTIF_SEND` gets `EINPROGRESS`), and check
+`/proc/<pid>/syscall`. A crash after the answer and before the clear is
+harmless: `NOTIF_ID_VALID` fails.
+
+**Rules.** The session's rules (`always`/`temp` answers) go in a second
+area of the memfd: two copies and a sequence number written last, so a
+crash during a write keeps the previous copy.
 
 ## Privileges
 
