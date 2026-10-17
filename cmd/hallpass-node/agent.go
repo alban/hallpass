@@ -31,13 +31,14 @@ type agent struct {
 	cluster cluster
 	node    *sessionapi.Node
 	log     *slog.Logger
+	rec     recorder
 
 	mu       sync.Mutex
 	sessions map[string]*session // by container id
 }
 
-func newAgent(c cluster, node *sessionapi.Node, log *slog.Logger) *agent {
-	return &agent{cluster: c, node: node, log: log, sessions: map[string]*session{}}
+func newAgent(c cluster, node *sessionapi.Node, log *slog.Logger, rec recorder) *agent {
+	return &agent{cluster: c, node: node, log: log, rec: rec, sessions: map[string]*session{}}
 }
 
 // listen creates the agent socket. Its directory is root-only: whoever can
@@ -153,7 +154,7 @@ func (a *agent) attach(st *specs.ContainerProcessState, fd int) error {
 		a.log.Error("no policy, denying", "container", id, "err", err)
 		pol = &Policy{Name: md.Policy}
 	}
-	s, err = newSession(id, st.Pid, md, pol, a.log)
+	s, err = newSession(id, st.Pid, md, pol, a.log, a.rec)
 	if err != nil {
 		return err
 	}

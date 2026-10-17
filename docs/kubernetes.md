@@ -131,6 +131,21 @@ hallpass web --node 127.0.0.1:7323                  # prints a pairing link
 The agent also logs every request, answer and session
 (`kubectl -n hallpass-system logs`).
 
+The decisions are Events on the pod, shown by `kubectl describe pod` and
+`kubectl get events`: `HallpassAllowed` and `HallpassDenied` for each
+answer and who gave it, `HallpassNotAnswered` when a request timed out,
+and `HallpassPolicyDenied` for the denials of the policy and of the
+built-in rules, without a human (the first one at once, then at most a
+summary per minute per container, with the most frequent paths):
+
+```
+Warning  HallpassPolicyDenied  container agent: denied by the policy: write /etc/a1
+Warning  HallpassPolicyDenied  container agent: denied by the policy 5 times in the last 1m0s: write /etc/a2 (2), write /etc/a0 (1), write /etc/a1 (1) and 1 more
+```
+
+Allowed accesses without a human are not reported. Events expire
+(after an hour by default); the agent's log keeps everything.
+
 ## Headlamp plugin
 
 The [Headlamp](https://headlamp.dev) plugin in

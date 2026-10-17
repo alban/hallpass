@@ -29,6 +29,10 @@ rules:
   - apiGroups: [hallpass.io]
     resources: [hallpasspolicies]
     verbs: [get, list, watch]
+  # Decisions reported as Events on the pods.
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [create, patch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -76,6 +80,12 @@ spec:
           args:
             - run
             - --namespace-selector=hallpass.io/enabled=true
+          env:
+            # The source host of the Events.
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
           securityContext:
             privileged: true
           # Ready once registered with NRI and with the namespace and

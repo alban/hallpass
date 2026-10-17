@@ -17,6 +17,7 @@ import (
 	"github.com/alban/hallpass/internal/answer"
 	"github.com/alban/hallpass/internal/defaults"
 	"github.com/alban/hallpass/internal/monitor"
+	"github.com/alban/hallpass/internal/rules"
 	"github.com/alban/hallpass/internal/sessionapi"
 	pb "github.com/alban/hallpass/internal/sessionpb"
 	"github.com/alban/hallpass/internal/ui"
@@ -40,6 +41,8 @@ type session struct {
 	evs    <-chan []monitor.Event
 	start  time.Time
 	log    *slog.Logger
+	rec    recorder
+	denied *denials
 
 	mu     sync.Mutex
 	timers map[uint64]*time.Timer
@@ -47,7 +50,7 @@ type session struct {
 
 // newSession creates the monitor of container id with policy p. The
 // caller attaches the listeners.
-func newSession(id string, pid int, md metadata, p *Policy, log *slog.Logger) (*session, error) {
+func newSession(id string, pid int, md metadata, p *Policy, log *slog.Logger, rec recorder) (*session, error) {
 	m, err := monitor.New(monitor.Config{ProcRoot: true})
 	if err != nil {
 		return nil, err
@@ -57,14 +60,23 @@ func newSession(id string, pid int, md metadata, p *Policy, log *slog.Logger) (*
 		m.Close()
 		return nil, err
 	}
-	return &session{
+	s := &session{
 		id: id, pid: pid, md: md, policy: p, d: d, m: m,
 		// Subscribed before the first Attach: no request is missed.
-		evs:    m.Events(monitor.EventOptions{}),
+		// Decided: to report the automatic denials.
+		evs:    m.Events(monitor.EventOptions{Decided: true}),
 		start:  time.Now(),
 		log:    log.With("namespace", md.Namespace, "pod", md.Pod, "container", md.Container),
+		rec:    rec,
 		timers: map[uint64]*time.Timer{},
-	}, nil
+	}
+	s.denied = &denials{report: func(msg string) { s.event(true, reasonPolicyDenied, msg) }}
+	return s, nil
+}
+
+// event emits an Event on the container's pod.
+func (s *session) event(warning bool, reason, msg string) {
+	s.rec.event(s.md, warning, reason, "container "+s.md.Container+": "+msg)
 }
 
 // run handles the requests until the container is gone: without ask, they
@@ -77,17 +89,49 @@ func (s *session) run() {
 				s.opened(ev.Opened)
 			case ev.Closed != nil:
 				s.closed(ev.Closed)
+			case ev.Decided != nil:
+				s.decided(ev.Decided)
+			case ev.Dropped != 0:
+				s.log.Debug("decided accesses not counted", "dropped", ev.Dropped)
 			case ev.Warning != "":
 				s.log.Warn(ev.Warning)
 			}
 		}
 	}
+	s.denied.stop()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for id, t := range s.timers {
 		t.Stop()
 		delete(s.timers, id)
 	}
+}
+
+// decided counts the automatic denials.
+func (s *session) decided(d *monitor.Decided) {
+	if d.Allowed {
+		return
+	}
+	for i, why := range d.Why {
+		if why == (monitor.Reason{}) {
+			continue
+		}
+		if automatic(why, s.policy.Ask) && i < len(d.Objects) {
+			s.denied.add(d.Op.String() + " " + objectName(d.Objects[i]))
+		}
+		return
+	}
+}
+
+// objectName names o in an Event.
+func objectName(o rules.Object) string {
+	switch {
+	case o.Path != nil:
+		return clean(o.Path.Path)
+	case o.Unknown != nil:
+		return "(unknown path)"
+	}
+	return "(not a file)"
 }
 
 func (s *session) opened(req *monitor.Request) {
@@ -125,9 +169,20 @@ func (s *session) dismiss(id uint64) {
 	if err != nil {
 		return
 	}
-	if err := answer.Apply(s.m, s.d, req, ui.AnswerDismissed, rs, client); err != nil && !errors.Is(err, monitor.ErrClosed) {
-		s.log.Error("deny", "id", id, "err", err)
+	if err := answer.Apply(s.m, s.d, req, ui.AnswerDismissed, rs, client); err != nil {
+		if !errors.Is(err, monitor.ErrClosed) {
+			s.log.Error("deny", "id", id, "err", err)
+		}
+		return
 	}
+	if s.policy.Ask {
+		s.event(true, reasonNotAnswered, fmt.Sprintf("%s: not answered within %v, denied", describe(answer.Request(s.d, req, 0)), s.policy.AskTimeout))
+	}
+}
+
+// describe names a request in an Event: "write /etc/profile by /bin/sh".
+func describe(r ui.Request) string {
+	return r.Op + " " + clean(r.Path) + " by " + clean(r.Exe)
 }
 
 // Info implements sessionapi.Session.
@@ -177,5 +232,14 @@ func (s *session) Answer(id uint64, a, who string) error {
 		return err
 	}
 	s.log.Info("answer", "id", id, "answer", ans.String(), "client", who)
-	return answer.Apply(s.m, s.d, req, ans, rs, who)
+	if err := answer.Apply(s.m, s.d, req, ans, rs, who); err != nil {
+		return err
+	}
+	deny := ans == ui.AnswerDenyOnce || ans == ui.AnswerNever || ans == ui.AnswerDismissed
+	reason := reasonAllowed
+	if deny {
+		reason = reasonDenied
+	}
+	s.event(deny, reason, fmt.Sprintf("%s: answered %s from %s", describe(answer.Request(s.d, req, 0)), ans, clean(who)))
+	return nil
 }

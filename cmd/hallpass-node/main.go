@@ -122,7 +122,7 @@ func runAgent(args []string) error {
 	}()
 	defer node.Stop()
 
-	ag := newAgent(k, node, log)
+	ag := newAgent(k, node, log, k.recorder(ctx))
 	ln, err := listen(*socket)
 	if err != nil {
 		return err

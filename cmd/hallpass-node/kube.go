@@ -8,9 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"sync/atomic"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
@@ -20,10 +22,13 @@ import (
 	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
+	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	listersv1 "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/tools/record"
 )
 
 // policyGVR is the HallpassPolicy resource.
@@ -42,6 +47,7 @@ var errNotSynced = errors.New("namespace and HallpassPolicy caches not synced ye
 
 // kube reads namespaces and policies from informer caches.
 type kube struct {
+	cs         kubernetes.Interface
 	selector   labels.Selector
 	namespaces listersv1.NamespaceLister
 	policies   cache.GenericLister
@@ -75,7 +81,7 @@ func newKube(ctx context.Context, kubeconfig string, selector labels.Selector, l
 	const resync = 10 * time.Minute
 	nsf := informers.NewSharedInformerFactory(cs, resync)
 	nsInf := nsf.Core().V1().Namespaces()
-	k := &kube{selector: selector, namespaces: nsInf.Lister()}
+	k := &kube{cs: cs, selector: selector, namespaces: nsInf.Lister()}
 	dynf := dynamicinformer.NewDynamicSharedInformerFactory(dyn, resync)
 	polInf := dynf.ForResource(policyGVR)
 	k.policies = polInf.Lister()
@@ -104,6 +110,15 @@ func newKube(ctx context.Context, kubeconfig string, selector labels.Selector, l
 
 // Synced reports whether the caches have synced.
 func (k *kube) Synced() bool { return k.synced.Load() }
+
+// recorder returns the recorder of the Events on the pods of mediated
+// containers, until ctx is done. $NODE_NAME (from the downward API) names
+// the node in their source.
+func (k *kube) recorder(ctx context.Context) recorder {
+	b := record.NewBroadcaster(record.WithContext(ctx))
+	b.StartRecordingToSink(&typedcorev1.EventSinkImpl{Interface: k.cs.CoreV1().Events("")})
+	return kubeRecorder{b.NewRecorder(scheme.Scheme, corev1.EventSource{Component: client, Host: os.Getenv("NODE_NAME")})}
+}
 
 func (k *kube) Selected(ns string) (bool, error) {
 	if !k.Synced() {
