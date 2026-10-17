@@ -34,11 +34,14 @@ func redBold(s string) string { return "\x1b[1;31m" + s + "\x1b[39m\x1b[22m" }
 
 // Ask shows the overlay and waits for a key, or for ctx to end.
 func (a *Terminal) Ask(ctx context.Context, r Request) Answer {
-	head := bold(fmt.Sprintf(" hallpass: %s (pid %d) wants to %s", sanitize(baseName(r.Exe)), r.PID, r.Op))
-	if r.Waiting > 0 {
-		head += fmt.Sprintf("   (+%d waiting)", r.Waiting)
+	head := func(waiting int) string {
+		h := bold(fmt.Sprintf(" hallpass: %s (pid %d) wants to %s", sanitize(baseName(r.Exe)), r.PID, r.Op))
+		if waiting > 0 {
+			h += fmt.Sprintf("   (+%d waiting)", waiting)
+		}
+		return h
 	}
-	lines := []string{head, " " + sanitize(r.Path)}
+	lines := []string{head(r.Waiting), " " + sanitize(r.Path)}
 	if r.Warn != "" {
 		lines = append(lines, " "+redBold("[!] "+sanitize(r.Warn)))
 	}
@@ -57,7 +60,29 @@ func (a *Terminal) Ask(ctx context.Context, r Request) Answer {
 		keys += fmt.Sprintf("   (dismissed in %v)", a.timeout)
 	}
 	lines = append(lines, keys)
-	switch a.t.Prompt(lines, accept, typeaheadGuard, a.timeout, ctx.Done()) {
+	var relabel chan []string
+	if r.More != nil {
+		relabel = make(chan []string)
+		done := make(chan struct{})
+		defer close(done)
+		go func() {
+			for {
+				select {
+				case n := <-r.More:
+					l := append([]string(nil), lines...)
+					l[0] = head(n)
+					select {
+					case relabel <- l:
+					case <-done:
+						return
+					}
+				case <-done:
+					return
+				}
+			}
+		}()
+	}
+	switch a.t.Prompt(lines, accept, typeaheadGuard, a.timeout, ctx.Done(), relabel) {
 	case 'o', 'O':
 		return AnswerAllowOnce
 	case 't', 'T':

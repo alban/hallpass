@@ -90,6 +90,9 @@ type Request struct {
 	// secret store"); the prompt shows it in red.
 	Warn    string
 	Waiting int // other requests queued behind this one
+	// More, if not nil, sends the new value of Waiting while the request
+	// is asked about.
+	More <-chan int
 	// Cmdline and Parents (command names, nearest first) describe the
 	// process. Both come from the process itself: display only.
 	Cmdline []string

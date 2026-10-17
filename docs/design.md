@@ -37,11 +37,12 @@ Only loading the BPF programs needs root. hallpass starts a short-lived copy of 
 Prompts are designed not to overwhelm you:
 
 - one notification per session, updated in place;
-- identical pending requests (for example from `make -j`) are coalesced;
-- an "allow for 5 minutes" or "always" answer settles every pending request under that folder.
+- one question at a time, oldest first; the terminal prompt counts the requests waiting behind it, "(+3 waiting)", and updates the count as they arrive or close;
+- **coalescing:** concurrent requests from the same process for the same operation on the same path become one request, and one answer releases them all. Requests from different processes are never merged, because the prompt names one process and your answer must not reach another one you didn't see;
+- **settling:** an "allow for 5 minutes" or "always" answer adds a rule for the folder the prompt names ("[t] and [a] allow: ~/.cache/thumbs"), and every pending request that rule allows is settled at once, without a question, as if it had arrived after the rule. "Once", "deny" and "never" add no folder rule, so they settle nothing else.
 
 <video src="../assets/demos/coalesce.mp4" poster="../assets/demos/coalesce.png" controls muted playsinline aria-label="eight parallel writes under ~/.cache/thumbs give one prompt; answering always creates all eight files and shows as a rule"></video>
 
-*Eight parallel writes under one folder: one question, and "always" lets all eight through.*
+*Eight parallel writes under one folder: one question, and "always" settles all eight.*
 
 The prompt shows the target path and, as a `by:` line, the command that tried the write and its parent chain (for example `cp hello ~/.local/bin/hello ← make ← copilot`), so you can see who is really behind the access. Press Ctrl-] inside a session to see its current rules, including the answers given so far.

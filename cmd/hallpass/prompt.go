@@ -31,20 +31,49 @@ func (s *session) prompts(evs <-chan []monitor.Event, gone chan<- struct{}) {
 	go s.askLoop(kick)
 	defer close(kick)
 	for batch := range evs {
+		changed := false
 		for _, ev := range batch {
 			switch {
 			case ev.Opened != nil:
+				changed = true
 				select {
 				case kick <- struct{}{}:
 				default:
 				}
 			case ev.Closed != nil:
+				changed = true
 				s.cancelPrompt(ev.Closed.ID)
 			case ev.Warning != "":
 				s.notice("hallpass: " + ev.Warning)
 			}
 		}
+		if changed {
+			s.recount()
+		}
 	}
+}
+
+// recount sends the prompt shown, if any, the number of requests waiting
+// behind it: the later ones, since askLoop asks the oldest first.
+func (s *session) recount() {
+	s.curMu.Lock()
+	defer s.curMu.Unlock()
+	if s.curMore == nil {
+		return
+	}
+	pending, _, _ := s.m.Snapshot()
+	n := 0
+	for _, r := range pending {
+		if r.ID > s.curID {
+			n++
+		}
+	}
+	// Only the latest count matters: replace one not read yet.
+	select {
+	case <-s.curMore:
+	default:
+	}
+	s.curMore <- n
 }
 
 // cancelPrompt takes down the prompt about request id, if shown: another
@@ -91,12 +120,13 @@ func (s *session) ask(req *monitor.Request, waiting int, rs []rules.Rule) {
 	defer s.promptMu.Unlock()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	more := make(chan int, 1)
 	s.curMu.Lock()
-	s.curID, s.curCancel = req.ID, cancel
+	s.curID, s.curCancel, s.curMore = req.ID, cancel, more
 	s.curMu.Unlock()
 	defer func() {
 		s.curMu.Lock()
-		s.curID, s.curCancel = 0, nil
+		s.curID, s.curCancel, s.curMore = 0, nil, nil
 		s.curMu.Unlock()
 	}()
 	// Closed before curID was set: cancelPrompt missed it.
@@ -104,6 +134,9 @@ func (s *session) ask(req *monitor.Request, waiting int, rs []rules.Rule) {
 		return
 	}
 	ur := s.uiRequest(req, waiting)
+	ur.More = more
+	// Requests opened since askLoop counted were not sent.
+	s.recount()
 	a := s.cfg.Asker.Ask(ctx, ur)
 	if ctx.Err() != nil {
 		return
@@ -300,7 +333,7 @@ func (s *session) menu() {
 	for k := 1; k < 256; k++ {
 		keys = append(keys, byte(k))
 	}
-	if s.cfg.TTY.Prompt(lines, string(keys), 0, 0, nil) == 's' && s.wait.active.Load() {
+	if s.cfg.TTY.Prompt(lines, string(keys), 0, 0, nil, nil) == 's' && s.wait.active.Load() {
 		s.wait.Stop()
 	}
 }

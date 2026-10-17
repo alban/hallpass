@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/signal"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -479,8 +480,9 @@ func (t *Term) paintLoop() {
 // so typing meant for the program does not answer it; so is any input that
 // is not a single key press (pastes, escape sequences other than a lone Esc).
 // It returns 0 after timeout (0: no timeout), when cancel is closed (nil:
-// never), or when the program's terminal goes away.
-func (t *Term) Prompt(lines []string, accept string, guard, timeout time.Duration, cancel <-chan struct{}) byte {
+// never), or when the program's terminal goes away. Lines received from
+// relabel (nil: none) replace those shown, if there are as many.
+func (t *Term) Prompt(lines []string, accept string, guard, timeout time.Duration, cancel <-chan struct{}, relabel <-chan []string) byte {
 	t.mu.Lock()
 	// Do not cut an escape sequence or a UTF-8 character in two.
 	for wait := time.Now().Add(300 * time.Millisecond); !t.esc.ground() && time.Now().Before(wait); {
@@ -527,6 +529,13 @@ wait:
 			}
 		case <-expired:
 			break wait
+		case l := <-relabel:
+			t.mu.Lock()
+			if len(l) == len(t.ov) && !slices.Equal(l, t.ov) {
+				t.ov = l
+				t.write(t.drawOverlay())
+			}
+			t.mu.Unlock()
 		case <-cancel:
 			break wait
 		case <-t.outDone:

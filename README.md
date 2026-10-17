@@ -60,7 +60,7 @@ hallpass combines two kernel mechanisms:
 - **seccomp user notification** (lite mode, unprivileged): a seccomp filter pauses the syscalls that modify the filesystem and hands them to the hallpass supervisor, which resolves the path, applies the policy and, if needed, asks you. This is what lets hallpass *ask* instead of just failing the call.
 - **BPF-LSM** (strict mode, root needed only to load it): an eBPF program on the kernel's LSM hooks enforces the same policy on the real file (inode), so it cannot be bypassed by symlink races, bind mounts, other mount namespaces or `io_uring`. Your answers to the prompts are pushed to the kernel before the paused syscall continues.
 
-Prompts are designed not to flood you: one notification per session, updated in place; identical pending requests (for example from `make -j`) are coalesced; and an "allow for 5 minutes" or "always" answer settles every pending request under that folder.
+Prompts are designed not to flood you: one notification per session, updated in place; one question at a time, with a count of the requests waiting; concurrent identical requests from the same process are coalesced; and an "allow for 5 minutes" or "always" answer settles every pending request under the folder it names.
 
 More detail: [docs/design.md](docs/design.md).
 

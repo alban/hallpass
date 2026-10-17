@@ -68,6 +68,8 @@ type session struct {
 	curMu     sync.Mutex
 	curID     uint64
 	curCancel context.CancelFunc
+	// curMore sends the prompt shown its count of waiting requests.
+	curMore chan int
 }
 
 // runSession starts the command under the monitor, until it exits, and

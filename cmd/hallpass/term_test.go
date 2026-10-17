@@ -277,6 +277,35 @@ func TestTerminalPromptSecretWarning(t *testing.T) {
 	}
 }
 
+// A prompt shown counts the requests that arrive behind it.
+func TestTerminalPromptWaiting(t *testing.T) {
+	e := newEnv(t)
+	m, scr, c, done := runTerm(t, e, `(echo a > "$HOME/a") 2>/dev/null & sleep 1; (echo b > "$HOME/b") 2>/dev/null & (echo c > "$HOME/c") 2>/dev/null & wait; echo end`)
+
+	waitFor(t, func() bool { return strings.Contains(scr.text(), "wants to write") }, "prompt")
+	if got := scr.text(); strings.Contains(got, "waiting)") {
+		t.Errorf("first prompt counts requests before they arrive:\n%s", got)
+	}
+	waitFor(t, func() bool { return strings.Contains(scr.text(), "(+2 waiting)") }, "count of 2")
+	m.Write([]byte("d"))
+	waitFor(t, func() bool { return strings.Contains(scr.text(), "(+1 waiting)") }, "count of 1")
+	time.Sleep(600 * time.Millisecond) // past the type-ahead guard
+	m.Write([]byte("d"))
+	waitFor(t, func() bool {
+		s := scr.text()
+		return strings.Contains(s, "wants to write") && !strings.Contains(s, "waiting)")
+	}, "last prompt, no count")
+	time.Sleep(600 * time.Millisecond) // past the type-ahead guard
+	m.Write([]byte("d"))
+	if err := c.Wait(); err != nil {
+		t.Fatalf("hallpass: %v\n%s", err, scr.text())
+	}
+	<-done
+	if got := scr.text(); !strings.Contains(got, "end") {
+		t.Errorf("screen:\n%s", got)
+	}
+}
+
 // Paths come from the agent: escape sequences in them must not reach the
 // terminal, or they could redraw the prompt.
 func TestTerminalPromptEscapes(t *testing.T) {
