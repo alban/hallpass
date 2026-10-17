@@ -19,8 +19,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	pb "github.com/alban/hallpass/api/session/v1"
 	"github.com/alban/hallpass/internal/monitor"
-	pb "github.com/alban/hallpass/internal/sessionpb"
 )
 
 // SocketDir returns the directory holding the sessions' sockets.

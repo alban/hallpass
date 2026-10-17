@@ -14,8 +14,8 @@ import (
 
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
+	pb "github.com/alban/hallpass/api/session/v1"
 	"github.com/alban/hallpass/internal/nodeclient"
-	pb "github.com/alban/hallpass/internal/sessionpb"
 )
 
 // clientFlags are the flags of the client commands.

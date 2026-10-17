@@ -14,7 +14,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 
-	pb "github.com/alban/hallpass/internal/sessionpb"
+	pb "github.com/alban/hallpass/api/session/v1"
 )
 
 // fakeNode serves List, Events and Snapshot for the sessions in infos; the

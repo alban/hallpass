@@ -4,7 +4,10 @@
 // The API of a hallpass session, served on its unix socket
 // ($XDG_RUNTIME_DIR/hallpass/<pid>.sock): the monitor API (see
 // docs/devel/monitor.md), plus Info and Answer. Regenerate with
-// `go generate ./internal/sessionpb`.
+// `go generate ./api/session/v1`.
+//
+// Experimental: the goal is a stable API for clients outside this
+// repository, but it may still change incompatibly.
 //
 // The node agent (cmd/hallpass-node) serves all the sessions of its node
 // on one server: List returns them, and the other calls select one with

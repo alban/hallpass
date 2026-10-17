@@ -42,8 +42,8 @@ import (
 	"syscall/js"
 	"time"
 
+	pb "github.com/alban/hallpass/api/session/v1"
 	"github.com/alban/hallpass/internal/nodeclient"
-	pb "github.com/alban/hallpass/internal/sessionpb"
 )
 
 func main() {

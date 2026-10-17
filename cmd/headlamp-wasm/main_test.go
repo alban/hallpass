@@ -15,10 +15,10 @@ import (
 	"testing"
 	"time"
 
+	pb "github.com/alban/hallpass/api/session/v1"
 	"github.com/alban/hallpass/internal/monitor"
 	"github.com/alban/hallpass/internal/nodeclient"
 	"github.com/alban/hallpass/internal/sessionapi"
-	pb "github.com/alban/hallpass/internal/sessionpb"
 )
 
 // portForward plays the API server's side of a port-forward WebSocket to

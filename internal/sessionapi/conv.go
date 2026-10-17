@@ -8,9 +8,9 @@ import (
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	pb "github.com/alban/hallpass/api/session/v1"
 	"github.com/alban/hallpass/internal/monitor"
 	"github.com/alban/hallpass/internal/rules"
-	pb "github.com/alban/hallpass/internal/sessionpb"
 )
 
 func toPBRequest(r *monitor.Request, p *pb.Prompt) *pb.Request {

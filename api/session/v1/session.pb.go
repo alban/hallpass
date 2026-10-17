@@ -4,7 +4,10 @@
 // The API of a hallpass session, served on its unix socket
 // ($XDG_RUNTIME_DIR/hallpass/<pid>.sock): the monitor API (see
 // docs/devel/monitor.md), plus Info and Answer. Regenerate with
-// `go generate ./internal/sessionpb`.
+// `go generate ./api/session/v1`.
+//
+// Experimental: the goal is a stable API for clients outside this
+// repository, but it may still change incompatibly.
 //
 // The node agent (cmd/hallpass-node) serves all the sessions of its node
 // on one server: List returns them, and the other calls select one with
@@ -2332,7 +2335,7 @@ const file_session_proto_rawDesc = "" +
 	"\x06Events\x12\".hallpass.session.v1.EventsRequest\x1a\x1f.hallpass.session.v1.EventBatch0\x01\x12G\n" +
 	"\x05Apply\x12\x1d.hallpass.session.v1.Decision\x1a\x1f.hallpass.session.v1.ApplyReply\x12N\n" +
 	"\x06Answer\x12\".hallpass.session.v1.AnswerRequest\x1a .hallpass.session.v1.AnswerReply\x12H\n" +
-	"\x04List\x12 .hallpass.session.v1.ListRequest\x1a\x1e.hallpass.session.v1.ListReplyB.Z,github.com/alban/hallpass/internal/sessionpbb\x06proto3"
+	"\x04List\x12 .hallpass.session.v1.ListRequest\x1a\x1e.hallpass.session.v1.ListReplyB4Z2github.com/alban/hallpass/api/session/v1;sessionpbb\x06proto3"
 
 var (
 	file_session_proto_rawDescOnce sync.Once

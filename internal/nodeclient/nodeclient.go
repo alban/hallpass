@@ -20,7 +20,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
-	pb "github.com/alban/hallpass/internal/sessionpb"
+	pb "github.com/alban/hallpass/api/session/v1"
 )
 
 // SessionKey is the gRPC metadata that selects a session on a node agent.

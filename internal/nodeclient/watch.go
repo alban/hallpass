@@ -13,7 +13,7 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
-	pb "github.com/alban/hallpass/internal/sessionpb"
+	pb "github.com/alban/hallpass/api/session/v1"
 )
 
 // Session is what a Watcher knows of a session.

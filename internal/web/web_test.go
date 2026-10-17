@@ -14,9 +14,9 @@ import (
 	"strings"
 	"testing"
 
+	pb "github.com/alban/hallpass/api/session/v1"
 	"github.com/alban/hallpass/internal/monitor"
 	"github.com/alban/hallpass/internal/sessionapi"
-	pb "github.com/alban/hallpass/internal/sessionpb"
 )
 
 type fakeSession struct{ answered chan string }

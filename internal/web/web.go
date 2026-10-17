@@ -34,9 +34,9 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/alban/hallpass"
+	pb "github.com/alban/hallpass/api/session/v1"
 	"github.com/alban/hallpass/internal/nodeclient"
 	"github.com/alban/hallpass/internal/sessionapi"
-	pb "github.com/alban/hallpass/internal/sessionpb"
 )
 
 //go:embed static

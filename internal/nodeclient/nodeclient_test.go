@@ -11,7 +11,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	pb "github.com/alban/hallpass/internal/sessionpb"
+	pb "github.com/alban/hallpass/api/session/v1"
 )
 
 // lister is a SessionClient serving only List.
