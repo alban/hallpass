@@ -163,8 +163,12 @@ It adds:
   pending requests.
 - **Sandbox with hallpass**, a pod action: it sets or removes
   `hallpass.io/policy` on the pod template of the pod's Deployment,
-  StatefulSet, DaemonSet or CronJob. The workload recreates its pods,
-  which are then mediated. The namespace still needs the
+  StatefulSet, DaemonSet or CronJob. Only containers created with the
+  annotation are mediated: a Deployment, or a StatefulSet or DaemonSet
+  with a rolling update, replaces its pods; with `OnDelete`, a
+  StatefulSet `partition` or a ReplicaSet without a Deployment, delete
+  the pods yourself; a CronJob changes from its next Job. The dialog says
+  which. The namespace still needs the
   `hallpass.io/enabled=true` label. Bare pods and Jobs cannot change:
   edit their manifest instead.
 

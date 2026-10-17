@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, expect, it } from 'vitest';
-import { findOwner, templatePatch } from './sandbox';
+import { findOwner, rollout, templatePatch } from './sandbox';
 
 const ref = (apiVersion: string, kind: string, name: string) => [
   { apiVersion, kind, name, controller: true },
@@ -51,18 +51,22 @@ describe('findOwner', () => {
       namespace: 'ns',
       path: '/apis/apps/v1/namespaces/ns/deployments/web',
       policy: 'p1',
+      effect: 'Its pods are replaced with the change.',
+      replaces: true,
     });
   });
 
   it('stops at a ReplicaSet without a Deployment', async () => {
     const o = await findOwner(pod(ref('apps/v1', 'ReplicaSet', 'bare')), get);
-    expect(o).toMatchObject({ kind: 'ReplicaSet', policy: '' });
+    expect(o).toMatchObject({ kind: 'ReplicaSet', policy: '', replaces: false });
+    expect(o.effect).toMatch(/delete them/);
     expect(o.unsupported).toBeUndefined();
   });
 
   it('finds the CronJob of a Job', async () => {
     const o = await findOwner(pod(ref('batch/v1', 'Job', 'nightly-1')), get);
-    expect(o).toMatchObject({ kind: 'CronJob', name: 'nightly', policy: 'p2' });
+    expect(o).toMatchObject({ kind: 'CronJob', name: 'nightly', policy: 'p2', replaces: false });
+    expect(o.effect).toMatch(/from now on/);
     expect(o.unsupported).toBeUndefined();
   });
 
@@ -74,6 +78,26 @@ describe('findOwner', () => {
     expect(
       (await findOwner(pod(ref('example.com/v1', 'Thing', 't')), get)).unsupported
     ).toMatch(/Thing/);
+  });
+});
+
+describe('rollout', () => {
+  const set = (updateStrategy: any) => ({ metadata: { name: 's' }, spec: { updateStrategy } });
+
+  it('replaces the pods of a rolling update', () => {
+    expect(rollout('DaemonSet', set(undefined)).replaces).toBe(true);
+    expect(rollout('StatefulSet', set({ type: 'RollingUpdate' })).replaces).toBe(true);
+  });
+
+  it('leaves the pods of OnDelete and of a partition', () => {
+    for (const kind of ['DaemonSet', 'StatefulSet']) {
+      const r = rollout(kind, set({ type: 'OnDelete' }));
+      expect(r.replaces).toBe(false);
+      expect(r.effect).toMatch(/OnDelete.*delete them/);
+    }
+    const r = rollout('StatefulSet', set({ type: 'RollingUpdate', rollingUpdate: { partition: 2 } }));
+    expect(r.replaces).toBe(false);
+    expect(r.effect).toMatch(/ordinal of 2 or more/);
   });
 });
 

@@ -94,9 +94,12 @@ function SandboxDialog(props: { pod: any; onClose: () => void }) {
           <>
             <Typography sx={{ mb: 2 }}>
               Sets the <code>hallpass.io/policy</code> annotation on the pod template of{' '}
-              {owner.kind} <b>{owner.name}</b>. Its pods are recreated: their containers are
-              mediated from their start.
+              {owner.kind} <b>{owner.name}</b>. Only containers created with the annotation are
+              mediated.
             </Typography>
+            <Alert severity={owner.replaces ? 'info' : 'warning'} sx={{ mb: 2 }}>
+              {owner.effect}
+            </Alert>
             {!nsSelected && (
               <Alert severity="warning" sx={{ mb: 2 }}>
                 The namespace {owner.namespace} does not have the label{' '}

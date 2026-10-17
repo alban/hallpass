@@ -37,6 +37,10 @@ export interface Owner {
   path: string;
   // The current annotation on its pod template.
   policy: string;
+  // What a change does to the pods that exist.
+  effect: string;
+  // Whether the workload replaces its pods by itself after a change.
+  replaces: boolean;
   // Why it cannot be patched, if it cannot.
   unsupported?: string;
 }
@@ -68,6 +72,39 @@ function template(kind: string, o: Obj): any {
   return kind === 'CronJob' ? o.spec?.jobTemplate?.spec?.template : o.spec?.template;
 }
 
+// rollout says what a change of the pod template does to the pods that
+// exist: the agent only mediates containers created with the annotation.
+export function rollout(kind: string, o: Obj): { effect: string; replaces: boolean } {
+  const manual = 'Its pods keep running as they are: delete them to recreate them with the change.';
+  switch (kind) {
+    case 'Deployment':
+      return { effect: 'Its pods are replaced with the change.', replaces: true };
+    case 'StatefulSet':
+    case 'DaemonSet': {
+      const strategy = o.spec?.updateStrategy;
+      if (strategy?.type === 'OnDelete') {
+        return { effect: `Its update strategy is OnDelete. ${manual}`, replaces: false };
+      }
+      const partition = strategy?.rollingUpdate?.partition;
+      if (kind === 'StatefulSet' && partition > 0) {
+        return {
+          effect: `Only its pods with an ordinal of ${partition} or more are replaced (rollingUpdate.partition).`,
+          replaces: false,
+        };
+      }
+      return { effect: 'Its pods are replaced with the change.', replaces: true };
+    }
+    case 'ReplicaSet':
+      return { effect: `A ReplicaSet does not roll out changes. ${manual}`, replaces: false };
+    case 'CronJob':
+      return {
+        effect: 'Only the Jobs it starts from now on get the change; running Jobs keep going as they are.',
+        replaces: false,
+      };
+  }
+  return { effect: '', replaces: false };
+}
+
 // findOwner follows the pod's controllers up to the workload to patch: a
 // Deployment rather than its ReplicaSet, a CronJob rather than its Job.
 export async function findOwner(pod: Obj, get: Get): Promise<Owner> {
@@ -80,6 +117,8 @@ export async function findOwner(pod: Obj, get: Get): Promise<Owner> {
       namespace: ns,
       path: '',
       policy: pod.metadata.annotations?.[policyAnnotation] || '',
+      effect: '',
+      replaces: false,
       unsupported:
         'This pod has no controller. Add the annotation to its manifest and recreate it.',
     };
@@ -93,6 +132,8 @@ export async function findOwner(pod: Obj, get: Get): Promise<Owner> {
         namespace: ns,
         path: '',
         policy: '',
+        effect: '',
+        replaces: false,
         unsupported: `hallpass cannot patch a ${ref.kind}: add the annotation to its pod template.`,
       };
     }
@@ -109,6 +150,7 @@ export async function findOwner(pod: Obj, get: Get): Promise<Owner> {
       namespace: ns,
       path,
       policy: template(ref.kind, o)?.metadata?.annotations?.[policyAnnotation] || '',
+      ...rollout(ref.kind, o),
     };
     if (ref.kind === 'Job') {
       owner.unsupported = 'The pod template of a Job cannot change: recreate the Job with the annotation.';
