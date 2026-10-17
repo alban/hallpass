@@ -274,8 +274,9 @@ has no Kubernetes client: `Put(key, fds, blob)`, `Delete(key)`, `List`
 over SCM_RIGHTS on a root-only socket in `/run/hallpass`, keyed by
 container id. Strict mode adds its BPF object fds later (no pinning).
 
-Per container it holds the seccomp listener and a memfd: the journal of
-in-flight notifications and the session's rules.
+Per listener (a container's, or a `kubectl exec`'s) it holds the seccomp
+listener and a memfd, the journal of its in-flight notifications; per
+container, the session's rules as the blob.
 
 **Why a journal.** `SECCOMP_IOCTL_NOTIF_RECV` returns only notifications
 not yet received, and marks them received (`kernel/seccomp.c`,
@@ -284,38 +285,58 @@ the listener stays open, their threads stay blocked (no `ENOSYS`), so
 the new agent must answer them, and only knows them from the journal.
 `NOTIF_SEND` and `NOTIF_ID_VALID` work from any copy of the fd.
 
-**Slots.** Each worker (today `max(4, NumCPU)` per listener, each
-handling one notification at a time, blocked while a human decides)
-owns one 80-byte slot, a `struct seccomp_notif`, in its own
-page-aligned area. The worker:
+**Receiving and waiting.** A fixed set of receivers per listener
+(`max(4, NumCPU)`) only receive; each notification is handled in its own
+goroutine. A request waiting for a human then holds a goroutine and a
+slot, not a receiver: before, each worker handled one notification at a
+time, so a few unanswered questions (or `make -j16` threads waiting on
+one coalesced question) stopped every mediated syscall of the
+container, even those the rules allow. In-flight notifications are
+capped per listener (1024 by default, `--max-inflight` for
+`hallpass-node`): each is a blocked thread of the workload, so the cap
+is about the workload, not the machine. At the cap, the receivers wait
+for a free slot and the kernel queues the rest. The CLI has the same
+split and cap, with its journal on the Go heap: nothing could recover
+it, its notifications fail with `ENOSYS` when it dies.
 
-1. zeroes the whole slot;
+**Slots.** A slot is 80 bytes, a `struct seccomp_notif`; free slots are
+in a list, and a slot belongs to one goroutine from its receive to its
+answer. The receiver:
+
+1. takes a free slot and zeroes it;
 2. calls `NOTIF_RECV` with the slot as buffer, so the kernel writes the
    notification into the journal before the ioctl returns (no gap
    between received and journalled; a SIGKILL takes effect only after
    the copy);
-3. handles it and sends the answer;
-4. clears the slot with one atomic 64-bit store of `id = 0` (offset 0,
-   aligned); the other bytes are ignored when `id` is 0.
+3. hands it to a new goroutine, which handles it, sends the answer and
+   clears the slot with one atomic 64-bit store of `id = 0` (offset 0,
+   aligned; the other bytes are ignored when `id` is 0).
 
 A partial copy (`EFAULT`) could leave a real id with a truncated rest,
-and the kernel hands that notification to another worker. It is made
-impossible rather than handled: the memfd is sized with `ftruncate`
-and sealed with `F_SEAL_SHRINK`, the mapping is populated and
-`mlock`ed, and no slot crosses a page, so the copy cannot fault.
+while the kernel hands that notification to another receiver. It is
+made impossible rather than handled: no slot crosses a page, and the
+whole journal is allocated when the listener is attached (`ftruncate`,
+`F_SEAL_SHRINK`/`F_SEAL_GROW`, `MADV_POPULATE_WRITE`, `mlock`), so the
+copy cannot fault. An allocation failure fails the attach: the container
+does not start. 1024 slots are 21 pages (84 KiB) of locked memory,
+charged to the agent's memory cgroup.
 
 **Recovery.** The new agent gets the listener and the memfd back, and
 for each slot with a non-zero id: `NOTIF_ID_VALID` fails → answered or
 the thread died, clear it; otherwise handle it again (the thread is
 blocked, so its pid and `/proc/<pid>/mem` are unchanged; a question
-reappears). The same id in two slots should not happen: log it, replay
-one (a second `NOTIF_SEND` gets `EINPROGRESS`), and check
-`/proc/<pid>/syscall`. A crash after the answer and before the clear is
-harmless: `NOTIF_ID_VALID` fails.
+reappears). The same id in two slots should not happen: warn and replay
+one (a second `NOTIF_SEND` gets `EINPROGRESS`). A crash after the answer
+and before the clear is harmless: `NOTIF_ID_VALID` fails.
 
-**Rules.** The session's rules (`always`/`temp` answers) go in a second
-area of the memfd: two copies and a sequence number written last, so a
-crash during a write keeps the previous copy.
+**Rules.** The session's rules (`always`/`temp` answers) are the
+container's blob: the agent `Put`s them again on each change (rare,
+human), and fd-store replaces them at once.
+
+**Failures.** fd-store alone crashing loses nothing (the agent holds
+its copies) and gets them again when it is back. Both crashing: the
+waiting threads fail with `ENOSYS`, as without fd-store. Upgrading
+fd-store itself: not handled (`OnDelete`, rarely updated).
 
 ## Privileges
 

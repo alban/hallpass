@@ -48,12 +48,21 @@ type item struct {
 	why     Reason
 }
 
-func (m *Monitor) worker(l *listener) {
+// receiver receives l's notifications into journal slots and handles each
+// in its own goroutine: a request waiting for a human holds a goroutine
+// and a slot, not a receiver.
+func (m *Monitor) receiver(l *listener) {
+	defer l.wg.Done()
 	for {
-		n, err := l.n.Recv()
+		slot, ok := l.j.Take(l.hup)
+		if !ok {
+			return
+		}
+		n, err := l.n.Recv(l.j.Slot(slot))
 		if errors.Is(err, unix.ENOENT) {
 			// The task died before the notification was received, or
 			// no task is left: then every Recv fails at once.
+			l.j.Release(slot)
 			select {
 			case <-l.hup:
 				return
@@ -62,6 +71,7 @@ func (m *Monitor) worker(l *listener) {
 			}
 		}
 		if err != nil {
+			l.j.Release(slot)
 			return
 		}
 		m.mu.Lock()
@@ -69,17 +79,50 @@ func (m *Monitor) worker(l *listener) {
 			m.mu.Unlock()
 			// As if the monitor had exited.
 			_ = l.n.Deny(n.ID, int32(unix.ENOSYS))
+			l.j.Release(slot)
 			continue
 		}
 		m.busy++
 		m.mu.Unlock()
-		m.handle(l, n)
-		m.mu.Lock()
-		m.busy--
-		if m.busy == 0 {
-			m.idle.Broadcast()
+		l.wg.Add(1)
+		go m.handleSlot(l, n, slot)
+	}
+}
+
+// handleSlot handles n, received into slot, then frees the slot unless n
+// is still waiting: the monitor closed before answering it, and another
+// monitor may answer it from the journal.
+func (m *Monitor) handleSlot(l *listener, n seccomp.Notif, slot int) {
+	defer l.wg.Done()
+	m.handle(l, n)
+	m.mu.Lock()
+	closed := m.closed
+	m.mu.Unlock()
+	if !closed || !l.n.IDValid(n.ID) {
+		l.j.Release(slot)
+	}
+	m.mu.Lock()
+	m.busy--
+	if m.busy == 0 {
+		m.idle.Broadcast()
+	}
+	m.mu.Unlock()
+}
+
+// replay handles the notifications l's journal held when it was opened,
+// received by a previous monitor that did not answer them.
+func (m *Monitor) replay(l *listener) {
+	for _, p := range l.j.Pending() {
+		if !l.n.IDValid(p.Notif.ID) {
+			// Answered, or the task died.
+			l.j.Release(p.Slot)
+			continue
 		}
+		m.mu.Lock()
+		m.busy++
 		m.mu.Unlock()
+		l.wg.Add(1)
+		go m.handleSlot(l, p.Notif, p.Slot)
 	}
 }
 

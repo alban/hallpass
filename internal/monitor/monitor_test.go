@@ -4,11 +4,13 @@
 package monitor
 
 import (
+	"encoding/binary"
 	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unsafe"
@@ -48,12 +50,13 @@ func newFake() *fakeNotifier {
 	return &fakeNotifier{in: make(chan seccomp.Notif), out: make(chan response, 100), dead: map[uint64]bool{}, hup: make(chan struct{})}
 }
 
-func (f *fakeNotifier) Recv() (seccomp.Notif, error) {
+func (f *fakeNotifier) Recv(slot []byte) (seccomp.Notif, error) {
 	select {
 	case n, ok := <-f.in:
 		if !ok {
 			return n, unix.EBADF
 		}
+		putNotif(slot, n)
 		return n, nil
 	case <-f.hup:
 		// Like the kernel once the filter has no tasks left.
@@ -61,6 +64,17 @@ func (f *fakeNotifier) Recv() (seccomp.Notif, error) {
 		f.orphanRecvs++
 		f.mu.Unlock()
 		return seccomp.Notif{}, unix.ENOENT
+	}
+}
+
+// putNotif writes n as the kernel's struct seccomp_notif.
+func putNotif(b []byte, n seccomp.Notif) {
+	binary.LittleEndian.PutUint64(b[0:], n.ID)
+	binary.LittleEndian.PutUint32(b[8:], n.PID)
+	binary.LittleEndian.PutUint32(b[16:], uint32(n.Nr))
+	binary.LittleEndian.PutUint32(b[20:], n.Arch)
+	for i, a := range n.Args {
+		binary.LittleEndian.PutUint64(b[32+i*8:], a)
 	}
 }
 
@@ -76,19 +90,28 @@ func (f *fakeNotifier) kill(id uint64) {
 	f.mu.Unlock()
 }
 
-func (f *fakeNotifier) Continue(id uint64) error { f.out <- response{id, 0}; return nil }
+// Continue and Deny answer id: like the kernel, it is no longer valid.
+func (f *fakeNotifier) Continue(id uint64) error { return f.answer(id, 0) }
 func (f *fakeNotifier) Deny(id uint64, errno int32) error {
+	return f.answer(id, errno)
+}
+
+func (f *fakeNotifier) answer(id uint64, errno int32) error {
+	f.kill(id)
 	f.out <- response{id, errno}
 	return nil
 }
 
-var nextID uint64 = 1000
+var lastID atomic.Uint64
+
+func init() { lastID.Store(1000) }
+
+func newID() uint64 { return lastID.Add(1) }
 
 // send notifies syscall nr of the test process, with path arguments at
 // the given indexes.
 func (f *fakeNotifier) send(nr int, args map[int]string, extra map[int]uint64) uint64 {
-	nextID++
-	n := seccomp.Notif{ID: nextID, PID: uint32(os.Getpid()), Nr: int32(nr)}
+	n := seccomp.Notif{ID: newID(), PID: uint32(os.Getpid()), Nr: int32(nr)}
 	for i := range n.Args {
 		n.Args[i] = uint64(procAtFDCWD())
 	}
@@ -186,6 +209,11 @@ func setup(t *testing.T, k Kernel, decided bool) *fixture {
 
 func setupConfig(t *testing.T, cfg Config, decided bool) *fixture {
 	t.Helper()
+	return setupJournal(t, cfg, decided, seccomp.NewJournal(0))
+}
+
+func setupJournal(t *testing.T, cfg Config, decided bool, j *seccomp.Journal) *fixture {
+	t.Helper()
 	m, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -193,7 +221,7 @@ func setupConfig(t *testing.T, cfg Config, decided bool) *fixture {
 	fx := &fixture{m: m, f: newFake(), dir: t.TempDir()}
 	fx.dir, _ = filepath.EvalSymlinks(fx.dir)
 	fx.evs = m.Events(EventOptions{Decided: decided})
-	if err := m.attach(fx.f, os.Getpid(), fx.f.hup); err != nil {
+	if err := m.attach(fx.f, os.Getpid(), fx.f.hup, j); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
@@ -398,9 +426,9 @@ func TestRestartCache(t *testing.T) {
 		args[i] = uint64(procAtFDCWD())
 	}
 	once := func() uint64 {
-		nextID++
-		fx.f.in <- seccomp.Notif{ID: nextID, PID: uint32(os.Getpid()), Nr: unix.SYS_MKDIRAT, Args: args}
-		return nextID
+		id := newID()
+		fx.f.in <- seccomp.Notif{ID: id, PID: uint32(os.Getpid()), Nr: unix.SYS_MKDIRAT, Args: args}
+		return id
 	}
 	id := once()
 	req := fx.next(t, opened).Opened
@@ -418,8 +446,7 @@ func TestRestartCache(t *testing.T) {
 func TestUnknownPath(t *testing.T) {
 	fx := setup(t, nil, false)
 	// An unreadable address.
-	nextID++
-	id := nextID
+	id := newID()
 	fx.f.in <- seccomp.Notif{ID: id, PID: uint32(os.Getpid()), Nr: unix.SYS_MKDIRAT, Args: [6]uint64{uint64(procAtFDCWD()), 8}}
 	req := fx.next(t, opened).Opened
 	if req.Objects[0].Unknown == nil {

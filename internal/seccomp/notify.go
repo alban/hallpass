@@ -65,18 +65,21 @@ func (l *Listener) FD() int { return l.fd }
 // Close closes the listener fd.
 func (l *Listener) Close() error { return unix.Close(l.fd) }
 
-// Recv blocks until the next syscall is intercepted.
-func (l *Listener) Recv() (Notif, error) {
-	buf := make([]byte, sizeofNotif)
+// Recv blocks until the next syscall is intercepted. The kernel writes
+// the notification into slot (SlotSize bytes, e.g. a Journal slot).
+func (l *Listener) Recv(slot []byte) (Notif, error) {
+	if len(slot) < sizeofNotif {
+		return Notif{}, fmt.Errorf("NOTIF_RECV: slot of %d bytes", len(slot))
+	}
 	for {
-		err := ioctlPtr(l.fd, ioctlNotifRecv, unsafe.Pointer(&buf[0]))
+		err := ioctlPtr(l.fd, ioctlNotifRecv, unsafe.Pointer(&slot[0]))
 		if err == unix.EINTR {
 			continue
 		}
 		if err != nil {
 			return Notif{}, fmt.Errorf("NOTIF_RECV: %w", err)
 		}
-		return parseNotif(buf), nil
+		return parseNotif(slot), nil
 	}
 }
 
