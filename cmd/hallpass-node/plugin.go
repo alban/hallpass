@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 
 	"github.com/containerd/nri/pkg/api"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
@@ -38,6 +39,16 @@ type plugin struct {
 	listenerPath string
 	waitKillable bool
 	log          *slog.Logger
+	// registered is set by Synchronize, the end of the registration, and
+	// cleared when the NRI connection ends.
+	registered atomic.Bool
+}
+
+// Synchronize implements stub.SynchronizeInterface. The runtime calls it
+// once registered, before sending container events.
+func (p *plugin) Synchronize(context.Context, []*api.PodSandbox, []*api.Container) ([]*api.ContainerUpdate, error) {
+	p.registered.Store(true)
+	return nil, nil
 }
 
 // CreateContainer implements stub.CreateContainerInterface.

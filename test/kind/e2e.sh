@@ -95,10 +95,12 @@ log "deploying hallpass-node"
 "${KUBECTL[@]}" wait --for=condition=Established crd/hallpasspolicies.hallpass.io --timeout=60s
 # updateStrategy is OnDelete: replace the agent to run the image just loaded.
 "${KUBECTL[@]}" -n hallpass-system delete pod -l app.kubernetes.io/name=hallpass-node --wait=true
+# Ready: registered with NRI and caches synced (hallpass-node ready).
 agent_ready() {
-	"${KUBECTL[@]}" -n hallpass-system logs ds/hallpass-node 2>/dev/null | grep -q 'Started plugin'
+	"${KUBECTL[@]}" -n hallpass-system wait pod -l app.kubernetes.io/name=hallpass-node \
+		--for=condition=Ready --timeout=5s >/dev/null 2>&1
 }
-wait_for 120 agent_ready || fail "hallpass-node did not start"
+wait_for 120 agent_ready || fail "hallpass-node is not ready"
 
 log "starting the test pods"
 sed "s|BUSYBOX|$BUSYBOX|" test/kind/e2e.yaml >"$WORK/e2e.yaml"

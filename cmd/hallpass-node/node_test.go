@@ -20,6 +20,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/alban/hallpass/internal/rules"
+	"github.com/alban/hallpass/internal/sessionapi"
 )
 
 func TestParsePolicy(t *testing.T) {
@@ -253,5 +254,41 @@ func TestEnvHome(t *testing.T) {
 	}
 	if h := envHome(nil); h != "" {
 		t.Errorf("got %q", h)
+	}
+}
+
+// Until the caches sync, opted-in containers are refused and the others
+// go through.
+func TestAdjustNotSynced(t *testing.T) {
+	p := &plugin{cluster: &kube{}, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	ctr := &api.Container{Name: "c"}
+	optedIn := &api.PodSandbox{Namespace: "agents", Name: "p", Annotations: map[string]string{PolicyAnnotation: "agent"}}
+	if adj, _, err := p.CreateContainer(t.Context(), optedIn, ctr); !errors.Is(err, errNotSynced) || adj != nil {
+		t.Errorf("opted in: adjustment %v, err %v", adj, err)
+	}
+	if adj, _, err := p.CreateContainer(t.Context(), &api.PodSandbox{Namespace: "agents", Name: "q"}, ctr); err != nil || adj != nil {
+		t.Errorf("not opted in: adjustment %v, err %v", adj, err)
+	}
+}
+
+func TestReady(t *testing.T) {
+	node := sessionapi.NewNode()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go node.Serve(ln)
+	defer node.Stop()
+	args := []string{"--addr", ln.Addr().String()}
+	if err := cmdReady(args); err == nil {
+		t.Error("ready before SetReady(true)")
+	}
+	node.SetReady(true)
+	if err := cmdReady(args); err != nil {
+		t.Errorf("not ready after SetReady(true): %v", err)
+	}
+	node.SetReady(false)
+	if err := cmdReady(args); err == nil {
+		t.Error("ready after SetReady(false)")
 	}
 }

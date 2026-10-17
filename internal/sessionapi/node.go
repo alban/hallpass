@@ -11,6 +11,8 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/health"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
@@ -27,20 +29,33 @@ const SessionKey = nodeclient.SessionKey
 // Package nodeclient is its client.
 type Node struct {
 	service
-	srv *grpc.Server
+	srv    *grpc.Server
+	health *health.Server
 
 	mu       sync.Mutex
 	sessions map[string]entry
 }
 
-// NewNode returns a Node serving no session.
+// NewNode returns a Node serving no session. Its gRPC health service
+// reports NOT_SERVING until SetReady(true).
 func NewNode() *Node {
-	h := &Node{sessions: map[string]entry{}}
+	h := &Node{sessions: map[string]entry{}, health: health.NewServer()}
 	h.lookup = h.find
 	h.list = h.infos
 	h.srv = grpc.NewServer()
 	pb.RegisterSessionServer(h.srv, &h.service)
+	h.health.SetServingStatus("", healthpb.HealthCheckResponse_NOT_SERVING)
+	healthpb.RegisterHealthServer(h.srv, h.health)
 	return h
+}
+
+// SetReady sets the status of the gRPC health service: SERVING when ready.
+func (h *Node) SetReady(ready bool) {
+	st := healthpb.HealthCheckResponse_NOT_SERVING
+	if ready {
+		st = healthpb.HealthCheckResponse_SERVING
+	}
+	h.health.SetServingStatus("", st)
 }
 
 // Add serves sess and m as session id.

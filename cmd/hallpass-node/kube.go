@@ -5,10 +5,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
+	"sync/atomic"
 	"time"
 
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -34,16 +37,23 @@ type cluster interface {
 	Policy(name string) (*Policy, error)
 }
 
+// errNotSynced fails the lookups until the caches have synced.
+var errNotSynced = errors.New("namespace and HallpassPolicy caches not synced yet")
+
 // kube reads namespaces and policies from informer caches.
 type kube struct {
 	selector   labels.Selector
 	namespaces listersv1.NamespaceLister
 	policies   cache.GenericLister
+	synced     atomic.Bool
 }
 
-// newKube starts the informers and waits for their caches. kubeconfig ""
-// means in-cluster.
-func newKube(ctx context.Context, kubeconfig string, selector labels.Selector) (*kube, error) {
+// newKube starts the informers and returns without waiting for their
+// caches: until they sync, Synced is false and the lookups fail, so that
+// the agent can register with NRI first and refuse the opted-in
+// containers rather than let them start unmediated. kubeconfig "" means
+// in-cluster.
+func newKube(ctx context.Context, kubeconfig string, selector labels.Selector, log *slog.Logger) (*kube, error) {
 	var cfg *rest.Config
 	var err error
 	if kubeconfig == "" {
@@ -71,13 +81,34 @@ func newKube(ctx context.Context, kubeconfig string, selector labels.Selector) (
 	k.policies = polInf.Lister()
 	nsf.Start(ctx.Done())
 	dynf.Start(ctx.Done())
-	if !cache.WaitForCacheSync(ctx.Done(), nsInf.Informer().HasSynced, polInf.Informer().HasSynced) {
-		return nil, fmt.Errorf("namespace and HallpassPolicy caches did not sync (is the CRD installed?)")
-	}
+	go func() {
+		start := time.Now()
+		done := make(chan struct{})
+		go func() {
+			select {
+			case <-done:
+			case <-ctx.Done():
+			case <-time.After(30 * time.Second):
+				log.Warn("namespace and HallpassPolicy caches not synced yet, refusing opted-in containers (API server reachable? CRD installed?)")
+			}
+		}()
+		ok := cache.WaitForCacheSync(ctx.Done(), nsInf.Informer().HasSynced, polInf.Informer().HasSynced)
+		close(done)
+		if ok {
+			k.synced.Store(true)
+			log.Info("caches synced", "after", time.Since(start).Round(time.Millisecond))
+		}
+	}()
 	return k, nil
 }
 
+// Synced reports whether the caches have synced.
+func (k *kube) Synced() bool { return k.synced.Load() }
+
 func (k *kube) Selected(ns string) (bool, error) {
+	if !k.Synced() {
+		return false, errNotSynced
+	}
 	n, err := k.namespaces.Get(ns)
 	if err != nil {
 		return false, err
@@ -86,8 +117,11 @@ func (k *kube) Selected(ns string) (bool, error) {
 }
 
 func (k *kube) Policy(name string) (*Policy, error) {
+	if !k.Synced() {
+		return nil, errNotSynced
+	}
 	obj, err := k.policies.Get(name)
-	if errors.IsNotFound(err) {
+	if apierrors.IsNotFound(err) {
 		return nil, fmt.Errorf("no HallpassPolicy %q", name)
 	}
 	if err != nil {

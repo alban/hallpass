@@ -205,6 +205,13 @@ mediated pods. The sandbox action also needs to list
   the plugin (`hallpass`) in its `required_plugins`, or add the annotation
   `required-plugins.noderesource.dev: '[hallpass]'` to the pod (also
   checked by the default validator).
+- **Startup and API server outages.** The agent registers with NRI
+  first, then refuses the opted-in containers (they fail to start and
+  the kubelet retries) until it has read the namespaces and
+  HallpassPolicies; it is Ready from then on (`hallpass-node ready`, its
+  readiness probe). If the API server becomes unreachable later,
+  mediation goes on with the last state read, but answering through
+  `port-forward` fails: requests wait until their `askTimeout`.
 - Policy changes apply to containers started afterwards.
 - No authentication on the session API beyond Kubernetes' own on
   `port-forward`: whoever can port-forward to `hallpass-system` pods can

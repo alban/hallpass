@@ -33,6 +33,7 @@ commands:
   sessions  list the sessions of a node agent
   pending   list the pending requests of a session
   answer    answer a pending request: once, temp, always, deny or never
+  ready     exit 0 if the node agent is ready (its readiness probe)
 
 Run "hallpass-node <command> -h" for the flags of a command.
 `
@@ -52,6 +53,8 @@ func main() {
 		err = cmdPending(args)
 	case "answer":
 		err = cmdAnswer(args)
+	case "ready":
+		err = cmdReady(args)
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 		return
@@ -101,7 +104,7 @@ func runAgent(args []string) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	k, err := newKube(ctx, *kubeconfig, sel)
+	k, err := newKube(ctx, *kubeconfig, sel, log)
 	if err != nil {
 		return err
 	}
@@ -141,11 +144,31 @@ func runAgent(args []string) error {
 		return err
 	}
 	log.Info("started", "session-api", *listenAddr, "socket", *socket, "namespace-selector", sel.String())
+	// Ready (the readiness probe, hallpass-node ready) once registered with
+	// NRI and with the caches synced: until then, opted-in containers are
+	// refused, or start unmediated if the agent is not registered at all.
+	go func() {
+		was := false
+		for {
+			ready := p.registered.Load() && k.Synced()
+			if ready != was {
+				node.SetReady(ready)
+				log.Info("readiness", "ready", ready, "nri", p.registered.Load(), "caches", k.Synced())
+				was = ready
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(time.Second):
+			}
+		}
+	}()
 	// The listeners of running containers live in this process: when the
 	// runtime goes away (e.g. containerd restarts), register again rather
 	// than exit.
 	for {
 		err := st.Run(ctx)
+		p.registered.Store(false)
 		if ctx.Err() != nil {
 			return nil
 		}

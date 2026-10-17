@@ -78,6 +78,14 @@ spec:
             - --namespace-selector=hallpass.io/enabled=true
           securityContext:
             privileged: true
+          # Ready once registered with NRI and with the namespace and
+          # HallpassPolicy caches synced. No liveness probe: restarting the
+          # agent drops the listeners of the running containers.
+          readinessProbe:
+            exec:
+              command: [/hallpass-node, ready]
+            periodSeconds: 5
+            timeoutSeconds: 5
           volumeMounts:
             - name: nri
               mountPath: /var/run/nri

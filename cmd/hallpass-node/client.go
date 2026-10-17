@@ -12,6 +12,8 @@ import (
 	"text/tabwriter"
 	"time"
 
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+
 	"github.com/alban/hallpass/internal/nodeclient"
 	pb "github.com/alban/hallpass/internal/sessionpb"
 )
@@ -29,6 +31,27 @@ func dial(addr string) (pb.SessionClient, func(), error) {
 		return nil, nil, err
 	}
 	return c, func() { conn.Close() }, nil
+}
+
+// cmdReady checks the agent's gRPC health service: the readiness probe.
+func cmdReady(args []string) error {
+	fs, addr := clientFlags("ready")
+	_ = fs.Parse(args)
+	conn, _, err := nodeclient.Dial(*addr)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	r, err := healthpb.NewHealthClient(conn).Check(ctx, &healthpb.HealthCheckRequest{})
+	if err != nil {
+		return err
+	}
+	if r.Status != healthpb.HealthCheckResponse_SERVING {
+		return fmt.Errorf("not ready: %v (see the agent's logs)", r.Status)
+	}
+	return nil
 }
 
 func cmdSessions(args []string) error {

@@ -339,6 +339,17 @@ design above:
   fails the container creation (fail closed once opted in). If the
   policy is gone when runc connects, the session has only the implicit
   allows and does not ask.
+- **Startup.** The informers start without blocking: the agent registers
+  with NRI at once, and until both caches have synced the lookups fail
+  with `errNotSynced`, so opted-in containers are refused rather than
+  started unmediated (waiting for the caches before registering left that
+  window open, e.g. when the agent restarts during an API server outage).
+  `Synchronize` marks the plugin registered; the end of `stub.Run` clears
+  it. Both together set the gRPC health service of the session API to
+  SERVING, checked by the exec readiness probe `hallpass-node ready` (the
+  API is on the pod's loopback, out of reach of an httpGet or grpc
+  probe). No liveness probe: a restart drops the running containers'
+  listeners.
 - **Sessions.** One per container id; `kubectl exec` (a new listener for
   the same container) attaches to the same monitor. A session ends when
   the monitor has no listener left. `listenerMetadata` is JSON
