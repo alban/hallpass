@@ -1,7 +1,7 @@
 // Copyright The hallpass Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package hubclient
+package nodeclient
 
 import (
 	"context"
@@ -17,9 +17,9 @@ import (
 	pb "github.com/alban/hallpass/internal/sessionpb"
 )
 
-// fakeHub serves List, Events and Snapshot for the sessions in infos; the
+// fakeNode serves List, Events and Snapshot for the sessions in infos; the
 // events of session id are read from events[id].
-type fakeHub struct {
+type fakeNode struct {
 	pb.UnimplementedSessionServer
 
 	mu     sync.Mutex
@@ -28,19 +28,19 @@ type fakeHub struct {
 	rules  []*pb.Rule
 }
 
-func (h *fakeHub) List(context.Context, *pb.ListRequest) (*pb.ListReply, error) {
+func (h *fakeNode) List(context.Context, *pb.ListRequest) (*pb.ListReply, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return &pb.ListReply{Sessions: h.infos}, nil
 }
 
-func (h *fakeHub) Snapshot(context.Context, *pb.SnapshotRequest) (*pb.SnapshotReply, error) {
+func (h *fakeNode) Snapshot(context.Context, *pb.SnapshotRequest) (*pb.SnapshotReply, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return &pb.SnapshotReply{Rules: h.rules}, nil
 }
 
-func (h *fakeHub) Events(_ *pb.EventsRequest, stream grpc.ServerStreamingServer[pb.EventBatch]) error {
+func (h *fakeNode) Events(_ *pb.EventsRequest, stream grpc.ServerStreamingServer[pb.EventBatch]) error {
 	md, _ := metadata.FromIncomingContext(stream.Context())
 	id := md.Get(SessionKey)[0]
 	h.mu.Lock()
@@ -65,7 +65,7 @@ func (h *fakeHub) Events(_ *pb.EventsRequest, stream grpc.ServerStreamingServer[
 	}
 }
 
-func serveFake(t *testing.T, h *fakeHub) (*grpc.Server, pb.SessionClient) {
+func serveFake(t *testing.T, h *fakeNode) (*grpc.Server, pb.SessionClient) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -97,7 +97,7 @@ func summary(st State) map[string][]string {
 }
 
 func TestWatch(t *testing.T) {
-	h := &fakeHub{
+	h := &fakeNode{
 		infos:  []*pb.SessionInfo{{Id: "a"}, {Id: "b"}},
 		events: map[string]chan *pb.Event{"a": make(chan *pb.Event), "b": make(chan *pb.Event)},
 	}

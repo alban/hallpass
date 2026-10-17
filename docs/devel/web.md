@@ -42,7 +42,7 @@ service Session {
 ```
 
 A session's socket serves one session. The Kubernetes node agent serves
-all the sessions of its node on one TCP listener (`sessionapi.Hub`): `List`
+all the sessions of its node on one TCP listener (`sessionapi.Node`): `List`
 gives their ids, and the other calls select one with the
 `hallpass-session` gRPC metadata.
 

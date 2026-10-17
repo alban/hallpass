@@ -14,18 +14,18 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
-	"github.com/alban/hallpass/internal/hubclient"
 	"github.com/alban/hallpass/internal/monitor"
+	"github.com/alban/hallpass/internal/nodeclient"
 	pb "github.com/alban/hallpass/internal/sessionpb"
 )
 
-// SessionKey is the gRPC metadata that selects a session on a Hub.
-const SessionKey = hubclient.SessionKey
+// SessionKey is the gRPC metadata that selects a session on a Node.
+const SessionKey = nodeclient.SessionKey
 
-// Hub serves several sessions on one listener (the node agent's): List
+// Node serves several sessions on one listener (the node agent's): List
 // describes them, the other calls select one with the SessionKey metadata.
-// Package hubclient is its client.
-type Hub struct {
+// Package nodeclient is its client.
+type Node struct {
 	service
 	srv *grpc.Server
 
@@ -33,9 +33,9 @@ type Hub struct {
 	sessions map[string]entry
 }
 
-// NewHub returns a hub serving no session.
-func NewHub() *Hub {
-	h := &Hub{sessions: map[string]entry{}}
+// NewNode returns a Node serving no session.
+func NewNode() *Node {
+	h := &Node{sessions: map[string]entry{}}
 	h.lookup = h.find
 	h.list = h.infos
 	h.srv = grpc.NewServer()
@@ -44,14 +44,14 @@ func NewHub() *Hub {
 }
 
 // Add serves sess and m as session id.
-func (h *Hub) Add(id string, m *monitor.Monitor, sess Session) {
+func (h *Node) Add(id string, m *monitor.Monitor, sess Session) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.sessions[id] = entry{m: m, sess: sess}
 }
 
 // Remove stops serving session id; calls in progress go on.
-func (h *Hub) Remove(id string) {
+func (h *Node) Remove(id string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	delete(h.sessions, id)
@@ -60,12 +60,12 @@ func (h *Hub) Remove(id string) {
 // Serve serves ln until Stop. Unlike a session's socket (Listen), the
 // clients are not checked: ln must only be reachable by trusted clients,
 // e.g. on the loopback of the node agent's pod network.
-func (h *Hub) Serve(ln net.Listener) error { return h.srv.Serve(ln) }
+func (h *Node) Serve(ln net.Listener) error { return h.srv.Serve(ln) }
 
 // Stop stops serving.
-func (h *Hub) Stop() { h.srv.Stop() }
+func (h *Node) Stop() { h.srv.Stop() }
 
-func (h *Hub) find(ctx context.Context) (entry, error) {
+func (h *Node) find(ctx context.Context) (entry, error) {
 	md, _ := metadata.FromIncomingContext(ctx)
 	ids := md.Get(SessionKey)
 	if len(ids) != 1 {
@@ -80,7 +80,7 @@ func (h *Hub) find(ctx context.Context) (entry, error) {
 	return e, nil
 }
 
-func (h *Hub) infos() []*pb.SessionInfo {
+func (h *Node) infos() []*pb.SessionInfo {
 	h.mu.Lock()
 	ids := make([]string, 0, len(h.sessions))
 	es := map[string]entry{}

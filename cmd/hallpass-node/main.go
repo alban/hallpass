@@ -106,20 +106,20 @@ func runAgent(args []string) error {
 		return err
 	}
 
-	hub := sessionapi.NewHub()
+	node := sessionapi.NewNode()
 	tcp, err := net.Listen("tcp", *listenAddr)
 	if err != nil {
 		return err
 	}
 	go func() {
-		if err := hub.Serve(tcp); err != nil {
+		if err := node.Serve(tcp); err != nil {
 			log.Error("session API", "err", err)
 			cancel()
 		}
 	}()
-	defer hub.Stop()
+	defer node.Stop()
 
-	ag := newAgent(k, hub, log)
+	ag := newAgent(k, node, log)
 	ln, err := listen(*socket)
 	if err != nil {
 		return err

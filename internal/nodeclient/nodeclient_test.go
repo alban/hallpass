@@ -1,7 +1,7 @@
 // Copyright The hallpass Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package hubclient
+package nodeclient
 
 import (
 	"context"

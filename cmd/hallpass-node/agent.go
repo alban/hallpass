@@ -29,15 +29,15 @@ const maxState = 1 << 20
 // monitor per container.
 type agent struct {
 	cluster cluster
-	hub     *sessionapi.Hub
+	node    *sessionapi.Node
 	log     *slog.Logger
 
 	mu       sync.Mutex
 	sessions map[string]*session // by container id
 }
 
-func newAgent(c cluster, hub *sessionapi.Hub, log *slog.Logger) *agent {
-	return &agent{cluster: c, hub: hub, log: log, sessions: map[string]*session{}}
+func newAgent(c cluster, node *sessionapi.Node, log *slog.Logger) *agent {
+	return &agent{cluster: c, node: node, log: log, sessions: map[string]*session{}}
 }
 
 // listen creates the agent socket. Its directory is root-only: whoever can
@@ -162,14 +162,14 @@ func (a *agent) attach(st *specs.ContainerProcessState, fd int) error {
 		return err
 	}
 	a.sessions[id] = s
-	a.hub.Add(id, s.m, s)
+	a.node.Add(id, s.m, s)
 	a.log.Info("session started", "container", id, "namespace", md.Namespace, "pod", md.Pod, "name", md.Container, "policy", pol.Name, "pid", st.Pid)
 	go func() {
 		s.run()
 		a.mu.Lock()
 		if a.sessions[id] == s {
 			delete(a.sessions, id)
-			a.hub.Remove(id)
+			a.node.Remove(id)
 		}
 		a.mu.Unlock()
 		s.m.Close()

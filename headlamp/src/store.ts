@@ -6,7 +6,7 @@
 // dependency: the WebSocket and the wasm client are injected, so that
 // tests can replace them.
 
-import { Agent, AgentState, Answer, HubState } from './types';
+import { Agent, AgentState, Answer, NodeState } from './types';
 
 // A port-forward WebSocket to an agent pod.
 export interface Socket {
@@ -133,7 +133,7 @@ class AgentConn {
     this.socket = socket;
   }
 
-  private onState(st: HubState) {
+  private onState(st: NodeState) {
     if (this.stopped) {
       return;
     }

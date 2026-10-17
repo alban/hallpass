@@ -14,7 +14,7 @@
 //   - transport.send(Uint8Array) sends a WebSocket message;
 //     transport.close() closes the WebSocket;
 //   - callbacks.onState(json): the sessions, their pending requests and
-//     rules (hubclient.State), after each change;
+//     rules (nodeclient.State), after each change;
 //   - callbacks.onClose(error): the connection ended; error is a string,
 //     empty after close().
 //
@@ -42,7 +42,7 @@ import (
 	"syscall/js"
 	"time"
 
-	"github.com/alban/hallpass/internal/hubclient"
+	"github.com/alban/hallpass/internal/nodeclient"
 	pb "github.com/alban/hallpass/internal/sessionpb"
 )
 
@@ -113,7 +113,7 @@ var (
 			if err != nil {
 				return err
 			}
-			actx, acancel := context.WithTimeout(hubclient.WithSession(l.ctx, session), 10*time.Second)
+			actx, acancel := context.WithTimeout(nodeclient.WithSession(l.ctx, session), 10*time.Second)
 			defer acancel()
 			_, err = l.c.Answer(actx, &pb.AnswerRequest{Request: id, Answer: answer, Client: "headlamp"})
 			return err
@@ -143,7 +143,7 @@ func connect(_ js.Value, args []js.Value) any {
 	pc.hangup = func() { transport.Call("close") }
 
 	ctx, cancel := context.WithCancel(context.Background())
-	conn, c, err := hubclient.DialConn(pc)
+	conn, c, err := nodeclient.DialConn(pc)
 	if err != nil {
 		cancel()
 		go cb.Call("onClose", err.Error())
@@ -157,7 +157,7 @@ func connect(_ js.Value, args []js.Value) any {
 	linksMu.Unlock()
 
 	go func() {
-		err := hubclient.Watch(ctx, c, listInterval, func(st hubclient.State) {
+		err := nodeclient.Watch(ctx, c, listInterval, func(st nodeclient.State) {
 			b, err := json.Marshal(st)
 			if err != nil {
 				return

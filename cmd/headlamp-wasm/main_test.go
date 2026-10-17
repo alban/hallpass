@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alban/hallpass/internal/hubclient"
 	"github.com/alban/hallpass/internal/monitor"
+	"github.com/alban/hallpass/internal/nodeclient"
 	"github.com/alban/hallpass/internal/sessionapi"
 	pb "github.com/alban/hallpass/internal/sessionpb"
 )
@@ -78,8 +78,8 @@ func (s *session) Answer(id uint64, answer, client string) error {
 	return nil
 }
 
-func TestHubOverPortForward(t *testing.T) {
-	h := sessionapi.NewHub()
+func TestNodeOverPortForward(t *testing.T) {
+	h := sessionapi.NewNode()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -95,7 +95,7 @@ func TestHubOverPortForward(t *testing.T) {
 	h.Add("s1", m, sess)
 
 	pc := portForward(t, ln.Addr().String())
-	conn, c, err := hubclient.DialConn(pc)
+	conn, c, err := nodeclient.DialConn(pc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,20 +103,20 @@ func TestHubOverPortForward(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	states := make(chan hubclient.State, 10)
+	states := make(chan nodeclient.State, 10)
 	go func() {
-		_ = hubclient.Watch(ctx, c, time.Second, func(st hubclient.State) { states <- st })
+		_ = nodeclient.Watch(ctx, c, time.Second, func(st nodeclient.State) { states <- st })
 	}()
 	select {
 	case st := <-states:
-		if len(st.Sessions) != 1 || hubclient.Name(st.Sessions[0].Info) != "ns/agent/c" {
+		if len(st.Sessions) != 1 || nodeclient.Name(st.Sessions[0].Info) != "ns/agent/c" {
 			t.Fatalf("state: %v", st)
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("no state")
 	}
 
-	actx, acancel := context.WithTimeout(hubclient.WithSession(ctx, "s1"), 10*time.Second)
+	actx, acancel := context.WithTimeout(nodeclient.WithSession(ctx, "s1"), 10*time.Second)
 	defer acancel()
 	if _, err := c.Answer(actx, &pb.AnswerRequest{Request: 42, Answer: "once", Client: "headlamp"}); err != nil {
 		t.Fatalf("Answer: %v", err)

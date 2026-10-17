@@ -1,10 +1,10 @@
 // Copyright The hallpass Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package hubclient is a client of the node agent's session API (a
-// sessionapi.Hub). It has no system dependency, so it also builds for
+// Package nodeclient is a client of the node agent's session API (a
+// sessionapi.Node). It has no system dependency, so it also builds for
 // GOOS=js (the Headlamp plugin's wasm client, cmd/headlamp-wasm).
-package hubclient
+package nodeclient
 
 import (
 	"context"
@@ -23,7 +23,7 @@ import (
 	pb "github.com/alban/hallpass/internal/sessionpb"
 )
 
-// SessionKey is the gRPC metadata that selects a session on a hub.
+// SessionKey is the gRPC metadata that selects a session on a node agent.
 const SessionKey = "hallpass-session"
 
 var connectParams = grpc.ConnectParams{
@@ -31,14 +31,14 @@ var connectParams = grpc.ConnectParams{
 	MinConnectTimeout: 5 * time.Second,
 }
 
-// Dial connects to the hub at addr (host:port), without transport
-// security: the hub listens on its pod's loopback, reached through a
+// Dial connects to the node agent at addr (host:port), without transport
+// security: the agent listens on its pod's loopback, reached through a
 // port-forward.
 func Dial(addr string) (*grpc.ClientConn, pb.SessionClient, error) {
 	return dial(addr)
 }
 
-// DialConn speaks to a hub over conn, e.g. a port-forward stream. Such a
+// DialConn speaks to a node agent over conn, e.g. a port-forward stream. Such a
 // stream carries one connection: once it fails, so does the client, and
 // the caller opens a new stream and calls DialConn again.
 func DialConn(conn net.Conn) (*grpc.ClientConn, pb.SessionClient, error) {
@@ -64,7 +64,7 @@ func dial(target string, opts ...grpc.DialOption) (*grpc.ClientConn, pb.SessionC
 	return conn, pb.NewSessionClient(conn), nil
 }
 
-// WithSession selects session id on a hub for the calls made with the
+// WithSession selects session id on a node agent for the calls made with the
 // returned context.
 func WithSession(ctx context.Context, id string) context.Context {
 	return metadata.AppendToOutgoingContext(ctx, SessionKey, id)

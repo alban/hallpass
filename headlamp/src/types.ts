@@ -1,7 +1,7 @@
 // Copyright The hallpass Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// The state of a hallpass-node agent, as hubclient.State.MarshalJSON
+// The state of a hallpass-node agent, as nodeclient.State.MarshalJSON
 // writes it: protobuf messages in protojson (camelCase, unset fields
 // omitted, 64-bit integers as strings).
 
@@ -49,7 +49,7 @@ export interface Session {
   rules?: Rule[];
 }
 
-export interface HubState {
+export interface NodeState {
   sessions?: Session[];
 }
 

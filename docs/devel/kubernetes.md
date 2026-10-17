@@ -343,11 +343,11 @@ design above:
   the same container) attaches to the same monitor. A session ends when
   the monitor has no listener left. `listenerMetadata` is JSON
   `{namespace, pod, podUID, container, policy, home}`.
-- **Session API.** One `sessionapi.Hub` per node on `127.0.0.1:7323`.
+- **Session API.** One `sessionapi.Node` per node on `127.0.0.1:7323`.
   Backward compatible proto changes: a `List` RPC and `SessionInfo.id`;
-  on the hub, the other RPCs must select the session with the
+  on the node agent, the other RPCs must select the session with the
   `hallpass-session` gRPC metadata key. The CLI's unix socket serves one
-  session, ignores that key and keeps its peer checks; the hub's TCP
+  session, ignores that key and keeps its peer checks; the agent's TCP
   listener has none.
 - **Client.** `hallpass-node sessions|pending|answer --addr`, sessions
   named by id, id prefix or `namespace/pod/container`. Answers go
@@ -367,9 +367,9 @@ design above:
 Branch `headlamp`, on top of `nri`:
 
 - **Wasm client** (`cmd/headlamp-wasm`, `GOOS=js`). The plugin reuses
-  the Go client rather than a TypeScript gRPC client: `internal/hubclient`
-  holds the hub's client side (dial, session selection, lookup) without
-  the monitor, so it builds for wasm; `hubclient.Watch` lists the
+  the Go client rather than a TypeScript gRPC client: `internal/nodeclient`
+  holds the node agent's client side (dial, session selection, lookup)
+  without the monitor, so it builds for wasm; `nodeclient.Watch` lists the
   sessions every 2 s, follows each one's events, and reports the whole
   state (sessions, pending requests, rules) as JSON after each change.
   3.4 MB gzipped, shipped as `main.wasm.gz` next to `main.js` and
@@ -405,7 +405,7 @@ Branch `headlamp`, on top of `nri`:
   agent pods answers for the whole cluster.
 - **Tests.** `make test-headlamp`: tsc, lint and vitest (the store's
   reconnects and answers, the sandbox's owner lookup and patch);
-  `go test ./cmd/headlamp-wasm` runs gRPC to a `sessionapi.Hub` through a
+  `go test ./cmd/headlamp-wasm` runs gRPC to a `sessionapi.Node` through a
   simulated port-forward. `make test-headlamp-kind` runs the kind e2e
   with `E2E_ANSWER=test/kind/headlamp/answer.sh`: Headlamp v0.46.0
   (pinned by digest) in docker with the plugin, driven by Puppeteer

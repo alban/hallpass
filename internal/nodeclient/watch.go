@@ -1,7 +1,7 @@
 // Copyright The hallpass Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package hubclient
+package nodeclient
 
 import (
 	"context"
@@ -23,12 +23,12 @@ type Session struct {
 	Rules   []*pb.Rule
 }
 
-// State is every session of a hub, by id.
+// State is every session of a node agent, by id.
 type State struct {
 	Sessions []Session
 }
 
-// Watch follows every session of the hub behind c: it lists the sessions
+// Watch follows every session of the node agent behind c: it lists the sessions
 // every interval, follows the events of each, and calls onChange with the
 // new state after each change, from one goroutine. It returns when ctx is
 // done or List fails, e.g. when the connection is lost.
