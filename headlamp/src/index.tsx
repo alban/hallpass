@@ -3,7 +3,7 @@
 
 // The hallpass Headlamp plugin: answers the requests of the containers
 // that hallpass mediates, through the node agents' session API. See
-// docs/kubernetes.md.
+// docs/kubernetes/answer.md.
 
 import {
   registerAppBarAction,

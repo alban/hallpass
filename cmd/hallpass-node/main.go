@@ -5,7 +5,7 @@
 // DaemonSet): an NRI plugin that adds a seccomp profile to the containers
 // of opted-in pods, the seccomp agent runc hands their listeners to, and
 // one session API for all of them. It also has a small client for that
-// API. See docs/kubernetes.md.
+// API. See docs/kubernetes/.
 package main
 
 import (

@@ -40,14 +40,22 @@ nav:
   - How it works: design.md
   - Usage: usage.md
   - Use cases: use-cases.md
-  - Kubernetes: kubernetes.md
+  - Kubernetes:
+      - kubernetes/index.md
+      - Install and operate: kubernetes/install.md
+      - Opt in and policies: kubernetes/policies.md
+      - Answer requests: kubernetes/answer.md
 
 markdown_extensions:
   - admonition
   - toc:
       permalink: true
   - pymdownx.highlight
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
 
 extra:
   social:

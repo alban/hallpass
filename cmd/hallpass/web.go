@@ -22,7 +22,7 @@ their requests, on 127.0.0.1. It prints a one-time pairing link; press Enter
 for a new one.
 
 With --node, it follows the sessions of a Kubernetes node agent instead,
-through a port-forward (see docs/kubernetes.md):
+through a port-forward (see docs/kubernetes/answer.md):
 
   kubectl -n hallpass-system port-forward pod/hallpass-node-xxxxx 7323
   hallpass web --node 127.0.0.1:7323

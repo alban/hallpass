@@ -4,7 +4,7 @@ Status: work item 1 (lite mode) implemented on branch `nri`; the cluster
 API (option A) and the Headlamp plugin on branch `headlamp`. See the
 implementation notes ([work item 1](#implementation-notes-work-item-1),
 [Headlamp](#implementation-notes-headlamp)) for where they differ from
-this design. User docs: [../kubernetes.md](../kubernetes.md).
+this design. User docs: [../kubernetes/](../kubernetes/index.md).
 
 Run AI agents in pods under hallpass, opted in per namespace and per pod,
 and answer their requests from [Headlamp](https://headlamp.dev). Lite mode
@@ -278,6 +278,65 @@ Per listener (a container's, or a `kubectl exec`'s) it holds the seccomp
 listener and a memfd, the journal of its in-flight notifications; per
 container, the session's rules as the blob.
 
+```mermaid
+flowchart LR
+  subgraph pod["mediated container"]
+    T["blocked thread"]
+  end
+  K["kernel: seccomp listener"]
+  subgraph agent["hallpass-node (agent)"]
+    R["receivers"]
+    J["journal (memfd)"]
+  end
+  subgraph store["hallpass-fd-store"]
+    E["entry per container: state memfd, listeners, journals"]
+  end
+  T -- syscall --> K
+  K -- NOTIF_RECV --> R
+  R -- writes the notification --> J
+  agent -- "Put / Delete / List (SCM_RIGHTS)" --> store
+```
+
+Both processes hold a copy of each fd: the listener is closed (and the
+waiting threads get `ENOSYS`) only if both die.
+
+A notification's life in the agent:
+
+```mermaid
+sequenceDiagram
+  participant T as thread
+  participant K as kernel
+  participant A as agent
+  participant J as journal slot
+  T->>K: open("/etc/x", O_WRONLY)
+  A->>J: zero a free slot
+  A->>K: NOTIF_RECV into the slot
+  K->>J: copy the notification
+  A->>A: rules, or ask a human
+  A->>K: NOTIF_SEND (allow or deny)
+  K->>T: syscall continues or fails
+  A->>J: id = 0 (slot free)
+```
+
+An agent restart:
+
+```mermaid
+sequenceDiagram
+  participant S as fd-store
+  participant O as old agent
+  participant N as new agent
+  participant K as kernel
+  O->>S: Put(container, state, listener, journal)
+  Note over O: crash or upgrade
+  Note over K: threads stay blocked (fd-store holds the listener)
+  N->>S: List
+  S->>N: state, listener, journal (copies)
+  N->>K: NOTIF_ID_VALID per journalled id
+  N->>N: replay the valid ones (ask again)
+  N->>S: Put (all its sessions)
+  N->>K: NOTIF_RECV (new notifications)
+```
+
 **Why a journal.** `SECCOMP_IOCTL_NOTIF_RECV` returns only notifications
 not yet received, and marks them received (`kernel/seccomp.c`,
 `seccomp_notify_recv`); nothing lists the received ones. While a copy of
@@ -336,7 +395,8 @@ human), and fd-store replaces them at once.
 **Failures.** fd-store alone crashing loses nothing (the agent holds
 its copies) and gets them again when it is back. Both crashing: the
 waiting threads fail with `ENOSYS`, as without fd-store. Upgrading
-fd-store itself: not handled (`OnDelete`, rarely updated).
+fd-store is a restart of fd-store alone, while the agent runs; the
+protocol between versions must stay compatible (not versioned yet).
 
 **Implementation.** `internal/fdstore`: a `SOCK_SEQPACKET` socket
 (`/run/hallpass/fd-store.sock`, directory 0700, peer uid checked with
