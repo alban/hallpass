@@ -21,7 +21,7 @@ hallpass [flags] [--] [command [args...]]     # default command: $SHELL
 
 hallpass policy [flags]                       # print the rules these flags give, then exit
 hallpass answer [PID]                         # answer another session's prompts from this terminal
-hallpass web [--listen ADDR] [--open]         # follow and answer every session in a browser (experimental)
+hallpass web [--listen ADDR] [--open] [--node ADDR]  # follow and answer every session in a browser (experimental)
 ```
 
 ## Default policy
@@ -108,7 +108,7 @@ hallpass answer                      # in another, to see prompts and reply
 hallpass web
 ```
 
-`hallpass web` serves a page on 127.0.0.1 that shows every session of the user: the pending requests with the same answers as the terminal, the activity (every decided access, filterable) and the rules, which can be removed. It prints a pairing link that works once; press Enter in its terminal for a new one. `--open` opens it with `xdg-open`, `--listen` picks the address (loopback only).
+`hallpass web` serves a page on 127.0.0.1 that shows every session of the user: the pending requests with the same answers as the terminal, the activity (every decided access, filterable) and the rules, which can be removed. It prints a pairing link that works once; press Enter in its terminal for a new one. `--open` opens it with `xdg-open`, `--listen` picks the address (loopback only). `--node ADDR` follows the sessions of a Kubernetes node agent instead of this user's (see [Kubernetes](kubernetes.md#answer-requests)).
 
 <video src="../assets/demos/web.mp4" poster="../assets/demos/web.png" controls muted playsinline aria-label="a shell under hallpass on the left and hallpass web on the right: a write to ~/.bashrc denied from the browser, then ~/.local/bin allowed always"></video>
 

@@ -6,6 +6,7 @@ package web
 import (
 	"bufio"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -180,6 +181,47 @@ func TestAPI(t *testing.T) {
 	}
 	if resp := c.do("POST", "/api/sessions/"+pid+"/rules", `{}`); resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("empty rules change: %s", resp.Status)
+	}
+}
+
+func TestNode(t *testing.T) {
+	m, err := monitor.New(monitor.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	answered := make(chan string, 1)
+	node := sessionapi.NewNode()
+	node.Add("c0ffee", m, fakeSession{answered})
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = node.Serve(ln) }()
+	t.Cleanup(node.Stop)
+
+	s, err := NewNode(ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(s.Close)
+	hs := httptest.NewServer(s.Handler())
+	t.Cleanup(hs.Close)
+	c := pair(t, s, client{t: t, url: hs.URL})
+
+	resp := c.do("GET", "/api/sessions", "")
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), `"id":"c0ffee"`) {
+		t.Errorf("sessions: %s %s", resp.Status, body)
+	}
+	resp = c.do("POST", "/api/sessions/c0ffee/answer", `{"request":"3","answer":"deny"}`)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("answer: %s", resp.Status)
+	}
+	if got := <-answered; got != "3 deny "+Client {
+		t.Errorf("answered %q", got)
+	}
+	if resp := c.do("GET", "/api/sessions/nope/snapshot", ""); resp.StatusCode != http.StatusNotFound {
+		t.Errorf("no such session: %s", resp.Status)
 	}
 }
 

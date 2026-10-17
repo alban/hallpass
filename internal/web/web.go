@@ -3,7 +3,8 @@
 
 // Package web serves a browser UI to follow hallpass sessions and answer
 // their requests (`hallpass web`). It is a client of the sessions' sockets
-// (package sessionapi) and holds no policy. See docs/devel/web.md.
+// (package sessionapi), or of a Kubernetes node agent (package
+// nodeclient), and holds no policy. See docs/devel/web.md.
 package web
 
 import (
@@ -33,6 +34,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/alban/hallpass"
+	"github.com/alban/hallpass/internal/nodeclient"
 	"github.com/alban/hallpass/internal/sessionapi"
 	pb "github.com/alban/hallpass/internal/sessionpb"
 )
@@ -49,6 +51,10 @@ const cookieName = "hallpass-web"
 type Server struct {
 	// SocketDir is where the sessions' sockets are.
 	SocketDir string
+
+	// A node agent's session API, instead of SocketDir (see NewNode).
+	node     pb.SessionClient
+	nodeConn *grpc.ClientConn
 
 	cookie string // random per process
 
@@ -69,6 +75,19 @@ func New() *Server {
 		cookie:    randomHex(32),
 		sessions:  map[int]*session{},
 	}
+}
+
+// NewNode returns a server for the sessions of the Kubernetes node agent
+// at addr (host:port), usually a kubectl port-forward to hallpass-node.
+// Sessions are then named by their id rather than by pid.
+func NewNode(addr string) (*Server, error) {
+	conn, c, err := nodeclient.Dial(addr)
+	if err != nil {
+		return nil, err
+	}
+	s := New()
+	s.node, s.nodeConn = c, conn
+	return s, nil
 }
 
 func randomHex(n int) string {
@@ -95,6 +114,9 @@ func (s *Server) Close() {
 		c.conn.Close()
 		delete(s.sessions, pid)
 	}
+	if s.nodeConn != nil {
+		s.nodeConn.Close()
+	}
 }
 
 // Handler returns the UI's HTTP handler.
@@ -109,10 +131,10 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.Handle("GET /", s.auth(files.ServeHTTP))
 	mux.Handle("GET /api/sessions", s.auth(s.list))
-	mux.Handle("GET /api/sessions/{pid}/snapshot", s.auth(s.snapshot))
-	mux.Handle("GET /api/sessions/{pid}/events", s.auth(s.events))
-	mux.Handle("POST /api/sessions/{pid}/answer", s.auth(s.answer))
-	mux.Handle("POST /api/sessions/{pid}/rules", s.auth(s.rules))
+	mux.Handle("GET /api/sessions/{key}/snapshot", s.auth(s.snapshot))
+	mux.Handle("GET /api/sessions/{key}/events", s.auth(s.events))
+	mux.Handle("POST /api/sessions/{key}/answer", s.auth(s.answer))
+	mux.Handle("POST /api/sessions/{key}/rules", s.auth(s.rules))
 	return checkOrigin(mux)
 }
 
@@ -212,18 +234,24 @@ func (s *Server) drop(pid int) {
 	}
 }
 
-func (s *Server) sessionClient(w http.ResponseWriter, r *http.Request) (pb.SessionClient, bool) {
-	pid, err := strconv.Atoi(r.PathValue("pid"))
+// sessionClient returns a client of the session named by the request's
+// key (a pid, or a node agent's session id) and the context selecting it.
+func (s *Server) sessionClient(w http.ResponseWriter, r *http.Request) (pb.SessionClient, context.Context, bool) {
+	key := r.PathValue("key")
+	if s.node != nil {
+		return s.node, nodeclient.WithSession(r.Context(), key), true
+	}
+	pid, err := strconv.Atoi(key)
 	if err != nil || pid <= 0 {
 		http.Error(w, "bad pid", http.StatusBadRequest)
-		return nil, false
+		return nil, nil, false
 	}
 	c, err := s.client(pid)
 	if err != nil {
 		writeError(w, err)
-		return nil, false
+		return nil, nil, false
 	}
-	return c, true
+	return c, r.Context(), true
 }
 
 var marshal = protojson.MarshalOptions{}
@@ -256,12 +284,29 @@ func writeError(w http.ResponseWriter, err error) {
 
 // list returns the live sessions' Info, oldest first.
 func (s *Server) list(w http.ResponseWriter, r *http.Request) {
-	paths, _ := filepath.Glob(filepath.Join(s.SocketDir, "*.sock"))
 	type entry struct {
 		start time.Time
 		info  json.RawMessage
 	}
 	var entries []entry
+	if s.node != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		reply, err := s.node.List(ctx, &pb.ListRequest{})
+		cancel()
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		for _, info := range reply.Sessions {
+			if b, err := marshal.Marshal(info); err == nil {
+				entries = append(entries, entry{info.StartTime.AsTime(), b})
+			}
+		}
+	}
+	var paths []string
+	if s.node == nil {
+		paths, _ = filepath.Glob(filepath.Join(s.SocketDir, "*.sock"))
+	}
 	for _, p := range paths {
 		pid, err := strconv.Atoi(strings.TrimSuffix(filepath.Base(p), ".sock"))
 		if err != nil {
@@ -295,11 +340,11 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
-	c, ok := s.sessionClient(w, r)
+	c, ctx, ok := s.sessionClient(w, r)
 	if !ok {
 		return
 	}
-	snap, err := c.Snapshot(r.Context(), &pb.SnapshotRequest{})
+	snap, err := c.Snapshot(ctx, &pb.SnapshotRequest{})
 	if err != nil {
 		writeError(w, err)
 		return
@@ -314,11 +359,11 @@ var heartbeat = 15 * time.Second
 // events: one EventBatch (protojson) per message, and an "end" event when
 // the session ends.
 func (s *Server) events(w http.ResponseWriter, r *http.Request) {
-	c, ok := s.sessionClient(w, r)
+	c, ctx, ok := s.sessionClient(w, r)
 	if !ok {
 		return
 	}
-	stream, err := c.Events(r.Context(), &pb.EventsRequest{Decided: true, Snapshot: true})
+	stream, err := c.Events(ctx, &pb.EventsRequest{Decided: true, Snapshot: true})
 	if err != nil {
 		writeError(w, err)
 		return
@@ -393,7 +438,7 @@ func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 // answer answers a request the way the terminal would: once, temp,
 // always, deny or never.
 func (s *Server) answer(w http.ResponseWriter, r *http.Request) {
-	c, ok := s.sessionClient(w, r)
+	c, ctx, ok := s.sessionClient(w, r)
 	if !ok {
 		return
 	}
@@ -409,7 +454,7 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request id", http.StatusBadRequest)
 		return
 	}
-	if _, err := c.Answer(r.Context(), &pb.AnswerRequest{Request: id, Answer: req.Answer, Client: Client}); err != nil {
+	if _, err := c.Answer(ctx, &pb.AnswerRequest{Request: id, Answer: req.Answer, Client: Client}); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -418,7 +463,7 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request) {
 
 // rules removes rules, by id or by set.
 func (s *Server) rules(w http.ResponseWriter, r *http.Request) {
-	c, ok := s.sessionClient(w, r)
+	c, ctx, ok := s.sessionClient(w, r)
 	if !ok {
 		return
 	}
@@ -442,7 +487,7 @@ func (s *Server) rules(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "nothing to remove", http.StatusBadRequest)
 		return
 	}
-	if _, err := c.Apply(r.Context(), d); err != nil {
+	if _, err := c.Apply(ctx, d); err != nil {
 		writeError(w, err)
 		return
 	}

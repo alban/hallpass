@@ -5,8 +5,10 @@
 // here: render them with textContent only, never as HTML.
 "use strict";
 
-const sessions = new Map(); // pid -> {info, src, pending: Map(id -> Request), rules, ended}
-const activity = []; // {pid, d: Decided | null, text}, oldest first
+// Sessions are keyed by their pid, or by their id when hallpass web follows
+// a Kubernetes node agent (--node): the "pid" variables below hold that key.
+const sessions = new Map(); // key -> {info, src, pending: Map(id -> Request), rules, ended}
+const activity = []; // {pid: key, d: Decided | null, text}, oldest first
 const maxActivity = 5000;
 let view = "pending";
 let dirty = false;
@@ -72,10 +74,21 @@ function reasonText(why) {
   }).join(", ");
 }
 
+function sessionKey(info) {
+  return info.id || String(info.pid);
+}
+
+// sessionName is the pid, or namespace/pod/container for a node agent's.
+function sessionName(pid) {
+  const s = sessions.get(pid);
+  const l = (s && s.info.labels) || {};
+  return l.pod ? l.namespace + "/" + l.pod + "/" + l.container : pid;
+}
+
 function sessionLabel(pid) {
   const s = sessions.get(pid);
   const cmd = s && s.info.command ? s.info.command.join(" ") : "";
-  return pid + (cmd ? " " + cmd : "");
+  return sessionName(pid) + (cmd ? " " + cmd : "");
 }
 
 function markDirty() {
@@ -92,7 +105,7 @@ function addActivity(entry) {
 async function refreshRules(pid) {
   const s = sessions.get(pid);
   if (!s) return;
-  const r = await fetch(`/api/sessions/${pid}/snapshot`);
+  const r = await fetch(`/api/sessions/${encodeURIComponent(pid)}/snapshot`);
   if (!r.ok) return;
   const snap = await r.json();
   s.rules = snap.rules || [];
@@ -100,10 +113,10 @@ async function refreshRules(pid) {
 }
 
 function openSession(info) {
-  const pid = info.pid;
+  const pid = sessionKey(info);
   const s = { info, pending: new Map(), rules: [], ended: false };
   sessions.set(pid, s);
-  s.src = new EventSource(`/api/sessions/${pid}/events`);
+  s.src = new EventSource(`/api/sessions/${encodeURIComponent(pid)}/events`);
   s.src.onmessage = ev => {
     const batch = JSON.parse(ev.data);
     if (batch.snapshot) {
@@ -156,8 +169,8 @@ async function refreshSessions() {
   const infos = await r.json();
   const live = new Set();
   for (const info of infos) {
-    live.add(info.pid);
-    const s = sessions.get(info.pid);
+    live.add(sessionKey(info));
+    const s = sessions.get(sessionKey(info));
     if (!s || s.ended) openSession(info);
     else s.info = info;
   }
@@ -193,7 +206,7 @@ function pendingCard(pid, r) {
   const answer = a => async ev => {
     ev.target.closest(".buttons").querySelectorAll("button").forEach(b => b.disabled = true);
     try {
-      await post(`/api/sessions/${pid}/answer`, { request: r.id, answer: a });
+      await post(`/api/sessions/${encodeURIComponent(pid)}/answer`, { request: r.id, answer: a });
     } catch (e) {
       err.textContent = e.message;
       ev.target.closest(".buttons").querySelectorAll("button").forEach(b => b.disabled = false);
@@ -236,13 +249,13 @@ function renderPending() {
 
 function activityRow(a) {
   if (!a.d) {
-    return el("tr", {}, el("td", {}, ""), el("td", {}, String(a.pid)), el("td", { colspan: "5" }, a.text));
+    return el("tr", {}, el("td", {}, ""), el("td", {}, sessionName(a.pid)), el("td", { colspan: "5" }, a.text));
   }
   const d = a.d;
   const time = d.time ? new Date(d.time).toLocaleTimeString() : "";
   return el("tr", {},
     el("td", { class: "nowrap" }, time),
-    el("td", { class: "nowrap" }, String(a.pid)),
+    el("td", { class: "nowrap" }, sessionName(a.pid)),
     el("td", { class: "nowrap " + (d.allowed ? "allow" : "deny") }, d.allowed ? "allow" : "deny"),
     el("td", { class: "nowrap" }, d.op ? opName(d.op) : (d.syscall || "")),
     el("td", {}, (d.objects || []).map(objectText).join(" → ")),
@@ -272,7 +285,7 @@ function ruleRow(pid, r) {
   const err = el("span", { class: "error" });
   const remove = el("button", {
     onclick: async () => {
-      try { await post(`/api/sessions/${pid}/rules`, { remove: [r.id] }); }
+      try { await post(`/api/sessions/${encodeURIComponent(pid)}/rules`, { remove: [r.id] }); }
       catch (e) { err.textContent = e.message; }
     },
   }, "Remove");
@@ -304,8 +317,8 @@ function renderRules() {
         const err = el("span", { class: "error" });
         head.append(el("button", {
           onclick: async () => {
-            if (!confirm(`Remove every rule of set "${set}" from session ${pid}? Its denies protect files too.`)) return;
-            try { await post(`/api/sessions/${pid}/rules`, { removeSets: [set] }); }
+            if (!confirm(`Remove every rule of set "${set}" from session ${sessionName(pid)}? Its denies protect files too.`)) return;
+            try { await post(`/api/sessions/${encodeURIComponent(pid)}/rules`, { removeSets: [set] }); }
             catch (e) { err.textContent = e.message; }
           },
         }, "Remove set"), err);

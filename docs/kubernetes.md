@@ -116,6 +116,14 @@ ends), `always` (a rule for the session's lifetime: nothing is written
 back to the policy), `deny` and `never`. `--addr` selects another
 address than `127.0.0.1:7323`.
 
+`hallpass web` does the same in a browser, through the same
+port-forward: the pending requests, the activity and the rules of every
+session on that node, named `namespace/pod/container`.
+
+```
+hallpass web --node 127.0.0.1:7323                  # prints a pairing link
+```
+
 The agent also logs every request, answer and session
 (`kubectl -n hallpass-system logs`).
 

@@ -21,6 +21,12 @@ browser ──HTTP (127.0.0.1)──> hallpass web ──gRPC (unix socket)─�
   sessions in the socket directory, subscribes to each, and serves the
   browser. It can be stopped and restarted without touching the sessions.
 - Same binary (`hallpass web` subcommand): one artefact to install.
+- **`--node ADDR`**: the sessions come from a Kubernetes node agent
+  (`sessionapi.Node`, usually through `kubectl port-forward`) instead of
+  the socket directory: one gRPC connection, `List` for the sessions,
+  and the `hallpass-session` metadata to select one. The page names
+  sessions by `SessionInfo.id` instead of pid, in the same URLs
+  (`/api/sessions/{key}/...`).
 
 Several clients answer at once (terminal overlay, `hallpass answer`,
 browser): the first verdict wins, the others see `Closed` and drop the
