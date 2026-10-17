@@ -407,7 +407,10 @@ Branch `headlamp`, on top of `nri`:
   reconnects and answers, the sandbox's owner lookup and patch);
   `go test ./cmd/headlamp-wasm` runs gRPC to a `sessionapi.Hub` through a
   simulated port-forward. `make test-headlamp-kind` runs the kind e2e
-  with `E2E_ANSWER=test/kind/headlamp/answer.sh`: Headlamp
-  (`ghcr.io/headlamp-k8s/headlamp`) in docker with the plugin, driven by
-  Puppeteer and Chromium; it checks the badge, the column, the section,
-  answers `once` and `deny`, and sandboxes a Deployment.
+  with `E2E_ANSWER=test/kind/headlamp/answer.sh`: Headlamp v0.46.0
+  (pinned by digest) in docker with the plugin, driven by Puppeteer
+  and Chromium; it checks the badge, the column, the section, answers
+  `once` and `deny`, and sandboxes a Deployment. The npm lockfiles
+  name `registry.npmjs.org`; npm fetches from the configured registry
+  instead (`replace-registry-host`). `demos/headlamp/record.js`
+  records the demo on the same cluster.
