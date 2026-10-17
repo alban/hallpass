@@ -38,7 +38,8 @@ chmod -R a+rX "$WORK/plugins"
 kubectl config view --raw --minify --context "$KUBECONTEXT" >"$WORK/kubeconfig"
 chmod 644 "$WORK/kubeconfig"
 
-[ -d node_modules ] || npm install --no-audit --no-fund
+# npm writes node_modules/.package-lock.json once an install completes.
+[ node_modules/.package-lock.json -nt package-lock.json ] || npm ci --no-audit --no-fund
 
 cleanup() {
 	docker logs "$NAME" >"$WORK/headlamp.log" 2>&1 || true

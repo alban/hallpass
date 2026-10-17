@@ -27,7 +27,8 @@ test-kind:
 
 # The Headlamp plugin (docs/kubernetes.md): the wasm client of the node
 # agents, and the plugin itself in headlamp/dist. npm uses the registry
-# configured in ~/.npmrc.
+# configured in ~/.npmrc: the lockfiles' registry.npmjs.org URLs are
+# rewritten to it (replace-registry-host).
 .PHONY: headlamp-wasm
 headlamp-wasm:
 	GOOS=js GOARCH=wasm go build -tags '$(GO_TAGS)' -ldflags='-s -w' -trimpath \
@@ -35,14 +36,18 @@ headlamp-wasm:
 	gzip -9 -n -f -k headlamp/main.wasm
 	cp "$$(go env GOROOT)/lib/wasm/wasm_exec.js" headlamp/src/wasm_exec.js
 
+headlamp/node_modules: headlamp/package.json headlamp/package-lock.json
+	cd headlamp && npm ci --no-audit --no-fund
+	touch $@
+
 .PHONY: headlamp
-headlamp: headlamp-wasm
-	cd headlamp && npm install --no-audit --no-fund && npm run build
+headlamp: headlamp-wasm headlamp/node_modules
+	cd headlamp && npm run build
 
 # Type-check, lint and unit-test the plugin.
 .PHONY: test-headlamp
-test-headlamp: headlamp-wasm
-	cd headlamp && npm install --no-audit --no-fund && npm run tsc && npm run lint && npm test
+test-headlamp: headlamp-wasm headlamp/node_modules
+	cd headlamp && npm run tsc && npm run lint && npm test
 
 # Package the plugin as a tarball for Headlamp's plugin directory.
 .PHONY: headlamp-package
