@@ -5,10 +5,11 @@
 [NRI](https://github.com/containerd/nri) plugin adds a seccomp policy to
 the containers that opt in, and a seccomp agent mediates their file
 writes as `hallpass` does on a workstation. You answer their requests
-through a gRPC session API on the agent pod.
+through a gRPC session API on the agent pod, with the `hallpass-node`
+client or the [Headlamp plugin](#headlamp-plugin).
 
 !!! warning
-    Experimental. Lite mode only; no Headlamp plugin yet.
+    Experimental. Lite mode only.
 
 ## Requirements
 
@@ -118,6 +119,61 @@ address than `127.0.0.1:7323`.
 The agent also logs every request, answer and session
 (`kubectl -n hallpass-system logs`).
 
+## Headlamp plugin
+
+The [Headlamp](https://headlamp.dev) plugin in
+[headlamp/](https://github.com/alban/hallpass/tree/main/headlamp) answers
+requests from the browser. It connects to every `hallpass-node` pod
+through the API server's port-forward, as `kubectl port-forward` does,
+and needs nothing more in the cluster.
+
+Build it (Go, Node.js and npm):
+
+```
+make headlamp            # headlamp/dist/{main.js,main.wasm.gz}
+make headlamp-package    # headlamp/hallpass-0.1.0.tar.gz
+```
+
+Install it in Headlamp's plugin directory, in a `hallpass` directory with
+`main.js`, `main.wasm.gz` and `package.json`:
+
+- Headlamp desktop: `~/.config/Headlamp/plugins/hallpass/` on Linux
+  (Settings > Plugins shows where on other systems).
+- Headlamp in a cluster or in a container: the directory given by
+  `-plugins-dir` (`/headlamp/plugins` in the image), for example from
+  an init container or a volume holding the tarball's content.
+
+```
+mkdir -p ~/.config/Headlamp/plugins/hallpass
+cp headlamp/dist/main.js headlamp/dist/main.wasm.gz headlamp/package.json \
+   ~/.config/Headlamp/plugins/hallpass/
+```
+
+It adds:
+
+- **hallpass** in the sidebar: the pending requests of the cluster, the
+  sessions (pod, container, node, policy) and the agents' connection
+  state. Each request has the answer buttons `once`, `temp`, `always`,
+  `deny` and `never`.
+- A badge in the app bar with the number of pending requests, on every
+  page. A blocked container waits for an answer.
+- A **hallpass** section in the details of a mediated pod: its policy,
+  pending requests and rules.
+- A **hallpass** column in the pod list: `mediated`, or the number of
+  pending requests.
+- **Sandbox with hallpass**, a pod action: it sets or removes
+  `hallpass.io/policy` on the pod template of the pod's Deployment,
+  StatefulSet, DaemonSet or CronJob. The workload recreates its pods,
+  which are then mediated. The namespace still needs the
+  `hallpass.io/enabled=true` label. Bare pods and Jobs cannot change:
+  edit their manifest instead.
+
+The user needs to list pods in `hallpass-system` and to create
+`pods/portforward` there. Whoever has these permissions can answer for
+every mediated container in the cluster: grant them like `exec` into the
+mediated pods. The sandbox action also needs to list
+`hallpasspolicies` and to patch the workload.
+
 ## Limitations
 
 - **Agent restarts.** The seccomp notify fds live in the agent: if it
@@ -132,4 +188,4 @@ The agent also logs every request, answer and session
 - Policy changes apply to containers started afterwards.
 - No authentication on the session API beyond Kubernetes' own on
   `port-forward`: whoever can port-forward to `hallpass-system` pods can
-  answer for every session of that node.
+  answer for every session of that node, from the CLI or from Headlamp.

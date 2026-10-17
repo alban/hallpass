@@ -1,8 +1,10 @@
 # Kubernetes
 
-Status: work item 1 (lite mode) implemented on branch `nri`; see
-[Implementation notes](#implementation-notes-work-item-1) for where it
-differs from this design. User docs: [../kubernetes.md](../kubernetes.md).
+Status: work item 1 (lite mode) implemented on branch `nri`; the cluster
+API (option A) and the Headlamp plugin on branch `headlamp`. See the
+implementation notes ([work item 1](#implementation-notes-work-item-1),
+[Headlamp](#implementation-notes-headlamp)) for where they differ from
+this design. User docs: [../kubernetes.md](../kubernetes.md).
 
 Run AI agents in pods under hallpass, opted in per namespace and per pod,
 and answer their requests from [Headlamp](https://headlamp.dev). Lite mode
@@ -15,8 +17,7 @@ kubelet ──CRI──> containerd ──NRI──> hallpass-node (DaemonSet, o
                      │                  ▲     gRPC session API on 127.0.0.1
                      └─runc─ seccomp fd ┘     (pod network, not hostNetwork)
                                                  ▲
- Headlamp plugin ──> kube-apiserver ──port-forward┘   (option A)
-                     HallpassSession/Request CRDs     (option B)
+ Headlamp plugin ──> kube-apiserver ──port-forward┘   (option A, chosen)
 ```
 
 - **`hallpass-node`**, a DaemonSet, one process per node:
@@ -31,7 +32,7 @@ kubelet ──CRI──> containerd ──NRI──> hallpass-node (DaemonSet, o
     the node's sessions, each identified by pod, container and id.
 - **Headlamp plugin**: Pending, Activity and Rules views (as in
   [web.md](web.md#views)), plus a "hallpass" section in the pod details
-  page. Its transport is not decided yet (see below).
+  page. It speaks gRPC to the agents over port-forward (option A).
 - A separate binary, `cmd/hallpass-node`: client-go and NRI stay out of
   the `hallpass` binary.
 
@@ -147,10 +148,12 @@ spec:
   askTimeout: 5m       # no answer in time: deny
 ```
 
-## Cluster API (to decide)
+## Cluster API
 
 Both options sit on the same agent and gRPC session API; only the last
-hop differs, so one can be added after the other.
+hop differs, so one can be added after the other. **Decided: A**, as
+Inspektor Gadget does; no CRDs for requests. B stays an option if
+per-namespace RBAC or the audit log become necessary.
 
 ### A. gRPC over port-forward (as Inspektor Gadget's Headlamp plugin)
 
@@ -199,10 +202,9 @@ account could answer for itself.
   server with blocked threads.
 - A request takes an API round trip (tens of ms) before it is shown.
 
-## Headlamp plugin (draft)
+## Headlamp plugin
 
-Both a dedicated view and additions to the pod pages; the data comes
-from the cluster API (A or B), the UI is the same.
+Both a dedicated view and additions to the pod pages.
 
 - Sidebar entry and route: pending requests across the cluster, the
   activity and the rules (the three views of `hallpass web`, in React).
@@ -275,7 +277,9 @@ Its service account reads namespaces (for the selector), pods, and
 kind with a node image running containerd 2.2, NRI enabled, and the
 default validator allowing seccomp adjustments; an e2e test creates a
 pod writing outside `/workspace`, answers its request over the session
-API (port-forward), and checks the write and the session's rules.
+API (port-forward), and checks the write and the session's rules. The
+same test answers through Headlamp with the plugin, driven by a
+headless browser.
 
 ## Work items (branches)
 
@@ -283,7 +287,7 @@ API (port-forward), and checks the write and the session's rules.
    `cmd/hallpass-node` (NRI plugin, seccomp agent, one session API for
    the node); `HallpassPolicy`; manifests; kind e2e. Lite mode.
 2. Strict mode on the node: one BPF load with session ids.
-3. The cluster API (A or B), then `headlamp`: the plugin (`headlamp/`).
+3. `headlamp`: the cluster API (A) and the plugin (`headlamp/`).
 4. Later: the fd holder; CRI-O.
 
 ## Open questions
@@ -355,5 +359,55 @@ design above:
   `make test-kind` (`test/kind/e2e.sh`) creates the cluster, deploys
   the agent and checks mediation, answers (once, deny) over
   port-forward, and that unselected pods are untouched.
-- **Not done:** strict mode, the cluster API and Headlamp (work items
-  2-3), the fd holder; policy changes do not affect running sessions.
+- **Not done:** strict mode, the fd holder; policy changes do not
+  affect running sessions.
+
+## Implementation notes (Headlamp)
+
+Branch `headlamp`, on top of `nri`:
+
+- **Wasm client** (`cmd/headlamp-wasm`, `GOOS=js`). The plugin reuses
+  the Go client rather than a TypeScript gRPC client: `internal/hubclient`
+  holds the hub's client side (dial, session selection, lookup) without
+  the monitor, so it builds for wasm; `hubclient.Watch` lists the
+  sessions every 2 s, follows each one's events, and reports the whole
+  state (sessions, pending requests, rules) as JSON after each change.
+  3.4 MB gzipped, shipped as `main.wasm.gz` next to `main.js` and
+  fetched from Headlamp's plugin URL.
+- **Port-forward.** The plugin opens
+  `/api/v1/namespaces/hallpass-system/pods/<pod>/portforward?ports=7323`
+  with Headlamp's `stream()` (its auth and cluster proxy), with the
+  `v4.channel.k8s.io` subprotocols. Go only gets `send` and `close`
+  callbacks and is fed the received messages: it decodes the
+  channel.k8s.io framing (data and error channels, each starting with
+  the port) into a `net.Conn` for gRPC. A write waits for the data
+  channel's port header. One WebSocket carries one TCP connection: if
+  it ends, the plugin reconnects with a backoff (1 s, doubling, up to
+  30 s).
+- **Agents.** The plugin watches the pods
+  `app.kubernetes.io/name=hallpass-node` in `hallpass-system` and keeps
+  one connection per running pod, so per node, while a page of the
+  cluster is open. A store per cluster holds their state; the React
+  components read it with `useSyncExternalStore`. Exceptions in the
+  callbacks Go calls are caught: they would stop the wasm program.
+- **UI.** The sidebar view has the pending requests, the sessions and
+  the agents' state; the app bar badge, the pod details section (policy,
+  pending requests, rules per container) and the pod list column
+  (`N pending` or `mediated`) read the same store. The answers are those
+  of `hallpass-node answer`, sent with client name `headlamp`. Not done:
+  the Activity view and removing rules.
+- **Sandbox with hallpass.** Follows the pod's controllers (ReplicaSet to
+  Deployment, Job to CronJob; StatefulSet, DaemonSet) and merge-patches
+  the annotation on the pod template, or removes it. Bare pods and Jobs
+  cannot change their template: the dialog says so. It warns when the
+  namespace lacks `hallpass.io/enabled=true`, the default selector.
+- **Authorization** is option A's: `create pods/portforward` on the
+  agent pods answers for the whole cluster.
+- **Tests.** `make test-headlamp`: tsc, lint and vitest (the store's
+  reconnects and answers, the sandbox's owner lookup and patch);
+  `go test ./cmd/headlamp-wasm` runs gRPC to a `sessionapi.Hub` through a
+  simulated port-forward. `make test-headlamp-kind` runs the kind e2e
+  with `E2E_ANSWER=test/kind/headlamp/answer.sh`: Headlamp
+  (`ghcr.io/headlamp-k8s/headlamp`) in docker with the plugin, driven by
+  Puppeteer and Chromium; it checks the badge, the column, the section,
+  answers `once` and `deny`, and sandboxes a Deployment.
