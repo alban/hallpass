@@ -12,7 +12,7 @@
 #   KUBECONTEXT      the kind cluster's context
 #   WORK             scratch directory
 # Optional:
-#   HEADLAMP_IMAGE   default ghcr.io/headlamp-k8s/headlamp:latest
+#   HEADLAMP_IMAGE   default Headlamp v0.46.0, pinned by digest
 #   HEADLAMP_PORT    default 14466
 #   CHROMIUM         browser to drive (default /snap/bin/chromium)
 #   PROFILE          browser profile directory; the Chromium snap only
@@ -24,7 +24,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 : "${KUBECONTEXT:?}" "${WORK:?}"
-IMAGE=${HEADLAMP_IMAGE:-ghcr.io/headlamp-k8s/headlamp:latest}
+IMAGE=${HEADLAMP_IMAGE:-ghcr.io/headlamp-k8s/headlamp:v0.46.0@sha256:8a0ef97527544baa2b35825940ddf4db6e2d09c30cd5aa31fd269ff604cc8b75}
 PORT=${HEADLAMP_PORT:-14466}
 DIST=../../../headlamp/dist
 NAME=hallpass-e2e-headlamp-$$
