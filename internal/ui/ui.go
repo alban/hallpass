@@ -91,7 +91,9 @@ type Request struct {
 	Warn string
 	// Note, when set, is a fact about the request, e.g. "listener started
 	// inside the sandbox".
-	Note    string
+	Note string
+	// Detail, when set, qualifies Path, e.g. "udp" for a network address.
+	Detail  string
 	Waiting int // other requests queued behind this one
 	// More, if not nil, sends the new value of Waiting while the request
 	// is asked about.
@@ -227,17 +229,38 @@ func (r Remote) Ask(ctx context.Context, _ Request) Answer {
 // Close is a no-op.
 func (Remote) Close() error { return nil }
 
+// Wants formats the headline after the process, e.g. "wants to write:"
+// (Path follows on the next line), or "wants to connect to".
+func (r Request) Wants() string {
+	if strings.HasSuffix(r.Op, " to") {
+		return "wants to " + sanitize(r.Op)
+	}
+	return "wants to " + sanitize(r.Op) + ":"
+}
+
+// Details formats Detail and Note, e.g. "udp" or "tcp, listener started
+// inside the sandbox", or "" if both are empty.
+func (r Request) Details() string {
+	var d []string
+	for _, s := range []string{r.Detail, r.Note} {
+		if s != "" {
+			d = append(d, sanitize(s))
+		}
+	}
+	return strings.Join(d, ", ")
+}
+
 // Text formats r for a line-based client such as `hallpass answer`: the
 // request, then the choices ending with ": ", and the keys they accept.
 // The agent chooses the paths, so they are sanitized: no terminal escapes.
 func (r Request) Text() (string, map[string]Answer) {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s (pid %d) wants to %s:\n  %s\n", sanitize(baseName(r.Exe)), r.PID, sanitize(r.Op), sanitize(r.Path))
+	fmt.Fprintf(&b, "%s (pid %d) %s\n  %s\n", sanitize(baseName(r.Exe)), r.PID, r.Wants(), sanitize(r.Path))
 	if r.Warn != "" {
 		fmt.Fprintf(&b, "  [!] %s\n", sanitize(r.Warn))
 	}
-	if r.Note != "" {
-		fmt.Fprintf(&b, "  (%s)\n", sanitize(r.Note))
+	if d := r.Details(); d != "" {
+		fmt.Fprintf(&b, "  (%s)\n", d)
 	}
 	if o := r.Origin(); o != "" {
 		fmt.Fprintf(&b, "  by: %s\n", o)

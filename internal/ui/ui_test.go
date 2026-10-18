@@ -44,3 +44,15 @@ func TestCommandTruncated(t *testing.T) {
 		t.Errorf("Command() = %q", got)
 	}
 }
+
+func TestTextNet(t *testing.T) {
+	r := Request{Exe: "/usr/bin/curl", PID: 7, Op: "connect to", Path: "1.2.3.4:80", Detail: "udp", Note: "x", Scope: "1.2.3.4:80"}
+	got, _ := r.Text()
+	if !strings.HasPrefix(got, "curl (pid 7) wants to connect to\n  1.2.3.4:80\n  (udp, x)\n") {
+		t.Errorf("Text() = %q", got)
+	}
+	r = Request{Exe: "sh", PID: 7, Op: "write", Path: "/a"}
+	if got, _ := r.Text(); !strings.HasPrefix(got, "sh (pid 7) wants to write:\n  /a\n[o]") {
+		t.Errorf("Text() = %q", got)
+	}
+}

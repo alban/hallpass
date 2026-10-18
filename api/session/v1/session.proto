@@ -122,6 +122,7 @@ message Prompt {
   string never = 8;  // what "never" covers
   string warn = 9;   // e.g. "SSH keys — secret store"
   string note = 10;  // e.g. "listener started inside the sandbox"
+  string detail = 11; // qualifies path, e.g. "udp" for a network address
 }
 
 message Object {

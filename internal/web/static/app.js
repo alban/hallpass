@@ -260,14 +260,15 @@ function pendingCard(pid, r) {
 
   const origin = [(p.cmdline || []).join(" "), ...(p.parents || [])].filter(x => x).join(" ← ");
   const facts = (r.facts || []).map(f => f.kind + "=" + f.value + (f.trust && f.trust !== "TRUST_KERNEL" ? " (" + f.trust.replace("TRUST_", "").toLowerCase() + ")" : ""));
+  const op = p.op || opName(r.op);
   return el("div", { class: "card" },
-    el("div", {}, baseName(p.exe) + " (pid " + (p.pid || 0) + ") wants to " + (p.op || opName(r.op)) + ":"),
+    el("div", {}, baseName(p.exe) + " (pid " + (p.pid || 0) + ") wants to " + op + (op.endsWith(" to") ? "" : ":")),
     el("div", { class: "path" }, p.path || (r.objects || []).map(objectText).join(" → ")),
     p.warn ? el("div", { class: "warn" }, p.warn) : null,
     p.note ? el("div", { class: "meta" }, "(" + p.note + ")") : null,
     origin ? el("div", { class: "meta" }, "by: " + origin) : null,
     facts.length ? el("div", { class: "meta" }, "facts: " + facts.join(", ")) : null,
-    el("div", { class: "meta" }, "session " + sessionLabel(pid) + " · " + (r.syscall || "")),
+    el("div", { class: "meta" }, "session " + sessionLabel(pid) + " · " + (r.syscall || "") + (p.detail ? " · " + p.detail : "")),
     buttons, err);
 }
 

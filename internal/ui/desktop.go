@@ -100,14 +100,14 @@ func (d *Desktop) Ask(ctx context.Context, r Request) Answer {
 	// showing the new one, so a fast click cannot be discarded.
 	d.drain()
 
-	body := fmt.Sprintf("<b>%s</b> (pid %d) wants to %s:\n%s",
-		html.EscapeString(sanitize(baseName(r.Exe))), r.PID, r.Op, html.EscapeString(sanitize(r.Path)))
+	body := fmt.Sprintf("<b>%s</b> (pid %d) %s\n%s",
+		html.EscapeString(sanitize(baseName(r.Exe))), r.PID, html.EscapeString(r.Wants()), html.EscapeString(sanitize(r.Path)))
 	if r.Warn != "" {
 		body += fmt.Sprintf("\n<b><span foreground=\"#cc0000\">[!] %s</span></b>",
 			html.EscapeString(sanitize(r.Warn)))
 	}
-	if r.Note != "" {
-		body += "\n(" + html.EscapeString(sanitize(r.Note)) + ")"
+	if d := r.Details(); d != "" {
+		body += "\n(" + html.EscapeString(d) + ")"
 	}
 	if o := r.Origin(); o != "" {
 		body += "\nby: " + html.EscapeString(o)

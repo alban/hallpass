@@ -26,6 +26,7 @@ export interface Prompt {
   never?: string;
   warn?: string;
   note?: string;
+  detail?: string; // qualifies path, e.g. "udp"
 }
 
 export interface PendingRequest {

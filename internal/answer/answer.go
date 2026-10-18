@@ -176,14 +176,17 @@ func Request(p Policy, req *monitor.Request, waiting int) ui.Request {
 		what := fmt.Sprintf("%s of %q processes outside the sandbox", obj.Proc.Name, comm(obj.Proc))
 		r.Scope, r.Never = what, what
 	case obj.Inet != nil:
-		r.Path = obj.Inet.String()
-		// Answers cover every protocol (rules.ExactNet).
-		r.Scope = obj.Inet.Addr.String()
-		r.Never = r.Scope
+		// "connect to 1.2.3.4:443": answers cover every protocol
+		// (rules.ExactNet), so the protocol is a detail.
+		r.Op += " to"
+		r.Path = obj.Inet.Addr.String()
+		r.Detail = rules.ProtoName(obj.Inet.Proto)
+		r.Scope, r.Never = r.Path, r.Path
 		if obj.Inet.OwnListener {
 			r.Note = OwnListenerNote
 		}
 	case obj.Unix != nil:
+		r.Op += " to"
 		r.Path = obj.Unix.String()
 		r.Scope, r.Never = r.Path, r.Path
 		if obj.Unix.OwnListener {

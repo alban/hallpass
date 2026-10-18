@@ -132,6 +132,7 @@ function PendingTable(props: {
       getter: (r: PendingRow) => (
         <>
           {r.request.prompt?.path}
+          {r.request.prompt?.detail && ` · ${r.request.prompt.detail}`}
           {r.request.prompt?.warn && (
             <>
               {' '}

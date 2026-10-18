@@ -45,8 +45,8 @@ func (a *Terminal) Ask(ctx context.Context, r Request) Answer {
 	if r.Warn != "" {
 		lines = append(lines, " "+redBold("[!] "+sanitize(r.Warn)))
 	}
-	if r.Note != "" {
-		lines = append(lines, " ("+sanitize(r.Note)+")")
+	if d := r.Details(); d != "" {
+		lines = append(lines, " ("+d+")")
 	}
 	if o := r.Origin(); o != "" {
 		lines = append(lines, " by: "+o)

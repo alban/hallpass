@@ -32,11 +32,11 @@ func TestRequest(t *testing.T) {
 	}
 	r = Request(p, &monitor.Request{Objects: []rules.Object{{Unknown: errors.New("EFAULT")}}}, 0)
 	r = Request(p, &monitor.Request{Op: rules.OpConnect, Objects: []rules.Object{{Inet: &rules.InetObject{Proto: 6, Addr: netip.MustParseAddrPort("127.0.0.1:80"), OwnListener: true}}}}, 0)
-	if r.Op != "connect" || r.Path != "tcp 127.0.0.1:80" || r.Scope != "127.0.0.1:80" || r.Never != r.Scope || r.Note != OwnListenerNote {
+	if r.Op != "connect to" || r.Path != "127.0.0.1:80" || r.Detail != "tcp" || r.Scope != r.Path || r.Never != r.Scope || r.Note != OwnListenerNote {
 		t.Errorf("inet: %+v", r)
 	}
 	r = Request(p, &monitor.Request{Op: rules.OpSend, Objects: []rules.Object{{Unix: &rules.UnixObject{Abstract: true, Name: "x"}}}}, 0)
-	if r.Op != "send" || r.Path != "unix @x" || r.Scope != r.Path || r.Note != "" {
+	if r.Op != "send to" || r.Path != "unix @x" || r.Scope != r.Path || r.Note != "" {
 		t.Errorf("unix: %+v", r)
 	}
 }

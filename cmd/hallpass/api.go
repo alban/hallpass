@@ -42,7 +42,7 @@ func (s *session) Prompt(req *monitor.Request) *pb.Prompt {
 	return &pb.Prompt{
 		Op: r.Op, Path: r.Path, Exe: r.Exe, Pid: r.PID,
 		Cmdline: r.Cmdline, Parents: r.Parents,
-		Scope: r.Scope, Never: r.Never, Warn: r.Warn, Note: r.Note,
+		Scope: r.Scope, Never: r.Never, Warn: r.Warn, Note: r.Note, Detail: r.Detail,
 	}
 }
 

@@ -411,21 +411,20 @@ H a1 connect %[3]s
 			}
 			p := dialPrompts(t, e, c)
 			// "never" covers t3 too; "always" covers u2.
-			for _, st := range []struct{ op, path, note, reply string }{
-				{"connect", "tcp 127.0.0.1:", "listener started inside the sandbox", "once"},
-				{"connect", "tcp " + nt.tcp, "", "once"},
-				{"connect", "tcp " + nt.tcp, "", "never"},
-				{"send", "udp " + nt.udp, "", "always"},
-				{"connect", "unix " + nt.abstract, "", "deny"},
+			for _, st := range []struct{ op, path, detail, note, reply string }{
+				{"connect to", "127.0.0.1:", "tcp", "listener started inside the sandbox", "once"},
+				{"connect to", nt.tcp, "tcp", "", "once"},
+				{"connect to", nt.tcp, "tcp", "", "never"},
+				{"send to", nt.udp, "udp", "", "always"},
+				{"connect to", "unix " + nt.abstract, "", "", "deny"},
 			} {
 				req, err := p.nextRequest(10 * time.Second)
 				if err != nil {
 					t.Fatalf("read prompt: %v\n%s", err, out.String())
 				}
 				pr := req.Prompt
-				scope := strings.TrimPrefix(strings.TrimPrefix(pr.GetPath(), "tcp "), "udp ")
-				if pr.GetOp() != st.op || !strings.HasPrefix(pr.GetPath(), st.path) || pr.GetScope() != scope || pr.GetNote() != st.note {
-					t.Errorf("prompt %v, want %s %s* (note %q)", pr, st.op, st.path, st.note)
+				if pr.GetOp() != st.op || !strings.HasPrefix(pr.GetPath(), st.path) || pr.GetDetail() != st.detail || pr.GetScope() != pr.GetPath() || pr.GetNote() != st.note {
+					t.Errorf("prompt %v, want %s %s* (%s, note %q)", pr, st.op, st.path, st.detail, st.note)
 				}
 				p.answer(req.Id, st.reply)
 			}
@@ -475,7 +474,7 @@ H tc connect %[1]s
 				if err != nil {
 					t.Fatalf("read prompt: %v\n%s", err, out.String())
 				}
-				if pr := req.Prompt; pr.GetPath() != "udp "+nt.tcp || pr.GetScope() != nt.tcp {
+				if pr := req.Prompt; pr.GetPath() != nt.tcp || pr.GetDetail() != "udp" || pr.GetScope() != nt.tcp {
 					t.Errorf("prompt %v, want udp %s", pr, nt.tcp)
 				}
 				p.answer(req.Id, reply)

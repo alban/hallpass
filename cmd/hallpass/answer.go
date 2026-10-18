@@ -189,7 +189,7 @@ func promptRequest(p *pb.Prompt, waiting int) ui.Request {
 	return ui.Request{
 		Op: p.Op, Path: p.Path, Exe: p.Exe, PID: p.Pid,
 		Cmdline: p.Cmdline, Parents: p.Parents,
-		Scope: p.Scope, Never: p.Never, Warn: p.Warn,
+		Scope: p.Scope, Never: p.Never, Warn: p.Warn, Note: p.Note, Detail: p.Detail,
 		Waiting: waiting,
 	}
 }
