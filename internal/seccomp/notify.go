@@ -57,7 +57,16 @@ type Listener struct {
 }
 
 // NewListener adopts an existing notify fd (e.g. received over SCM_RIGHTS).
-func NewListener(fd int) *Listener { return &Listener{fd: fd} }
+//
+// It asks the kernel (Linux 6.6+) to wake up the receiver, then the
+// target, on the waker's CPU: each mediated syscall is a ping-pong
+// between the two, and a cross-CPU wakeup each way costs more than
+// deciding. Older kernels reject the flag; this is only slower.
+func NewListener(fd int) *Listener {
+	// The flag is passed by value, not by pointer.
+	_ = unix.IoctlSetInt(fd, unix.SECCOMP_IOCTL_NOTIF_SET_FLAGS, unix.SECCOMP_USER_NOTIF_FD_SYNC_WAKE_UP)
+	return &Listener{fd: fd}
+}
 
 // FD returns the underlying file descriptor.
 func (l *Listener) FD() int { return l.fd }
