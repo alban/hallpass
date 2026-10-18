@@ -2,14 +2,14 @@
 
 Many tools restrict what a process can do on Linux. hallpass is built for one situation: an AI agent works in a project directory, and from time to time it needs to write somewhere else. Rather than either refusing (and breaking the task) or allowing everything up front, hallpass pauses the write and **asks you**: allow it once, for a few minutes or always, or deny it once or always.
 
-Most tools below are static: the policy is decided before the program runs, and an access outside it fails. Others only detect and alert. Only OpenSnitch and Claude Code's sandbox prompt at run time, and they prompt about network connections, not about files.
+Most tools below are static: the policy is decided before the program runs, and an access outside it fails. Others only detect and alert. Only hallpass, OpenSnitch and Claude Code's sandbox prompt at run time; OpenSnitch and Claude Code prompt about network connections only, hallpass about file writes and, opt-in, connections.
 
 ## At a glance
 
 | Tool | Mediates | Asks at run time | Enforced by | Privileges | TOCTOU resistant | Workstation | Kubernetes |
 |---|---|---|---|---|---|---|---|
-| **hallpass lite** | file writes | yes | seccomp user notification + a supervisor | none | no | yes | yes |
-| **hallpass strict** | file writes | yes | BPF-LSM | root to load | yes | yes | yes |
+| **hallpass lite** | file writes, connections (opt-in) | yes | seccomp user notification + a supervisor | none | no | yes | yes |
+| **hallpass strict** | file writes, connections (opt-in) | yes | BPF-LSM | root to load | yes | yes | yes |
 | [OpenSnitch](https://github.com/evilsocket/opensnitch) | outbound network | yes | NFQUEUE + a root daemon | root | yes | yes | no |
 | [Tetragon](https://github.com/cilium/tetragon) | exec, files, network, syscalls | no (`TracingPolicy` CRDs) | eBPF (kprobes, BPF-LSM, ...) | root | [on LSM hooks](https://tetragon.io/docs/concepts/tracing-policy/hooks/) | as a host daemon | yes |
 | [KubeArmor](https://github.com/kubearmor/KubeArmor) | exec, files, network, capabilities | no (CRDs, audit mode) | AppArmor, SELinux or BPF-LSM | capabilities | yes | as a host daemon | yes |
@@ -27,7 +27,7 @@ Most tools below are static: the policy is decided before the program runs, and 
 
 ## The tools
 
-**OpenSnitch** is the closest in spirit: an interactive application firewall that pops up a dialog for each new outbound connection and turns answers into rules. It covers the network only, with a root daemon on netfilter's NFQUEUE. hallpass does the same for file writes; network mediation is not implemented yet.
+**OpenSnitch** is the closest in spirit: an interactive application firewall that pops up a dialog for each new outbound connection and turns answers into rules. It covers the network only, with a root daemon on netfilter's NFQUEUE. hallpass does the same for file writes, and, with the experimental network mediation, for connections by address (IP and port, or unix socket; no domain names), unprivileged in lite mode.
 
 **Tetragon** and **KubeArmor** are Kubernetes runtime-security tools. Both enforce in the kernel, KubeArmor through an LSM (AppArmor, SELinux or BPF-LSM), Tetragon through eBPF programs that can override a hook's return value or kill the process. Policies are CRDs written ahead of time, with an audit mode to learn what a workload does. hallpass strict mode uses the same kernel mechanism (BPF-LSM), but the policy is built interactively as the agent runs, and a denied write can still be asked about and allowed.
 

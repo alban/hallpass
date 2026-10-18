@@ -15,6 +15,9 @@ hallpass [flags] [--] [command [args...]]     # default command: $SHELL
       --log FILE           append one JSON line per mediated syscall to FILE
       --wait WHAT          main (default): exit with the command | all: keep supervising its background processes (Linux 5.9+)
       --mode MODE          lite (default, no root) | strict (BPF-LSM enforcement)
+      --mediate LIST       mediated syscall categories: files, exec, network (default files,exec; network is experimental)
+      --allow-net DEST     network destination allowed without asking (repeatable; needs network in --mediate)
+      --deny-net DEST      network destination always denied (repeatable, wins over --allow-net)
       --escalate TOOL      strict mode as a regular user: how to run the loader as root:
                            auto | ask | pkexec | sudo | run0 | doas | su | manual | none
                            (default: saved choice, else ask on a terminal, else auto)
@@ -35,6 +38,29 @@ Press Ctrl-] inside a session to see its current rules, including answers given 
 On a terminal, the window title starts with `[hallpass]` until the session ends: every title the program sets gets the prefix, and the command running in the foreground, if it is not a shell, is appended (`[hallpass] ~/src — vim main.go`), since the terminal itself only sees hallpass. At exit, hallpass restores the previous title in terminals that support the title stack (xterm, VTE-based ones such as GNOME Terminal); elsewhere, the title stays until your shell sets a new one.
 
 With `--no-implicit`, nothing is writable unless you `--allow` it: not the project, not a `$TMPDIR`, not even `/dev/null`. The session's own terminal stays off too, unless you also pass `--allow-tty` (its `/dev/pts/N` is only known once hallpass starts). See [use cases](use-cases.md) for examples.
+
+## Network (experimental)
+
+With `--mediate=files,exec,network`, hallpass also asks before a sandboxed process connects or sends to a destination:
+
+```
+ hallpass: curl (pid 4242) wants to connect
+ tcp 140.82.112.3:443
+ [t] and [a] allow: tcp 140.82.112.3:443
+```
+
+Destinations are shown as addresses, not names: `tcp 1.2.3.4:443`, `udp [2001:db8::1]:53`, `unix /run/user/1000/bus`, `unix @name` (abstract). Answers cover that destination only. One kind is allowed without asking: a loopback or unix listener started inside the sandbox, such as a test server the agent runs; with `--no-implicit` it is asked, with the note "listener started inside the sandbox".
+
+`--allow-net` and `--deny-net` take:
+
+| Syntax | Covers |
+|---|---|
+| `all` | every destination, unix sockets included |
+| `[tcp:\|udp:]ADDR[/N][:PORT[-PORT]]` | addresses, an optional protocol and ports; `*` for any address, IPv6 in brackets: `tcp:*:443`, `10.0.0.0/8`, `udp:[::1]:53` |
+| `unix:/path`, `unix:/dir/**` | a unix socket file, or every one under `/dir` |
+| `unix:@name`, `unix:@prefix*` | an abstract name, or every one starting with `prefix` |
+
+For example, `hallpass --mediate=files,exec,network --allow-net=tcp:*:443 --deny-net=169.254.169.254 -- copilot` lets the agent reach HTTPS servers, never the cloud metadata service, and asks about the rest.
 
 ## Background processes
 

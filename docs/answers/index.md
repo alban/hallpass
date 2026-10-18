@@ -26,6 +26,8 @@ They are not offered for a file directly in your home or in `/`, nor when the fo
 
 Processes of the sandbox may write each other's `/proc/<pid>` files (agents tune `oom_score_adj`, for example). Writing those of a process outside the sandbox is asked about, and `t`, `a` and `n` then apply to that file for every process with the same command name.
 
+For a network destination (with network [mediated](../workstation/usage.md#network-experimental)), `t`, `a` and `n` cover that destination only: protocol, address and port, or the unix socket.
+
 Rules live as long as the session: nothing is written back to the command line or to the policy. Press Ctrl-] in a terminal session to see them; the web UI can remove them.
 
 ## Prompts that don't flood you

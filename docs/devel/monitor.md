@@ -132,9 +132,12 @@ const (
 	OpLink   // both objects: source and new name
 	OpRename // both objects: old and new name
 	OpTruncate
-	// Later: OpConnect, OpSend.
+	OpConnect // connect, and sendto/sendmsg with MSG_FASTOPEN
+	OpSend    // sendto, sendmsg, sendmmsg with a destination address
 
-	OpAll = OpTruncate<<1 - 1
+	OpFiles = OpTruncate<<1 - 1
+	OpNet   = OpConnect | OpSend
+	OpAll   = OpFiles | OpNet
 )
 ```
 
@@ -150,6 +153,13 @@ Lite mode sees syscalls, strict mode sees LSM hooks:
 | Link | `linkat` | `path_link` |
 | Rename | `renameat`, `renameat2` | `path_rename` |
 | Truncate | `truncate` | `path_truncate` |
+| Connect | `connect`; `sendto`, `sendmsg`, `sendmmsg` with `MSG_FASTOPEN` | `socket_connect`, `unix_stream_connect` |
+| Send | `sendto` with an address, `sendmsg`, `sendmmsg` | `socket_sendmsg`, `unix_may_send` |
+
+The network ops are notified only with `network` in `--mediate`
+(`seccomp.Category`). A `sendmsg` without `msg_name` is continued at
+once; for `sendmmsg`, every message with an address is evaluated and the
+call is allowed only if all are.
 
 Seccomp cannot tell create from write on `openat(O_CREAT)` for an existing
 file; it reports `OpWrite|OpCreate`, and a rule must allow both. Strict
@@ -171,8 +181,9 @@ refuse more, so the plain resolution is safe for them.
 type Object struct { // exactly one field is set
 	Path    *PathObject
 	Proc    *ProcObject
+	Inet    *InetObject
+	Unix    *UnixObject
 	Unknown error // lite mode only: the path could not be read
-	// Later: Addr *SockAddr
 }
 
 type PathObject struct {
@@ -186,6 +197,20 @@ type PathObject struct {
 type ProcObject struct {
 	Name   string  // e.g. "oom_score_adj"
 	Target Subject // the target process, Comm used by rules
+}
+
+type InetObject struct {
+	Proto       uint16         // IP protocol of the socket: 6 tcp, 17 udp...
+	Addr        netip.AddrPort // IPv4-mapped IPv6 addresses are unmapped
+	OwnListener bool           // loopback, listener started inside the sandbox
+}
+
+type UnixObject struct {
+	Path        string // resolved; empty for an abstract name
+	Abstract    bool
+	Name        string // abstract name, without the leading NUL
+	Type        int    // SOCK_STREAM...; display only
+	OwnListener bool   // the peer socket was created inside the sandbox
 }
 ```
 
@@ -244,8 +269,11 @@ type SubjectMatch struct{}
 type ObjectMatch struct { // exactly one field is set
 	Path    *PathMatch
 	Proc    *ProcMatch
+	Inet    *InetMatch
+	Unix    *UnixMatch
 	Unknown bool // all unreadable paths (lite)
-	// Later: Addr *AddrMatch
+	OwnListener bool // loopback/unix destinations listened on inside the sandbox
+	AnyNet  bool // every network destination, unix sockets included
 }
 
 type PathMatch struct {
@@ -257,7 +285,24 @@ type ProcMatch struct {
 	Name string // /proc/<pid>/<Name>
 	Comm string // of the target process
 }
+
+type InetMatch struct {
+	Proto          uint16       // 0: any
+	Prefix         netip.Prefix // zero: any address of any family
+	PortLo, PortHi uint16       // inclusive; both 0: any port
+}
+
+type UnixMatch struct {
+	Path     string // a socket file, or with Prefix a tree
+	Abstract bool
+	Name     string // with Prefix, every name starting with it
+	Prefix   bool
+}
 ```
+
+Network matches are what BPF can evaluate: an LPM trie for prefixes, a
+port range, inode rules for unix socket files. In strict mode a network
+rule must cover both network ops, as a file rule covers every file op.
 
 The monitor has one rule set and no persistence. `Set` lets a client
 replace a group of rules atomically (remove the set and add its new rules
@@ -290,6 +335,17 @@ per-thread one-shot grants. It has no ops, no subjects and no Ask (which
 needs a cut-off bit: "no allow inherited from above"). The monitor refuses
 rules it cannot enforce (`ErrUnsupported`), so the UX cannot think a rule
 holds when the kernel ignores it.
+
+Network rules go to separate maps (`internal/lsm/net.go`): LPM tries for
+IPv4 and IPv6 prefixes and for abstract unix names, each entry holding up
+to a few rules with protocol, port range, verdict and expiry; a flag for
+"any unix socket"; and unix socket files as path rules marked `net`. The
+hooks are `socket_connect` and `socket_sendmsg` (inet), and
+`unix_stream_connect` and `unix_may_send` (the peer's inode or abstract
+name). Listeners started by a session's members are recorded at
+`socket_post_create` (unix) and at the end of `inet_listen` (TCP), and
+dropped at `sk_free_security`; the `OwnListener` rule enables them per
+session. A "once" answer is a per-thread grant of the destination.
 
 Rules are host paths, but BPF keys them by superblock and path within it:
 each rule is compiled through `mountinfo` to every mount exposing it. A

@@ -17,8 +17,8 @@ What it protects:
 
 What it does not protect:
 
-- Reads: a program can read your secrets, and send them away (the network is not mediated).
-- Writes done for the sandbox by a service outside it (`systemd-run --user`, a container daemon, D-Bus): `connect` and `execve` are not mediated yet. This is why hallpass does not contain a hostile program today.
+- Reads: a program can read your secrets, and send them away (the network is not mediated by default).
+- Writes done for the sandbox by a service outside it (`systemd-run --user`, a container daemon, D-Bus): `connect` is only mediated with the experimental `--mediate=...,network`, and `execve` not yet. This is why hallpass does not contain a hostile program today.
 - Permissions, owners, extended attributes and timestamps.
 - In lite mode, a deliberate TOCTOU race.
 - Your answers: an `always` on a broad folder allows everything under it. The `by:` line of a prompt is set by the process and proves nothing.
@@ -33,7 +33,7 @@ This is what lets hallpass *ask* instead of just failing the call. It is best ef
 
 In practice lite mode is still useful, because that gap only matters against a process *deliberately* racing the check. Most escapes are accidents — a wrong path, an overeager script, a command run in the wrong directory — not adversarial races, and lite mode catches those reliably. Strict mode closes the TOCTOU race so filesystem enforcement also holds against a deliberate racer.
 
-Neither mode contains a hostile agent today: `execve` and `connect` are not mediated, so a sandboxed process can still ask a service outside the sandbox (`systemd-run --user`, a container daemon, the systemd or D-Bus socket) to write for it. See [Limitations](#limitations).
+Neither mode contains a hostile agent today: `execve` is not mediated, nor `connect` by default, so a sandboxed process can still ask a service outside the sandbox (`systemd-run --user`, a container daemon, the systemd or D-Bus socket) to write for it. See [Limitations](#limitations).
 
 ## Strict mode: BPF-LSM
 
@@ -51,6 +51,15 @@ Overlayfs is the exception: it writes to its lower and upper layers with the ker
 
 Only loading the BPF programs needs root. hallpass starts a short-lived copy of itself as root, which loads and attaches the programs, hands their file descriptors back to the unprivileged supervisor and exits. The supervisor makes itself non-dumpable, and the LSM denies signals from the sandbox to it. See [Strict mode](workstation/strict.md) for how the root step is run.
 
+## Network (experimental)
+
+With `--mediate=files,exec,network` (or `mediate` in a [HallpassPolicy](kubernetes/policies.md)), connections and sends to an address are mediated like writes. Destinations are IPv4/IPv6 addresses and ports (TCP, UDP), unix socket files and abstract unix names; IPv4-mapped IPv6 addresses are shown and matched as IPv4. Names are not shown: there is no DNS mediation.
+
+- Lite mode pauses `connect`, `sendto` with an address, `sendmsg` and `sendmmsg` (a message with no address continues at once; `MSG_FASTOPEN` counts as a connection). The supervisor reads the address from the process's memory, so a racing thread can change it after the check (TOCTOU), as with paths.
+- Strict mode adds the LSM hooks `socket_connect` and `socket_sendmsg`, which see the address the kernel copied, and `unix_stream_connect` and `unix_may_send`, which see the peer socket: a unix socket file is matched by inode, whatever path reached it. The question is still asked at seccomp time; a "once" answer becomes a one-shot grant for that thread.
+
+The only destination allowed without asking is a loopback or unix listener started inside the sandbox, such as a test server. Lite mode finds the listener's owner with `NETLINK_SOCK_DIAG` and the sandboxed processes' file descriptors (racy); strict mode records the listeners sandboxed processes create, and forgets them when the socket is freed.
+
 ## Prompts
 
 Prompts are designed not to overwhelm you: one question at a time, concurrent requests of a process for the same path coalesced, and pending requests settled by a new rule. See [Answers and rules](answers/index.md#prompts-that-dont-flood-you).
@@ -58,13 +67,21 @@ Prompts are designed not to overwhelm you: one question at a time, concurrent re
 ## Limitations
 
 hallpass is a proof of concept. It mediates filesystem writes; it does not yet mediate
-`execve` or `connect`, in either mode. A sandboxed process can therefore reach
+`execve`, and mediates `connect` only when network mediation is enabled. By default, a sandboxed process can therefore reach
 a service that acts on its behalf *outside* the sandbox, and so write anywhere
 that service can, without a prompt. For example `systemd-run --user`, or
 `docker`/`podman run` talking to a daemon, or a process connecting directly to
-the systemd or D-Bus session socket. These are trivial, known escapes until
-`connect`/`execve` policy exists; treat the current build as "ask me about
+the systemd or D-Bus session socket. Network mediation asks about those
+connections, but an `always` on such a socket allows the escape again;
+treat the current build as "ask me about
 honest mistakes", not "contain a hostile agent".
+
+Network mediation, in both modes:
+
+- Sockets inherited from outside the sandbox, or received with `SCM_RIGHTS`, are already connected: their traffic is not asked about.
+- Only IPv4, IPv6 and unix sockets are mediated; other families (netlink, packet, vsock...) are not.
+- A UDP socket bound inside the sandbox is not a listener: sending to it is asked.
+- Answers cover one destination; there are no answers for a subnet or a folder of sockets yet (use `--allow-net`).
 
 In both modes, only writes are mediated: reading files, secrets included, is not restricted. `chmod`, `chown`, extended attributes and timestamps are not mediated yet.
 
@@ -76,7 +93,8 @@ Lite mode is best effort:
 - Allowed syscalls continue with `SECCOMP_USER_NOTIF_FLAG_CONTINUE`, so a malicious multi-threaded process can change the path between the check and the kernel acting on it (TOCTOU). Strict mode (BPF-LSM) closes this.
 - `openat2` passes its flags in memory (`struct open_how`), which the seccomp filter cannot read: every `openat2` reaches hallpass, which reads the flags and lets the read-only ones through. A malicious process can change the flags after the check, as it can change the path. Strict mode closes this too.
 - Pre-existing hard links to protected files are not detected.
-- Network and `execve` policy are not implemented yet (see above).
+- `execve` policy is not implemented yet (see above).
+- Network: the destination address is read from memory after the check (TOCTOU), and a listener inherited from outside the sandbox counts as started inside it.
 
 ### Strict mode
 
@@ -85,6 +103,7 @@ Lite mode is best effort:
 - When the helper runs without a recognised escalation tool in its environment (`--escalate=manual`, or `su`, which clears `SUDO_UID`/`PKEXEC_UID`/`DOAS_USER`), it cannot tell which user invoked it and only checks that the target runs the same hallpass binary.
 - `kernel.yama.ptrace_scope=3` prevents the helper from fetching the socket (`pidfd_getfd`); run hallpass as root instead.
 - Sandboxed processes cannot mount overlayfs (for example rootless podman or buildah with the native overlay driver): overlayfs writes to its layers without going through the hooks hallpass checks. fuse-overlayfs works.
+- Network: listeners created before the BPF programs were loaded are not known as started inside the sandbox, and their connections are asked about. A one-shot grant holds a few destinations per thread.
 
 ### Kubernetes
 

@@ -29,6 +29,9 @@ spec:
   deny: [/var/run/secrets/**]
   ask: true            # false: deny without asking
   askTimeout: 5m       # no answer in time: deny
+  mediate: [files, exec, network]  # default: files, exec
+  allowNetwork: ["tcp:*:443", "unix:@my-service"]
+  denyNetwork: ["169.254.169.254"]
 ```
 
 - `allow` and `deny` are paths in the container: `/workspace/**` and
@@ -40,12 +43,20 @@ spec:
   are denied at once.
 - `askTimeout` (default `5m`): a request with no answer by then is
   denied.
+- `mediate` (default `[files, exec]`): the syscall categories mediated.
+  `network` (experimental) asks about connections and sends, like
+  `hallpass --mediate` ([Network](../workstation/usage.md#network-experimental)).
+- `allowNetwork` and `denyNetwork`: destinations in the `--allow-net`
+  syntax; `all` is every destination, unix sockets included. They need
+  `network` in `mediate`. Deny wins. Loopback and unix listeners
+  started in the container are allowed without asking.
 
 Policy changes apply to containers started afterwards: a running
 session keeps the policy it started with.
 
 The syscalls mediated are the same as `hallpass`'s: writes, renames,
-links, removals... (see [How it works](../design.md)), and new user and
+links, removals... (see [How it works](../design.md)), plus connections
+and sends with `network` in `mediate`, and new user and
 mount namespaces are refused. The policy is merged into the container's
 own seccomp profile (`RuntimeDefault`, `Localhost` or `Unconfined`):
 hallpass's rules first, the rest kept.

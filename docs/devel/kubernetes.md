@@ -119,6 +119,12 @@ They are merged into the container's existing policy (`RuntimeDefault`,
 `Unconfined` pod gets `defaultAction: SCMP_ACT_ALLOW` plus hallpass's
 rules.
 
+The policy's `mediate` selects the categories (`seccomp.Select`), as
+`--mediate` does; the plugin records it in the listener metadata
+(`mediate`), so the agent builds the session's defaults and, in strict
+mode, the BPF enforcement for the same categories. A policy change only
+applies to containers created after it.
+
 ## Paths
 
 Lite mode resolves a path in the monitor's own view of the filesystem
