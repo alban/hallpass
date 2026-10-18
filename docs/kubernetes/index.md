@@ -1,7 +1,8 @@
 # Kubernetes
 
 `hallpass-node` sandboxes workloads in pods (AI agents, for example)
-with hallpass, in lite mode (seccomp user notification). It is a
+with hallpass, in strict mode where the nodes have BPF-LSM, else in lite
+mode (see [Strict mode](install.md#strict-mode)). It is a
 DaemonSet: on each node, an
 [NRI](https://github.com/containerd/nri) plugin adds a seccomp policy to
 the containers that opt in, and a seccomp agent mediates their file
@@ -10,7 +11,7 @@ through a gRPC session API on the agent pod, with the `hallpass-node`
 client, `hallpass web` or the Headlamp plugin.
 
 !!! warning
-    Experimental. Lite mode only.
+    Experimental.
 
 ```mermaid
 flowchart LR
@@ -45,11 +46,14 @@ flowchart LR
   interrupt a mediated syscall while it waits for an answer
   (`--wait-killable`, detected with `runc features`).
 - CRI-O and nodes without NRI are not supported.
+- Strict mode: Linux 6.12 or later, with `bpf` in the active LSMs (the
+  `lsm=` kernel parameter), as on a
+  [workstation](../workstation/strict.md).
 
 ## Limitations
 
-- Lite mode only: seccomp user notification is exposed to TOCTOU races
-  (see [How it works](../design.md)).
+- In lite mode, seccomp user notification is exposed to TOCTOU races
+  (see [How it works](../design.md)); strict mode closes them.
 - Containers created while the agent is not running are not mediated,
   unless you [fail closed](install.md#fail-open).
 - Agent restarts keep the sessions only while `hallpass-fd-store` runs

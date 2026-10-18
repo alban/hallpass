@@ -68,7 +68,13 @@ copy of the listener is closed. So, on a node:
 |---|---|
 | the `hallpass-node` pod | keep running. The new agent takes their sessions over: rules kept, waiting requests asked again (new ids, new `askTimeout`). Containers starting meanwhile are not mediated (see [Fail open](#fail-open)). |
 | the `hallpass-fd-store` pod | are not affected. The agent gives the new fd-store its copies again. |
-| both pods | their mediated syscalls fail with `ENOSYS`, until the containers restart. |
+| both pods | their mediated syscalls fail with `ENOSYS`, until the containers restart. In strict mode, the BPF programs are detached too. |
+
+In strict mode, the fd-store also keeps the BPF programs: a new agent
+adopts them, and the kernel enforces the sessions' rules throughout.
+One gap: a `kubectl exec` whose first process has exited, leaving
+children behind, is not taken over; its children's mediated syscalls
+then fail with `ENOSYS`.
 
 Both DaemonSets use `updateStrategy: OnDelete`: upgrade by deleting
 their pods, one node at a time, and never both pods of a node at once:
@@ -77,8 +83,36 @@ fd-store restart, until the agent logs `fd-store connected`), then the
 other. With `--fd-store=""`, the agent runs without fd-store, and
 deleting it is like deleting both.
 
+## Strict mode
+
+With `--mode=auto` (the default), the agent loads the BPF-LSM programs
+at startup on nodes where `bpf` is in the active LSMs, and every
+mediated container gets strict mode: the kernel enforces the answers on
+the files it writes, as on a [workstation](../workstation/strict.md).
+Elsewhere, it logs `lite mode` with the reason, and mediates in lite
+mode. The policy does not choose the mode: the node does.
+
+- `--mode=strict`: the agent fails to start without BPF-LSM, so no
+  container is mediated in lite mode on that node (with [fail
+  closed](#fail-open), opted-in containers fail to start, and the
+  kubelet retries).
+- `--mode=lite`: no BPF programs, for nodes where they are not wanted.
+
+One set of programs serves all the node's containers: each container is
+a session (a `kubectl exec` joins its container's session), and its
+processes are tied to it from their first `execve`. Strict mode also
+blocks the signals from mediated containers to the agent. The agent
+logs `strict mode` at startup, and `strict=true` in each
+`session started`.
+
+As on a workstation, "allow once" needs a `sys_exit` tracepoint, which
+slows down every syscall on the node a little (about 200 ns) while the
+programs are loaded (see [Strict mode](../workstation/strict.md)).
+
 ## Agent flags
 
+- `--mode` (default `auto`, or `strict`, `lite`): see
+  [Strict mode](#strict-mode).
 - `--namespace-selector` (default `hallpass.io/enabled=true`): the
   namespaces whose pods may opt in (see
   [Opt in](policies.md#opt-in)).

@@ -1,14 +1,16 @@
 # Kubernetes
 
 Status: work item 1 (lite mode) implemented on branch `nri`; the cluster
-API (option A) and the Headlamp plugin on branch `headlamp`. See the
-implementation notes ([work item 1](#implementation-notes-work-item-1),
-[Headlamp](#implementation-notes-headlamp)) for where they differ from
+API (option A) and the Headlamp plugin on branch `headlamp`; strict mode
+on branch `strict-k8s`. See the implementation notes ([work item
+1](#implementation-notes-work-item-1),
+[Headlamp](#implementation-notes-headlamp), [strict
+mode](#implementation-notes-strict-mode)) for where they differ from
 this design. User docs: [../kubernetes/](../kubernetes/index.md).
 
 Run AI agents in pods under hallpass, opted in per namespace and per pod,
-and answer their requests from [Headlamp](https://headlamp.dev). Lite mode
-first; strict mode (BPF-LSM) next, on nodes where it is active.
+and answer their requests from [Headlamp](https://headlamp.dev), in
+strict mode (BPF-LSM) on nodes where it is active, else in lite mode.
 
 ## Components
 
@@ -274,7 +276,7 @@ rarely updated), keeps the agent's file descriptors across agent crashes
 and upgrades, so the running containers stay mediated. It is generic and
 has no Kubernetes client: `Put(key, fds, blob)`, `Delete(key)`, `List`
 over SCM_RIGHTS on a root-only socket in `/run/hallpass`, keyed by
-container id. Strict mode adds its BPF object fds later (no pinning).
+container id. Strict mode adds its BPF object fds (no pinning).
 
 Per listener (a container's, or a `kubectl exec`'s) it holds the seccomp
 listener and a memfd, the journal of its in-flight notifications; per
@@ -446,7 +448,7 @@ headless browser.
 1. `nri`: root-aware `procfs.Resolve`; OCI profile from the rule table;
    `cmd/hallpass-node` (NRI plugin, seccomp agent, one session API for
    the node); `HallpassPolicy`; manifests; kind e2e. Lite mode.
-2. Strict mode on the node: one BPF load with session ids.
+2. `strict-k8s`: strict mode on the node, one BPF load with session ids.
 3. `headlamp`: the cluster API (A) and the plugin (`headlamp/`).
 4. `fd-store`: keep the listeners across agent restarts.
 5. Later: CRI-O.
@@ -541,8 +543,8 @@ design above:
   `make test-kind` (`test/kind/e2e.sh`) creates the cluster, deploys
   the agent and checks mediation, answers (once, deny) over
   port-forward, and that unselected pods are untouched.
-- **Not done:** strict mode, the fd holder; policy changes do not
-  affect running sessions.
+- **Not done:** policy changes do not affect running sessions (strict
+  mode and the fd-store came later, see below).
 
 ## Implementation notes (Headlamp)
 
@@ -601,3 +603,53 @@ Branch `headlamp`, on top of `nri`:
   name `registry.npmjs.org`; npm fetches from the configured registry
   instead (`replace-registry-host`). `demos/headlamp/record.js`
   records the demo on the same cluster.
+
+## Implementation notes (strict mode)
+
+- **The node chooses the mode, not the policy.** `hallpass-node run
+  --mode=auto|lite|strict` (default `auto`). The agent loads the BPF
+  programs once at startup (`setupStrict`), protects its own pid from
+  signals (global, for every session), and every new session is strict
+  while they are loaded. `strict` fails to start without BPF-LSM;
+  `lite` loads nothing, but keeps the programs adopted from the
+  fd-store for the strict sessions it restores.
+- **Session ids.** `lsm.LSM.NewSession(root)` gives a session id; the
+  member mark, the rule and grant keys, and the ring buffer events carry
+  it. One `lsm.Session` per container, shared by its `kubectl exec`
+  listeners.
+- **Members on execve only.** `monitor.attach` does not mark the root
+  (it is still runc init, which reopens its exec fifo: `permission
+  denied` otherwise); the agent marks each task on its notified
+  `execve`, and children inherit the mark. `Attach` opens
+  `/proc/<root>/mountinfo` to resync rules on mount changes.
+- **Restarts.** The fd-store keeps the BPF object fds under
+  `hallpass:lsm`, and each session's id in its blob. A new agent adopts
+  the programs and calls `ResumeSession(id, root)`: the marks are still
+  in task storage, so processes forked before the restart stay in the
+  session (with a new id, `DropStale` would remove their rules). A
+  listener whose root has exited is not restored: its mountinfo cannot
+  be opened.
+- **securityfs.** The kind node has none mounted under
+  `/proc/1/root/sys/kernel/security`, so `lsm.ActiveIn` falls back to a
+  detached securityfs mount of its own (`fsopen`/`fsmount`) to read
+  `lsm`.
+- **Tests.** `make test-vm` runs `TestRestartStrict` (vimto, BPF-LSM):
+  the agent restarts while a forked subshell keeps writing. The kind
+  e2e with `E2E_STRICT=1` requires `strict=true` sessions and runs the
+  race pod (`test/kind/e2e-race.yaml`, `demos/strict/race`): no escape
+  in thousands of tries, in the pod and through `kubectl exec`; in lite
+  mode it escapes after a few dozen tries, logged only. GitHub runners
+  have no BPF-LSM, so the strict kind run is manual, on a Fedora VM
+  with podman, with everything built elsewhere:
+
+  ```sh
+  docker build -f deploy/kubernetes/Dockerfile -t hallpass-node:e2e .
+  docker save -o hallpass-node.tar hallpass-node:e2e
+  CGO_ENABLED=0 go build ./cmd/hallpass-node
+  CGO_ENABLED=0 go build ./demos/strict/race
+  # copy them, kind, kubectl, test/kind and deploy/kubernetes to the VM
+  sudo env KIND_EXPERIMENTAL_PROVIDER=podman E2E_STRICT=1 \
+    HALLPASS_NODE_ARCHIVE=$PWD/hallpass-node.tar \
+    HALLPASS_NODE_CLIENT=$PWD/hallpass-node HALLPASS_RACE=$PWD/race \
+    bash test/kind/e2e.sh
+  ```

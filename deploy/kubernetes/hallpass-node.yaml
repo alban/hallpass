@@ -81,6 +81,9 @@ spec:
           args:
             - run
             - --namespace-selector=hallpass.io/enabled=true
+            # strict where the node has BPF-LSM, else lite; --mode=strict
+            # refuses to start without it.
+            - --mode=auto
           env:
             # The source host of the Events.
             - name: NODE_NAME
