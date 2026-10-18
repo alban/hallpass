@@ -3,7 +3,12 @@
 
 package seccomp
 
-import "golang.org/x/sys/unix"
+import (
+	"fmt"
+	"strings"
+
+	"golang.org/x/sys/unix"
+)
 
 // Kind says what the filter does with a syscall.
 type Kind int
@@ -38,6 +43,84 @@ type Rule struct {
 	Errno    uint32 // for Errno and ErrnoIfNamespace
 	Op       string // operation shown in prompts
 	Paths    []PathArg
+	// Cat is what --mediate selects the rule by (see Category); 0 for a
+	// syscall installed whatever the categories (execve, refused
+	// syscalls).
+	Cat Category
+}
+
+// Category is a set of mediated syscall categories (--mediate).
+type Category uint32
+
+const (
+	Files Category = 1 << iota
+	// Exec is reserved for checks on executed programs; execve is
+	// notified whatever the categories (see commonRules).
+	Exec
+	Network
+
+	// DefaultCategories leaves out Network until it is stable.
+	DefaultCategories = Files | Exec
+	AllCategories     = Files | Exec | Network
+)
+
+var categoryNames = []struct {
+	c    Category
+	name string
+}{{Files, "files"}, {Exec, "exec"}, {Network, "network"}}
+
+// String lists c as ParseCategories reads it: "files,exec".
+func (c Category) String() string {
+	var s []string
+	for _, n := range categoryNames {
+		if c&n.c != 0 {
+			s = append(s, n.name)
+		}
+	}
+	return strings.Join(s, ",")
+}
+
+// ParseCategories reads a comma-separated list of categories: files,
+// exec, network.
+func ParseCategories(s string) (Category, error) {
+	var c Category
+	for _, f := range strings.Split(s, ",") {
+		f = strings.TrimSpace(f)
+		if f == "" {
+			continue
+		}
+		found := false
+		for _, n := range categoryNames {
+			if n.name == f {
+				c, found = c|n.c, true
+			}
+		}
+		if !found {
+			return 0, fmt.Errorf("unknown category %q (want files, exec or network)", f)
+		}
+	}
+	return c, nil
+}
+
+// Select returns the rules of rs installed when mediating cats: the
+// notified syscalls of the other categories are left out.
+func Select(rs []Rule, cats Category) []Rule {
+	var out []Rule
+	for _, r := range rs {
+		if c := r.Category(); c == 0 || c&cats != 0 {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// Category returns r.Cat, or Files for the file syscalls, which leave it
+// unset.
+func (r Rule) Category() Category {
+	if r.Cat == 0 && len(r.Paths) > 0 && r.Op != "exec" {
+		return Files
+	}
+	return r.Cat
 }
 
 // WriteIntentMask are the open flags that make an open a write: the monitor

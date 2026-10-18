@@ -19,6 +19,7 @@ import (
 	"github.com/alban/hallpass/internal/launch"
 	"github.com/alban/hallpass/internal/lsm"
 	"github.com/alban/hallpass/internal/monitor"
+	"github.com/alban/hallpass/internal/seccomp"
 	"github.com/alban/hallpass/internal/sessionapi"
 	"github.com/alban/hallpass/internal/tty"
 	"github.com/alban/hallpass/internal/ui"
@@ -48,6 +49,8 @@ type sessionConfig struct {
 	// Timeout is how long a request waits for an answer (0: forever),
 	// reported to the session's clients.
 	Timeout time.Duration
+	// Mediate is the syscall categories mediated (--mediate).
+	Mediate seccomp.Category
 }
 
 // session is hallpass as a client of the monitor: it asks the user about
@@ -82,6 +85,9 @@ func runSession(cfg sessionConfig) (int, error) {
 			return 0, err
 		}
 		defer ks.Close()
+		if err := ks.Mediate(cfg.Mediate&seccomp.Files != 0, cfg.Mediate&seccomp.Network != 0); err != nil {
+			return 0, err
+		}
 		kernel = ks
 	}
 	m, err := monitor.New(monitor.Config{Kernel: kernel})
@@ -110,6 +116,7 @@ func runSession(cfg sessionConfig) (int, error) {
 		Env:         append(append(os.Environ(), "HALLPASS=1"), cfg.Env...),
 		Files:       []*os.File{os.Stdin, os.Stdout, os.Stderr},
 		AllowUserns: cfg.AllowUserns,
+		Mediate:     cfg.Mediate,
 	}
 	if cfg.TTY != nil {
 		sl := cfg.TTY.Slave()

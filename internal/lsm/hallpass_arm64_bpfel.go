@@ -73,6 +73,12 @@ type hallpassRuleVal struct {
 	Pad        [6]uint8
 }
 
+type hallpassSessionCfg struct {
+	_       structs.HostLayout
+	Mediate uint32
+	Pad     uint32
+}
+
 // Names of all BPF objects in the ELF.
 //
 // Used for safe lookups in a Collection or CollectionSpec.
@@ -85,6 +91,7 @@ const (
 	hallpassMapProtected            = "protected"
 	hallpassMapRules                = "rules"
 	hallpassMapScratch              = "scratch"
+	hallpassMapSessions             = "sessions"
 	hallpassProgHpFileOpen          = "hp_file_open"
 	hallpassProgHpFileSendSigiotask = "hp_file_send_sigiotask"
 	hallpassProgHpPathLink          = "hp_path_link"
@@ -177,6 +184,7 @@ type hallpassMapSpecs struct {
 	Protected *ebpf.MapSpec `ebpf:"protected"`
 	Rules     *ebpf.MapSpec `ebpf:"rules"`
 	Scratch   *ebpf.MapSpec `ebpf:"scratch"`
+	Sessions  *ebpf.MapSpec `ebpf:"sessions"`
 }
 
 // hallpassVariableSpecs contains global variables before they are loaded into the kernel.
@@ -215,6 +223,7 @@ type hallpassMaps struct {
 	Protected *ebpf.Map `ebpf:"protected"`
 	Rules     *ebpf.Map `ebpf:"rules"`
 	Scratch   *ebpf.Map `ebpf:"scratch"`
+	Sessions  *ebpf.Map `ebpf:"sessions"`
 }
 
 func (m *hallpassMaps) Close() error {
@@ -227,6 +236,7 @@ func (m *hallpassMaps) Close() error {
 		m.Protected,
 		m.Rules,
 		m.Scratch,
+		m.Sessions,
 	)
 }
 

@@ -20,6 +20,7 @@ import (
 	"github.com/alban/hallpass/internal/launch"
 	"github.com/alban/hallpass/internal/lsm"
 	"github.com/alban/hallpass/internal/privsep"
+	"github.com/alban/hallpass/internal/seccomp"
 	"github.com/alban/hallpass/internal/tty"
 	"github.com/alban/hallpass/internal/ui"
 	"golang.org/x/sys/unix"
@@ -75,6 +76,7 @@ type options struct {
 	noImplicit  bool
 	allowTTY    bool
 	wait        string
+	mediate     seccomp.Category
 	args        []string // command to run
 }
 
@@ -99,11 +101,16 @@ func parseFlags(argv []string, printPolicy bool) (o options, code int, ok bool) 
 	fs.StringVar(&o.mode, "mode", "lite", "lite (seccomp only, no root needed) | strict (the kernel enforces the answers with BPF-LSM; root needed to load it)")
 	fs.StringVar(&o.escalate, "escalate", "", "strict mode, when not root: how to run the loader as root: "+strings.Join(privsep.Tools, " | ")+" (default: the saved choice, else ask on a terminal, else auto)")
 	fs.StringVar(&o.wait, "wait", "main", "exit when the main process exits (main), or keep supervising its background processes until they all exit (all)")
+	mediate := fs.String("mediate", seccomp.DefaultCategories.String(), "comma-separated `categories` of syscalls to mediate: files, exec, network (network is experimental)")
 	if err := fs.Parse(argv); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return o, 0, false
 		}
 		return o, 2, false
+	}
+	var err error
+	if o.mediate, err = seccomp.ParseCategories(*mediate); err != nil {
+		return o, fail(fmt.Errorf("--mediate: %w", err)), false
 	}
 	if o.noImplicit {
 		explicit := false
@@ -200,6 +207,7 @@ func runMain(argv []string, printPolicy bool) int {
 		Env:         env,
 		WaitAll:     o.wait == "all",
 		Timeout:     o.timeout,
+		Mediate:     o.mediate,
 	})
 	if pty != nil {
 		pty.Close() // restore the terminal before printing anything

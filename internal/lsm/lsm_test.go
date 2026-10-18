@@ -457,3 +457,39 @@ func TestResume(t *testing.T) {
 		t.Errorf("resynced to b: %s, want fail ok", got)
 	}
 }
+
+// TestMediateFiles checks that a session not mediating files is not
+// checked on writes, while another one still is.
+func TestMediateFiles(t *testing.T) {
+	needRoot(t)
+	if err := Active(); err != nil {
+		skip(t, err)
+	}
+	dir := t.TempDir()
+	l, err := Load(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	off, on := newSession(t, l), newSession(t, l)
+	if err := off.Mediate(false, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := on.Mediate(true, false); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []*Session{off, on} {
+		if err := s.Sync([]Rule{devNull}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	script := try + fmt.Sprintf(`try "echo > %s/f$$"`, dir)
+	_, runOff := member(t, off, script)
+	_, runOn := member(t, on, script)
+	if got := runOff(); got != "ok" {
+		t.Errorf("files not mediated: %s, want ok", got)
+	}
+	if got := runOn(); got != "fail" {
+		t.Errorf("files mediated: %s, want fail", got)
+	}
+}

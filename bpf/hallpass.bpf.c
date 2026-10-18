@@ -197,6 +197,25 @@ struct {
 	__uint(max_entries, 1 << 22);
 } events SEC(".maps");
 
+#define HP_MEDIATE_FILES 1
+#define HP_MEDIATE_NET 4
+
+/*
+ * Per-session settings, set by the supervisor. A session without an entry
+ * mediates files only, as before sessions had settings.
+ */
+struct session_cfg {
+	__u32 mediate; /* HP_MEDIATE_* */
+	__u32 pad;
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 65536);
+	__type(key, __u32);
+	__type(value, struct session_cfg);
+} sessions SEC(".maps");
+
 /* Set by the supervisor: also report allowed operations. */
 const volatile bool log_allowed = false;
 
@@ -211,6 +230,23 @@ static __always_inline __u32 session_of(struct task_struct *task)
 static __always_inline __u32 current_session(void)
 {
 	return session_of(bpf_get_current_task_btf());
+}
+
+static __always_inline __u32 mediated(__u32 session)
+{
+	struct session_cfg *c = bpf_map_lookup_elem(&sessions, &session);
+
+	return c ? c->mediate : HP_MEDIATE_FILES;
+}
+
+/* The session of the current task if it mediates what, else 0. */
+static __always_inline __u32 current_session_for(__u32 what)
+{
+	__u32 s = current_session();
+
+	if (s && !(mediated(s) & what))
+		return 0;
+	return s;
 }
 
 static __always_inline bool live(__u64 expiry, __u64 now)
@@ -424,7 +460,7 @@ static __always_inline int finish(__u32 op, int ret, const struct path *path,
 static __always_inline int check_one(__u32 op, const struct path *path, struct dentry *dentry,
 				     bool named)
 {
-	__u32 s = current_session();
+	__u32 s = current_session_for(HP_MEDIATE_FILES);
 
 	if (!s)
 		return 0;
@@ -435,7 +471,7 @@ static __always_inline int check_one(__u32 op, const struct path *path, struct d
 static __always_inline int check_two(__u32 op, const struct path *old_dir, struct dentry *old,
 				     const struct path *new_dir, struct dentry *new)
 {
-	__u32 s = current_session();
+	__u32 s = current_session_for(HP_MEDIATE_FILES);
 	int ret;
 
 	if (!s)
@@ -576,7 +612,7 @@ int BPF_PROG(hp_file_open, struct file *file, int ret)
 		return 0;
 	if (on_overlay_layer(file))
 		return 0;
-	s = current_session();
+	s = current_session_for(HP_MEDIATE_FILES);
 	if (!s)
 		return 0;
 	ret = check_proc(file->f_path.dentry, file->f_inode, s);

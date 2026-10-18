@@ -29,6 +29,7 @@ const (
 	childEnvSentinel = "_HALLPASS_CHILD"
 	childEnvFD       = "_HALLPASS_SOCK_FD"
 	childEnvUserns   = "_HALLPASS_ALLOW_USERNS"
+	childEnvMediate  = "_HALLPASS_MEDIATE"
 )
 
 // ProcSpec describes the command to start.
@@ -44,6 +45,9 @@ type ProcSpec struct {
 	// Whether new user and mount namespaces are allowed (lite mode
 	// refuses them, see seccomp.Rules).
 	AllowUserns bool
+	// Mediate is the syscall categories notified (--mediate); 0:
+	// seccomp.DefaultCategories.
+	Mediate seccomp.Category
 }
 
 // Start starts spec paused before its first exec, with the seccomp filter
@@ -78,6 +82,10 @@ func Start(spec ProcSpec) (proc *os.Process, seccompFD int, release func() error
 	if spec.AllowUserns {
 		cmd.Env = append(cmd.Env, childEnvUserns+"=1")
 	}
+	if spec.Mediate == 0 {
+		spec.Mediate = seccomp.DefaultCategories
+	}
+	cmd.Env = append(cmd.Env, childEnvMediate+"="+spec.Mediate.String())
 	if err := cmd.Start(); err != nil {
 		unix.Close(parentSock)
 		return nil, -1, nil, err
@@ -134,11 +142,16 @@ func ChildMain() {
 		fatal("child: %v", err)
 	}
 
+	cats, err := seccomp.ParseCategories(os.Getenv(childEnvMediate))
+	if err != nil || cats == 0 {
+		fatal("child: bad %s=%q", childEnvMediate, os.Getenv(childEnvMediate))
+	}
+
 	// From here on, stay on one OS thread: install the filter and exec from
 	// the same thread so the per-thread filter survives into the new image.
 	seccomp.LockThread()
 
-	listenerFD, err := seccomp.Install(seccomp.Rules(os.Getenv(childEnvUserns) == "1"))
+	listenerFD, err := seccomp.Install(seccomp.Select(seccomp.Rules(os.Getenv(childEnvUserns) == "1"), cats))
 	if err != nil {
 		fatal("child: install filter: %v", err)
 	}

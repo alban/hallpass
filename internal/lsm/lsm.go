@@ -152,7 +152,7 @@ type nodeKey struct {
 // LSM is a loaded and attached set of programs. It enforces the rules of
 // any number of sessions (see Session), each with its own members.
 type LSM struct {
-	members, protected, grants, rules, proc, events *ebpf.Map
+	members, protected, grants, rules, proc, events, cfgs *ebpf.Map
 	// links keep the programs attached; closing them detaches.
 	links []io.Closer
 	// linkFDs are the links' fds, for handing them to another process.
@@ -170,6 +170,7 @@ type LSM struct {
 	// session, for ResumeSession; see DropStale.
 	stale      map[uint32]map[nodeKey]hallpassRuleVal
 	staleProcs map[uint32]map[hallpassProcKey]hallpassProcVal
+	staleCfg   map[uint32]hallpassSessionCfg
 	reading    bool
 }
 
@@ -185,6 +186,7 @@ type Session struct {
 	inRoot    string
 
 	mu    sync.Mutex
+	cfg   hallpassSessionCfg
 	nodes map[nodeKey]hallpassRuleVal
 	procs map[hallpassProcKey]hallpassProcVal
 	// The last rules given to Sync, for re-syncing in GrantOnce.
@@ -259,6 +261,7 @@ func Load(logAllowed bool) (*LSM, error) {
 	l := newLSM()
 	m := &objs.hallpassMaps
 	l.members, l.protected, l.grants, l.rules, l.proc, l.events = m.Members, m.Protected, m.Grants, m.Rules, m.Proc, m.Events
+	l.cfgs = m.Sessions
 	m.OwnedSbs.Close()
 	progs := programsByName(&objs.hallpassPrograms)
 	for _, name := range attachOrder {
@@ -363,10 +366,20 @@ func checkLink(lk link.Link, hook string, id btf.TypeID) error {
 	return nil
 }
 
+// maps are l's maps in the order of FDs, with their types.
+func (l *LSM) maps() ([]**ebpf.Map, []ebpf.MapType) {
+	return []**ebpf.Map{&l.members, &l.protected, &l.grants, &l.rules, &l.proc, &l.events, &l.cfgs},
+		[]ebpf.MapType{ebpf.TaskStorage, ebpf.TaskStorage, ebpf.TaskStorage, ebpf.Hash, ebpf.Hash, ebpf.RingBuf, ebpf.Hash}
+}
+
 // FDs returns the fds that make up l, in the order FromFDs expects: the
 // maps, then the links. They stay owned by l.
 func (l *LSM) FDs() []int {
-	fds := []int{l.members.FD(), l.protected.FD(), l.grants.FD(), l.rules.FD(), l.proc.FD(), l.events.FD()}
+	var fds []int
+	maps, _ := l.maps()
+	for _, m := range maps {
+		fds = append(fds, (*m).FD())
+	}
 	return append(fds, l.linkFDs...)
 }
 
@@ -374,15 +387,14 @@ func (l *LSM) FDs() []int {
 // (see FDs) and takes ownership of them. It needs no privilege: updating a
 // BPF map only needs a writable fd to it.
 func FromFDs(fds []int) (*LSM, error) {
-	want := []ebpf.MapType{ebpf.TaskStorage, ebpf.TaskStorage, ebpf.TaskStorage, ebpf.Hash, ebpf.Hash, ebpf.RingBuf}
+	l := newLSM()
+	maps, want := l.maps()
 	if len(fds) != len(want)+len(attachOrder)+1 {
 		for _, fd := range fds {
 			unix.Close(fd)
 		}
 		return nil, fmt.Errorf("got %d fds, want %d", len(fds), len(want)+len(attachOrder)+1)
 	}
-	l := newLSM()
-	maps := []**ebpf.Map{&l.members, &l.protected, &l.grants, &l.rules, &l.proc, &l.events}
 	ids, hooks, err := hookIDs()
 	for i, fd := range fds {
 		if err != nil {
@@ -466,6 +478,19 @@ func (l *LSM) adopt() error {
 	if err := pit.Err(); err != nil {
 		return fmt.Errorf("read the proc rules: %w", err)
 	}
+	var id uint32
+	var cfg hallpassSessionCfg
+	sit := l.cfgs.Iterate()
+	for sit.Next(&id, &cfg) {
+		if l.staleCfg == nil {
+			l.staleCfg = map[uint32]hallpassSessionCfg{}
+		}
+		l.staleCfg[id] = cfg
+		l.nextID = max(l.nextID, id+1)
+	}
+	if err := sit.Err(); err != nil {
+		return fmt.Errorf("read the session settings: %w", err)
+	}
 	return nil
 }
 
@@ -484,7 +509,10 @@ func (l *LSM) DropStale() {
 			_ = l.proc.Delete(k)
 		}
 	}
-	l.stale, l.staleProcs = nil, nil
+	for id := range l.staleCfg {
+		_ = l.cfgs.Delete(id)
+	}
+	l.stale, l.staleProcs, l.staleCfg = nil, nil, nil
 }
 
 // Close detaches the programs: no sandbox is restricted any more.
@@ -495,9 +523,10 @@ func (l *LSM) Close() error {
 	for _, lk := range l.links {
 		lk.Close()
 	}
-	for _, m := range []*ebpf.Map{l.members, l.protected, l.grants, l.rules, l.proc, l.events} {
-		if m != nil {
-			m.Close()
+	maps, _ := l.maps()
+	for _, m := range maps {
+		if *m != nil {
+			(*m).Close()
 		}
 	}
 	l.mu.Lock()
@@ -559,6 +588,10 @@ func (l *LSM) newSession(id uint32, root int) (*Session, error) {
 		s.procs = p
 		delete(l.staleProcs, id)
 	}
+	if c, ok := l.staleCfg[id]; ok {
+		s.cfg = c
+		delete(l.staleCfg, id)
+	}
 	l.sessions[id] = s
 	l.nextID = max(l.nextID, id+1)
 	return s, nil
@@ -566,6 +599,30 @@ func (l *LSM) newSession(id uint32, root int) (*Session, error) {
 
 // ID is the session's id in the kernel.
 func (s *Session) ID() uint32 { return s.id }
+
+// Bits of session_cfg.mediate.
+const (
+	mediateFiles   = 1
+	mediateNetwork = 4
+)
+
+// Mediate sets what the programs check for the session's members: files,
+// network. Until it is called, a session mediates files only.
+func (s *Session) Mediate(files, network bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return errors.New("session closed")
+	}
+	s.cfg.Mediate = 0
+	if files {
+		s.cfg.Mediate |= mediateFiles
+	}
+	if network {
+		s.cfg.Mediate |= mediateNetwork
+	}
+	return s.l.cfgs.Update(s.id, s.cfg, ebpf.UpdateAny)
+}
 
 // Close deletes the session's rules: its remaining members, if any, may
 // write nothing.
@@ -588,6 +645,9 @@ func (s *Session) Close() error {
 		}
 	}
 	s.nodes, s.procs = nil, nil
+	if e := s.l.cfgs.Delete(s.id); e != nil && !errors.Is(e, ebpf.ErrKeyNotExist) {
+		err = e
+	}
 	s.releaseLocked()
 	return err
 }
