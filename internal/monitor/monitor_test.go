@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -308,6 +309,23 @@ func TestAskVerdict(t *testing.T) {
 	if _, err := fx.m.Apply(Decision{Verdicts: []Verdict{{req.ID, true}}}); !errors.Is(err, ErrClosed) {
 		t.Fatalf("second verdict: %v, want ErrClosed", err)
 	}
+}
+
+// TestPromptsDoNotBlockReceivers checks that requests waiting for a human
+// do not hold receivers: with more of them than receivers, a syscall the
+// rules allow is still answered.
+func TestPromptsDoNotBlockReceivers(t *testing.T) {
+	fx := setup(t, nil, false)
+	ok := filepath.Join(fx.dir, "ok")
+	if _, err := fx.m.Apply(Decision{AddRules: []rules.Rule{tree(ok, rules.Allow)}}); err != nil {
+		t.Fatal(err)
+	}
+	asked := 2 * max(4, runtime.NumCPU())
+	for i := 0; i < asked; i++ {
+		fx.f.mkdir(filepath.Join(fx.dir, "ask"+strconv.Itoa(i)))
+		fx.next(t, opened)
+	}
+	fx.f.expect(t, fx.f.mkdir(ok+"/a"), 0)
 }
 
 // TestEventsDone checks that closing EventOptions.Done ends a subscription

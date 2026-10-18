@@ -349,8 +349,14 @@ the new agent must answer them, and only knows them from the journal.
 `NOTIF_SEND` and `NOTIF_ID_VALID` work from any copy of the fd.
 
 **Receiving and waiting.** A fixed set of receivers per listener
-(`max(4, NumCPU)`) only receive; each notification is handled in its own
-goroutine. A request waiting for a human then holds a goroutine and a
+(`max(4, NumCPU)`) receive, decide and answer each notification
+themselves; only a notification that needs a human moves to its own
+goroutine. Deciding on the receiving thread keeps the ping-pong with the
+blocked thread on one CPU: the listener asks the kernel for synchronous
+wakeups (`SECCOMP_USER_NOTIF_FD_SYNC_WAKE_UP`, Linux 6.6+), and a
+goroutine per notification moved the answer to another thread, often
+another CPU. Together, they cut `rm -rf` of 20k files in lite mode from
+8.4 s to 2.95 s on Fedora. A request waiting for a human then holds a goroutine and a
 slot, not a receiver: before, each worker handled one notification at a
 time, so a few unanswered questions (or `make -j16` threads waiting on
 one coalesced question) stopped every mediated syscall of the
@@ -371,9 +377,10 @@ answer. The receiver:
    notification into the journal before the ioctl returns (no gap
    between received and journalled; a SIGKILL takes effect only after
    the copy);
-3. hands it to a new goroutine, which handles it, sends the answer and
-   clears the slot with one atomic 64-bit store of `id = 0` (offset 0,
-   aligned; the other bytes are ignored when `id` is 0).
+3. handles it (or hands it to a new goroutine if it asks a human), sends
+   the answer and clears the slot with one atomic 64-bit store of
+   `id = 0` (offset 0, aligned; the other bytes are ignored when `id`
+   is 0).
 
 A partial copy (`EFAULT`) could leave a real id with a truncated rest,
 while the kernel hands that notification to another receiver. It is

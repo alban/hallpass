@@ -48,9 +48,11 @@ type item struct {
 	why     Reason
 }
 
-// receiver receives l's notifications into journal slots and handles each
-// in its own goroutine: a request waiting for a human holds a goroutine
-// and a slot, not a receiver.
+// receiver receives l's notifications into journal slots and decides each
+// itself, so that receiving, deciding and answering stay on one thread:
+// with the kernel's synchronous wakeups, the target and the receiver then
+// ping-pong on one CPU. Only a request waiting for a human moves to its own
+// goroutine: it holds a goroutine and a slot, not a receiver.
 func (m *Monitor) receiver(l *listener) {
 	defer l.wg.Done()
 	for {
@@ -85,16 +87,27 @@ func (m *Monitor) receiver(l *listener) {
 		m.busy++
 		m.mu.Unlock()
 		l.wg.Add(1)
-		go m.handleSlot(l, n, slot)
+		m.handleSlot(l, n, slot)
 	}
 }
 
-// handleSlot handles n, received into slot, then frees the slot unless n
-// is still waiting: the monitor closed before answering it, and another
-// monitor may answer it from the journal.
+// handleSlot handles n, received into slot, and releases the slot, or
+// hands both to a goroutine if n waits for a human.
 func (m *Monitor) handleSlot(l *listener, n seccomp.Notif, slot int) {
+	if ask := m.handle(l, n); ask != nil {
+		go func() {
+			ask()
+			m.release(l, n, slot)
+		}()
+		return
+	}
+	m.release(l, n, slot)
+}
+
+// release frees n's slot unless n is still waiting: the monitor closed
+// before answering it, and another monitor may answer it from the journal.
+func (m *Monitor) release(l *listener, n seccomp.Notif, slot int) {
 	defer l.wg.Done()
-	m.handle(l, n)
 	m.mu.Lock()
 	closed := m.closed
 	m.mu.Unlock()
@@ -126,8 +139,9 @@ func (m *Monitor) replay(l *listener) {
 	}
 }
 
-// handle decides one notified syscall.
-func (m *Monitor) handle(l *listener, n seccomp.Notif) {
+// handle decides one notified syscall, or returns ask, which asks a human
+// and must run in its own goroutine.
+func (m *Monitor) handle(l *listener, n seccomp.Notif) (ask func()) {
 	sc, ok := seccomp.RuleFor(m.table, n.Nr)
 	if !ok {
 		// Not ours (the filter and the table disagree): fail closed.
@@ -255,7 +269,12 @@ func (m *Monitor) handle(l *listener, n seccomp.Notif) {
 		m.allow(l, n, sc, op, items, undecided)
 		return
 	}
+	return func() { m.ask(l, n, sc, op, items, undecided, key, unknown) }
+}
 
+// ask decides the undecided items of a syscall, opening a request for
+// each the current rules do not decide, and waiting for its verdict.
+func (m *Monitor) ask(l *listener, n seccomp.Notif, sc seccomp.Rule, op rules.Op, items []item, undecided []int, key string, unknown bool) {
 	var subject *rules.Subject
 	var once []int
 	for _, i := range undecided {
