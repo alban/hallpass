@@ -68,6 +68,13 @@ type attached struct {
 // rs, or the policy's if nil, enforced by kernel session ks too if not nil
 // (strict). The caller attaches the listeners. On an error, ks is closed.
 func newSession(id string, pid int, md metadata, p *Policy, rs []rules.Rule, ks *lsm.Session, log *slog.Logger, rec recorder) (*session, error) {
+	cats, err := md.categories()
+	if err != nil {
+		if ks != nil {
+			ks.Close()
+		}
+		return nil, fmt.Errorf("listener metadata: %w", err)
+	}
 	cfg := monitor.Config{ProcRoot: true}
 	if ks != nil {
 		cfg.Kernel = ks
@@ -79,7 +86,7 @@ func newSession(id string, pid int, md metadata, p *Policy, rs []rules.Rule, ks 
 		}
 		return nil, err
 	}
-	d := defaultsFor(p, md.Home)
+	d := defaultsFor(p, md.Home, cats)
 	if rs == nil {
 		rs = d.Rules()
 	}

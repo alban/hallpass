@@ -30,6 +30,17 @@ type metadata struct {
 	Container string `json:"container"`
 	Policy    string `json:"policy"`
 	Home      string `json:"home,omitempty"`
+	// Mediate is the categories the filter notifies (seccomp.Category
+	// String); "": seccomp.DefaultCategories.
+	Mediate string `json:"mediate,omitempty"`
+}
+
+// categories returns the categories md's filter notifies.
+func (md metadata) categories() (seccomp.Category, error) {
+	if md.Mediate == "" {
+		return seccomp.DefaultCategories, nil
+	}
+	return seccomp.ParseCategories(md.Mediate)
 }
 
 // plugin is the NRI plugin: it adds the hallpass seccomp profile to the
@@ -79,8 +90,13 @@ func (p *plugin) adjust(pod *api.PodSandbox, ctr *api.Container) (*api.Container
 		p.log.Debug("namespace not selected, ignoring annotation", "namespace", pod.GetNamespace(), "pod", pod.GetName())
 		return nil, nil
 	}
-	if _, err := p.cluster.Policy(name); err != nil {
+	pol, err := p.cluster.Policy(name)
+	if err != nil {
 		return nil, fmt.Errorf("hallpass: %w", err)
+	}
+	cats := pol.Mediate
+	if cats == 0 {
+		cats = seccomp.DefaultCategories
 	}
 	md, err := json.Marshal(metadata{
 		Namespace: pod.GetNamespace(),
@@ -89,11 +105,12 @@ func (p *plugin) adjust(pod *api.PodSandbox, ctr *api.Container) (*api.Container
 		Container: ctr.GetName(),
 		Policy:    name,
 		Home:      envHome(ctr.GetEnv()),
+		Mediate:   cats.String(),
 	})
 	if err != nil {
 		return nil, err
 	}
-	prof, err := ociseccomp.Profile(toOCISeccomp(ctr.GetLinux().GetSeccompPolicy()), seccomp.Select(seccomp.Rules(false), seccomp.DefaultCategories), ociseccomp.Options{
+	prof, err := ociseccomp.Profile(toOCISeccomp(ctr.GetLinux().GetSeccompPolicy()), seccomp.Select(seccomp.Rules(false), cats), ociseccomp.Options{
 		ListenerPath:     p.listenerPath,
 		ListenerMetadata: string(md),
 		WaitKillableRecv: p.waitKillable,

@@ -230,6 +230,16 @@ func (a *agent) attach(st *specs.ContainerProcessState, fd int) error {
 			a.mu.Unlock()
 			return fmt.Errorf("strict mode: %w", err)
 		}
+		// The kernel checks what the filter notifies.
+		cats, err := md.categories()
+		if err == nil {
+			err = ks.Mediate(cats&seccomp.Files != 0, cats&seccomp.Network != 0)
+		}
+		if err != nil {
+			ks.Close()
+			a.mu.Unlock()
+			return fmt.Errorf("strict mode: %w", err)
+		}
 	}
 	s, err = newSession(id, st.Pid, md, pol, nil, ks, a.log, a.rec)
 	if err != nil {

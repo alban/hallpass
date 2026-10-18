@@ -20,6 +20,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/alban/hallpass/internal/rules"
+	"github.com/alban/hallpass/internal/seccomp"
 	"github.com/alban/hallpass/internal/sessionapi"
 )
 
@@ -39,6 +40,7 @@ func TestParsePolicy(t *testing.T) {
 		Allow:      []string{"/workspace", "/tmp", "/home/agent/.cache"},
 		Deny:       []string{"/var/run/secrets"},
 		AskTimeout: 30 * time.Second,
+		Mediate:    seccomp.DefaultCategories,
 	}
 	if !reflect.DeepEqual(p, want) {
 		t.Errorf("got %+v, want %+v", p, want)
@@ -49,12 +51,21 @@ func TestParsePolicy(t *testing.T) {
 		t.Errorf("defaults: %+v, %v", p, err)
 	}
 
+	p, err = parsePolicy("net", PolicySpec{Mediate: []string{"files", "exec", "network"}, AllowNetwork: []string{"all"}, DenyNetwork: []string{"tcp:169.254.169.254"}})
+	if err != nil || p.Mediate != seccomp.AllCategories || len(p.AllowNetwork) != 1 || !p.AllowNetwork[0].AnyNet || p.DenyNetwork[0].NetString() != "tcp:169.254.169.254" {
+		t.Errorf("network: %+v, %v", p, err)
+	}
+
 	for _, bad := range []PolicySpec{
 		{Allow: []string{"workspace/**"}},
 		{Allow: []string{"/work*/x"}},
 		{Deny: []string{"/a/**/b"}},
 		{AskTimeout: "soon"},
 		{AskTimeout: "-1s"},
+		{Mediate: []string{"dns"}},
+		{Mediate: []string{}},
+		{AllowNetwork: []string{"all"}},
+		{Mediate: []string{"network"}, DenyNetwork: []string{"tcp:nowhere"}},
 	} {
 		if _, err := parsePolicy("bad", bad); err == nil {
 			t.Errorf("%+v: no error", bad)
@@ -64,9 +75,13 @@ func TestParsePolicy(t *testing.T) {
 
 func TestDefaultsFor(t *testing.T) {
 	p, _ := parsePolicy("agent", PolicySpec{Allow: []string{"/workspace/**"}, Deny: []string{"/workspace/.git/**"}})
-	rs := defaultsFor(p, "/home/agent").Rules()
+	rs := defaultsFor(p, "/home/agent", seccomp.DefaultCategories).Rules()
 	var allow, deny []string
 	for _, r := range rs {
+		if r.Object.Path == nil {
+			t.Errorf("network rule without network mediated: %+v", r)
+			continue
+		}
 		if r.Verdict == rules.Allow {
 			allow = append(allow, r.Object.Path.Path)
 		} else {
@@ -80,6 +95,17 @@ func TestDefaultsFor(t *testing.T) {
 	}
 	if !slices.Equal(deny, []string{"/workspace/.git"}) {
 		t.Errorf("deny: %v", deny)
+	}
+
+	p, _ = parsePolicy("net", PolicySpec{Mediate: []string{"files", "network"}, AllowNetwork: []string{"unix:@x"}, DenyNetwork: []string{"tcp:*:22"}})
+	var nets []string
+	for _, r := range defaultsFor(p, "", p.Mediate).Rules() {
+		if r.Object.Path == nil {
+			nets = append(nets, r.Verdict.String()+" "+r.Object.NetString())
+		}
+	}
+	if want := []string{"allow own-listeners", "deny tcp:*:22", "allow unix:@x"}; !slices.Equal(nets, want) {
+		t.Errorf("network rules %q, want %q", nets, want)
 	}
 }
 
@@ -152,7 +178,7 @@ func TestAdjust(t *testing.T) {
 	if err := json.Unmarshal([]byte(s.ListenerMetadata), &md); err != nil {
 		t.Fatal(err)
 	}
-	if want := (metadata{Namespace: "agents", Pod: "p", PodUID: "uid", Container: "c", Policy: "agent", Home: "/home/agent"}); md != want {
+	if want := (metadata{Namespace: "agents", Pod: "p", PodUID: "uid", Container: "c", Policy: "agent", Home: "/home/agent", Mediate: "files,exec"}); md != want {
 		t.Errorf("metadata %+v, want %+v", md, want)
 	}
 	notify := false
@@ -160,9 +186,27 @@ func TestAdjust(t *testing.T) {
 		if sc.Action == string(specs.ActNotify) && slices.Contains(sc.Names, "openat") {
 			notify = true
 		}
+		if slices.Contains(sc.Names, "connect") {
+			t.Errorf("connect in the profile without network mediated: %+v", sc)
+		}
 	}
 	if !notify {
 		t.Error("openat is not notified")
+	}
+
+	// A policy mediating network.
+	p.cluster.(fakeCluster).policies["net"] = &Policy{Name: "net", Mediate: seccomp.AllCategories}
+	if adj, err = p.adjust(pod("agents", "net"), ctr); err != nil {
+		t.Fatal(err)
+	}
+	s = adj.GetLinux().GetSeccompPolicy()
+	if err := json.Unmarshal([]byte(s.ListenerMetadata), &md); err != nil || md.Mediate != "files,exec,network" {
+		t.Errorf("metadata %+v, %v", md, err)
+	}
+	if !slices.ContainsFunc(s.Syscalls, func(sc *api.LinuxSyscall) bool {
+		return sc.Action == string(specs.ActNotify) && slices.Contains(sc.Names, "connect")
+	}) {
+		t.Error("connect is not notified")
 	}
 
 	// The container's own profile is kept.
