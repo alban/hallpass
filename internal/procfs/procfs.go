@@ -132,7 +132,7 @@ func resolve(pid uint32, root string, dirfd int64, raw string, followLast, inRoo
 		return Target{}, err
 	}
 	if filepath.IsAbs(raw) && !inRoot {
-		return r.walk(raw, followLast)
+		return r.walk(r.floor, raw, followLast)
 	}
 	var base string
 	if dirfd == atFDCWD {
@@ -161,9 +161,12 @@ func resolve(pid uint32, root string, dirfd int64, raw string, followLast, inRoo
 	}
 	if inRoot {
 		r.floor, r.inRoot = dir, true
-		return r.walk(raw, followLast)
+		return r.walk(dir, raw, followLast)
 	}
-	return r.walk(dir+"/"+raw, followLast)
+	// dir names the directory itself (sameFile): it is d_path, without
+	// symlinks, so the walk starts there instead of resolving it again,
+	// one lstat per component.
+	return r.walk(dir, raw, followLast)
 }
 
 // sameFile reports whether paths a and b are the same file.
@@ -336,12 +339,15 @@ func (r *rootView) rewriteSelf(p string) string {
 	return p
 }
 
-// walk resolves start, a path below r.floor, one component at a time.
-// Absolute symlinks restart from r.floor, and ".." stops at it, as for the
-// target.
-func (r *rootView) walk(start string, followLast bool) (Target, error) {
-	comps := split(start)
-	cur := r.floor
+// walk resolves path from from, a directory below r.floor without symlinks
+// in its name, one component at a time. Absolute paths and symlinks
+// restart from r.floor, and ".." stops at it, as for the target.
+func (r *rootView) walk(from, path string, followLast bool) (Target, error) {
+	comps := split(path)
+	cur := from
+	if filepath.IsAbs(path) {
+		cur = r.floor
+	}
 	links := 0
 	for i := 0; i < len(comps); i++ {
 		last := i == len(comps)-1

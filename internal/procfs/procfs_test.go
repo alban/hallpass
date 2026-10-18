@@ -282,6 +282,84 @@ func TestResolveRoot(t *testing.T) {
 // TestResolveInRoot checks ResolveInRoot against the kernel's own
 // openat2(RESOLVE_IN_ROOT), from "/" and from a root directory: the kernel
 // uses only the dirfd as the root, so the inode must be the same.
+// TestResolveDirFD checks paths relative to a dirfd against the kernel's
+// openat, the dirfd being opened through a symlink: ".." and relative
+// symlinks climb from the directory's real parent.
+func TestResolveDirFD(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []string{"real/sub", "secret"} {
+		if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, f := range []string{"f", "real/f", "secret/f"} {
+		if err := os.WriteFile(filepath.Join(root, f), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	links := map[string]string{
+		"link":         "real",
+		"real/sub/rel": "../../secret",
+		"real/sub/abs": root + "/secret",
+		"real/sub/up":  "../../link",
+	}
+	for l, dst := range links {
+		if err := os.Symlink(dst, filepath.Join(root, l)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dir, err := os.Open(filepath.Join(root, "link/sub"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dir.Close()
+	dirfd := int(dir.Fd())
+	pid := uint32(os.Getpid())
+	for _, tc := range []struct {
+		raw    string
+		follow bool
+		want   string // below root
+	}{
+		{".", true, "/real/sub"},
+		{"..", true, "/real"},
+		{"../f", true, "/real/f"},
+		{"../../secret/f", true, "/secret/f"},
+		{"rel/f", true, "/secret/f"},
+		{"rel", false, "/real/sub/rel"},
+		{"abs/f", true, "/secret/f"},
+		{"rel/../f", true, "/f"},
+		{"up/f", true, "/real/f"},
+	} {
+		want := root + tc.want
+		got, err := Resolve(pid, "/", int64(dirfd), tc.raw, tc.follow)
+		if err != nil {
+			t.Errorf("Resolve(%s): %v", tc.raw, err)
+		} else if got.Path != want {
+			t.Errorf("Resolve(%s, follow=%v) = %s, want %s", tc.raw, tc.follow, got.Path, want)
+		}
+		flags := unix.O_PATH
+		if !tc.follow {
+			flags |= unix.O_NOFOLLOW
+		}
+		fd, err := unix.Openat(dirfd, tc.raw, flags, 0)
+		if err != nil {
+			t.Errorf("kernel: openat(%s): %v", tc.raw, err)
+			continue
+		}
+		var ks, ws unix.Stat_t
+		if err := unix.Fstat(fd, &ks); err != nil {
+			t.Fatal(err)
+		}
+		unix.Close(fd)
+		if err := unix.Lstat(want, &ws); err != nil || ks.Ino != ws.Ino || ks.Dev != ws.Dev {
+			t.Errorf("kernel: openat(%s) is not %s", tc.raw, want)
+		}
+	}
+}
+
 func TestResolveInRoot(t *testing.T) {
 	outside, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
