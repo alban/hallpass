@@ -23,7 +23,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Kernel is strict mode's BPF-LSM enforcement (*lsm.LSM).
+// Kernel is strict mode's BPF-LSM enforcement (*lsm.Session).
 type Kernel interface {
 	AddMember(pid int) error
 	Sync(rules []lsm.Rule, procs []lsm.ProcRule) error

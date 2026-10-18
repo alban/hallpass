@@ -77,7 +77,7 @@ type Kernel interface {
 }
 
 type Notifier interface {
-	Recv() (seccomp.Notif, error)
+	Recv(slot []byte) (seccomp.Notif, error)
 	IDValid(id uint64) bool
 	Continue(id uint64) error
 	Deny(id uint64, errno int32) error
@@ -88,18 +88,31 @@ BPF is loaded and attached once per process, whatever the number of
 monitors: N copies would run N programs on every LSM hook and on
 `sys_exit`, for every task on the host (one `sys_exit` attachment costs
 ~200 ns per syscall even with an empty program). Each monitor gets a
-domain of the shared programs:
+session of the shared programs, an `lsm.Session`:
 
 ```go
-l, _ := lsm.Load(...)                                    // once
-a, _ := monitor.New(monitor.Config{Kernel: l.Domain()}) // container A
-b, _ := monitor.New(monitor.Config{Kernel: l.Domain()}) // container B
+l, _ := lsm.Load(...)                 // once
+a, _ := l.NewSession(rootA)           // container A
+b, _ := l.NewSession(rootB)           // container B
+ma, _ := monitor.New(monitor.Config{Kernel: a})
 ```
 
-`Domain` allocates a u32 id: `AddMember` tags tasks with it, rule maps are
-keyed by it, and the one ringbuf reader dispatches events by it. Grants are
-per thread and need no domain. Until domains are implemented, `lsm` allows
-one, which is all hallpass needs.
+`NewSession` allocates a non-zero u32 id. `AddMember` stores it in the
+task's `members` storage, copied on fork. Rule and `/proc` rule keys carry
+it, and the superblocks members mount are recorded with it, so a member is
+only checked against its session's rules and may only write the `/proc`
+files of its own session's processes. The one ring buffer reader
+dispatches events by it.
+Grants are per thread and need no id. A session's paths are those seen by
+its root process (`root`, 0 for this process), which can be in another
+mount namespace and chroot.
+
+The CLI uses one session in its own private instance. The node agent loads
+the programs once and makes one session per container. After a restart it
+rebuilds the `LSM` from the fds in its fd-store (`FromFDs`, which reads the
+rules left in the maps), `ResumeSession`s each saved id (the members keep
+their marks in task storage), and `DropStale` deletes the rules of the
+sessions it did not resume.
 
 ## Rule model
 
