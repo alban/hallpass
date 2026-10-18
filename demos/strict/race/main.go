@@ -11,12 +11,15 @@
 // When hallpass reads the first and the kernel the second, the write lands in
 // ~/.bashrc. The flip is one atomic store, so every path read is whole.
 // Strict mode checks the file the kernel opens: the race never wins.
+//
+// race NAME races ./NAME and ../NAME instead (the kind e2e test).
 package main
 
 import (
 	"fmt"
 	"os"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -25,16 +28,24 @@ import (
 )
 
 func main() {
-	var bashrc unix.Stat_t
-	if err := unix.Stat("../.bashrc", &bashrc); err != nil {
+	name := ".bashrc"
+	if len(os.Args) > 1 {
+		name = os.Args[1]
+	}
+	var target unix.Stat_t
+	if err := unix.Stat("../"+name, &target); err != nil {
 		fmt.Fprintln(os.Stderr, "race:", err)
 		os.Exit(2)
 	}
 
 	// The path, in words so that its first four bytes flip atomically.
-	var path [4]uint32
-	b := (*[16]byte)(unsafe.Pointer(&path))
-	copy(b[:], ".//.bashrc\x00")
+	var path [64]uint32
+	b := (*[256]byte)(unsafe.Pointer(&path))
+	if len(name) > len(b)-4 || strings.Contains(name, "\x00") {
+		fmt.Fprintln(os.Stderr, "race: bad name")
+		os.Exit(2)
+	}
+	copy(b[:], ".//"+name+"\x00")
 	inside := atomic.LoadUint32(&path[0])
 	b[1] = '.'
 	outside := atomic.LoadUint32(&path[0])
@@ -60,11 +71,11 @@ func main() {
 		}
 		fd := int(r)
 		var st unix.Stat_t
-		if unix.Fstat(fd, &st) == nil && st.Dev == bashrc.Dev && st.Ino == bashrc.Ino {
+		if unix.Fstat(fd, &st) == nil && st.Dev == target.Dev && st.Ino == target.Ino {
 			unix.Write(fd, []byte("# raced past hallpass\n"))
 			unix.Close(fd)
 			done.Store(true)
-			fmt.Printf("escaped after %d tries: wrote to ~/.bashrc\n", tries)
+			fmt.Printf("escaped after %d tries: wrote to ../%s\n", tries, name)
 			return
 		}
 		unix.Close(fd)

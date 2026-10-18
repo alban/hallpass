@@ -1,0 +1,44 @@
+# Copyright The hallpass Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# The race test (test/kind/e2e.sh): race (demos/strict/race), copied into
+# /etc/ws, flips one byte of the path it opens, ".//hostname" (allowed) or
+# "../hostname" (/etc/hostname, denied). Lite mode checks the path before
+# the kernel reads it again, so the race can win; strict mode checks the
+# file the kernel opens, so it must not. The pod runs it once, and the test
+# again with kubectl exec.
+apiVersion: hallpass.io/v1alpha1
+kind: HallpassPolicy
+metadata:
+  name: e2e-race
+spec:
+  allow: [/etc/ws/**]
+  ask: false
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: race
+  namespace: hallpass-e2e
+  annotations:
+    hallpass.io/policy: e2e-race
+spec:
+  restartPolicy: Never
+  terminationGracePeriodSeconds: 1
+  containers:
+    - name: agent
+      image: BUSYBOX
+      command:
+        - sh
+        - -c
+        - |
+          until [ -x /etc/ws/race ]; do sleep 1; done
+          cd /etc/ws && ./race hostname
+          echo "race-exit=$?"
+          exec sleep 3600
+      volumeMounts:
+        - name: ws
+          mountPath: /etc/ws
+  volumes:
+    - name: ws
+      emptyDir: {}

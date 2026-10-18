@@ -14,7 +14,9 @@
 # not select must run unmediated. Then (without E2E_ANSWER) it restarts the
 # agent while a request is pending (test/kind/e2e-restart.yaml): the new
 # agent must get the request, and the rules granted before, from the
-# fd-store.
+# fd-store. Also, a pod races its path checks (test/kind/e2e-race.yaml), in
+# its main process and through kubectl exec: the race must never win in
+# strict mode; in lite mode the result is only logged.
 #
 # Needs docker, kind, kubectl and go; the node pulls busybox from Docker Hub.
 #
@@ -32,8 +34,10 @@
 #   HALLPASS_NODE_ARCHIVE  hallpass-node:e2e image archive to load instead of
 #                    building it (docker save), and
 #   HALLPASS_NODE_CLIENT   hallpass-node binary to use instead of building
-#                    it: neither docker nor go is needed then (e.g. on a test
-#                    VM, see docs/devel/kubernetes.md)
+#                    it, and
+#   HALLPASS_RACE    race binary (demos/strict/race) to use instead of
+#                    building it: neither docker nor go is needed then (e.g.
+#                    on a test VM, see docs/devel/kubernetes.md)
 
 set -euo pipefail
 
@@ -46,6 +50,7 @@ PORT=${HALLPASS_E2E_PORT:-17323}
 KUBECTL=(kubectl --context "kind-$CLUSTER")
 WORK=$(mktemp -d "${HALLPASS_E2E_WORK:-$PWD}/.e2e-work.XXXXXX")
 CLIENT=${HALLPASS_NODE_CLIENT:-$WORK/hallpass-node}
+RACE=${HALLPASS_RACE:-$WORK/race}
 RUNTIME=docker
 [ "${KIND_EXPERIMENTAL_PROVIDER:-}" = podman ] && RUNTIME=podman
 ADDR=127.0.0.1:$PORT
@@ -64,6 +69,7 @@ cleanup() {
 	[ -n "$pf" ] && kill "$pf" 2>/dev/null || true
 	"${KUBECTL[@]}" delete --ignore-not-found --wait=false -f "$WORK/e2e.yaml" >/dev/null 2>&1 || true
 	"${KUBECTL[@]}" delete --ignore-not-found --wait=false -f "$WORK/e2e-restart.yaml" >/dev/null 2>&1 || true
+	"${KUBECTL[@]}" delete --ignore-not-found --wait=false -f "$WORK/e2e-race.yaml" >/dev/null 2>&1 || true
 	if [ "$created" = 1 ] && [ "${KEEP_CLUSTER:-}" != 1 ]; then
 		kind delete cluster --name "$CLUSTER"
 	fi
@@ -108,6 +114,7 @@ else
 	kind load docker-image --name "$CLUSTER" "$IMAGE"
 fi
 [ -n "${HALLPASS_NODE_CLIENT:-}" ] || CGO_ENABLED=0 go build -o "$CLIENT" ./cmd/hallpass-node
+[ -n "${HALLPASS_RACE:-}" ] || CGO_ENABLED=0 go build -o "$RACE" ./demos/strict/race
 
 log "deploying hallpass-node"
 "${KUBECTL[@]}" apply -k test/kind
@@ -202,6 +209,27 @@ if grep -Eq 'msg="(session started|mediating container)".*pod=(plain|unselected)
 fi
 no_session() { ! "$CLIENT" sessions --addr "$ADDR" | grep -q hallpass-e2e/mediated; }
 wait_for 30 no_session || fail "the mediated pod's session did not end"
+
+log "racing the path checks"
+sed "s|BUSYBOX|$BUSYBOX|" test/kind/e2e-race.yaml >"$WORK/e2e-race.yaml"
+"${KUBECTL[@]}" delete --ignore-not-found --wait=true -f "$WORK/e2e-race.yaml" >/dev/null
+"${KUBECTL[@]}" apply -f "$WORK/e2e-race.yaml"
+"${KUBECTL[@]}" -n hallpass-e2e wait pod race --for=condition=Ready --timeout=120s >/dev/null ||
+	fail "pod hallpass-e2e/race is not running"
+# Written by a mediated cat, in /etc/ws: allowed.
+"${KUBECTL[@]}" -n hallpass-e2e exec -i race -- sh -c 'cat > /etc/ws/race && chmod +x /etc/ws/race' <"$RACE" ||
+	fail "cannot copy race into the pod"
+raced() { "${KUBECTL[@]}" -n hallpass-e2e logs race | grep -q '^race-exit='; }
+wait_for 60 raced || fail "the race pod did not race"
+pod_race=$("${KUBECTL[@]}" -n hallpass-e2e logs race | grep -E '^(no escape|escaped)')
+exec_race=$("${KUBECTL[@]}" -n hallpass-e2e exec race -- sh -c 'cd /etc/ws && ./race hostname' || true)
+log "race in the pod: $pod_race; through kubectl exec: $exec_race"
+if [ "${E2E_STRICT:-}" = 1 ]; then
+	for r in "$pod_race" "$exec_race"; do
+		grep -q '^no escape in [0-9]* tries$' <<<"$r" || fail "strict mode: the race won: $r"
+	done
+fi
+"${KUBECTL[@]}" delete --wait=false -f "$WORK/e2e-race.yaml" >/dev/null
 
 if [ -z "${E2E_ANSWER:-}" ]; then
 	log "restarting the agent with a request pending"
