@@ -52,6 +52,8 @@ func goHelper(mode string) int {
 	switch mode {
 	case "noop":
 		return 0
+	case "openat":
+		return openatHelper()
 	case "spawn":
 		// Many goroutines exec'ing at once, while others keep the
 		// scheduler preempting.
