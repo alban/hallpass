@@ -7,6 +7,7 @@
 package rules
 
 import (
+	"net/netip"
 	"path/filepath"
 	"strings"
 	"time"
@@ -24,8 +25,12 @@ const (
 	OpLink   // both objects: source and new name
 	OpRename // both objects: old and new name
 	OpTruncate
+	OpConnect // connect, and sendmsg/sendto with MSG_FASTOPEN
+	OpSend    // sendto, sendmsg, sendmmsg with a destination address
 
-	OpAll = OpTruncate<<1 - 1
+	OpFiles = OpTruncate<<1 - 1
+	OpNet   = OpConnect | OpSend
+	OpAll   = OpFiles | OpNet
 )
 
 // String names op for people, the way prompts show it: "write", "create
@@ -49,6 +54,10 @@ func (op Op) String() string {
 		return "rename"
 	case op&OpTruncate != 0:
 		return "truncate"
+	case op&OpConnect != 0:
+		return "connect"
+	case op&OpSend != 0:
+		return "send"
 	}
 	return "?"
 }
@@ -57,8 +66,32 @@ func (op Op) String() string {
 type Object struct {
 	Path *PathObject
 	Proc *ProcObject
+	Inet *InetObject
+	Unix *UnixObject
 	// Unknown is set in lite mode when the path could not be read.
 	Unknown error
+}
+
+// IsNet reports whether o is a network destination.
+func (o Object) IsNet() bool { return o.Inet != nil || o.Unix != nil }
+
+// InetObject is an IPv4 or IPv6 destination.
+type InetObject struct {
+	Proto uint16         // IP protocol number of the socket: 6 tcp, 17 udp...
+	Addr  netip.AddrPort // IPv4-mapped IPv6 addresses are unmapped
+	// OwnListener: the destination is on loopback and its listener was
+	// started inside the sandbox.
+	OwnListener bool
+}
+
+// UnixObject is a unix socket destination, bound to a path or an abstract
+// name.
+type UnixObject struct {
+	Path        string // absolute and symlink-resolved; empty for an abstract name
+	Abstract    bool
+	Name        string // abstract name, without the leading NUL
+	Type        int    // unix.SOCK_STREAM, SOCK_DGRAM, SOCK_SEQPACKET; display only
+	OwnListener bool   // the peer socket was created inside the sandbox
 }
 
 // PathObject is a file.
@@ -134,7 +167,36 @@ type SubjectMatch struct{}
 type ObjectMatch struct {
 	Path    *PathMatch
 	Proc    *ProcMatch
+	Inet    *InetMatch
+	Unix    *UnixMatch
 	Unknown bool // all unreadable paths (lite)
+	// OwnListener: loopback or unix destinations whose listener was
+	// started inside the sandbox.
+	OwnListener bool
+	// AnyNet: every network destination, unix sockets included.
+	AnyNet bool
+}
+
+// InetMatch is a set of IPv4 or IPv6 destinations.
+type InetMatch struct {
+	Proto  uint16       // 0: any protocol
+	Prefix netip.Prefix // invalid (zero): any address of any family
+	// PortLo..PortHi, inclusive; both 0: any port.
+	PortLo, PortHi uint16
+}
+
+// UnixMatch is a unix socket path (with Prefix, a tree), or an abstract
+// name (with Prefix, every name starting with it).
+type UnixMatch struct {
+	Path     string // absolute and clean, when not Abstract
+	Abstract bool
+	Name     string
+	Prefix   bool
+}
+
+// IsNet reports whether m selects network destinations.
+func (m ObjectMatch) IsNet() bool {
+	return m.Inet != nil || m.Unix != nil || m.OwnListener || m.AnyNet
 }
 
 // PathMatch is a path, or with Tree a path and everything below it.
@@ -200,6 +262,67 @@ func (m ObjectMatch) match(obj Object) (depth int, ok bool) {
 		}
 	case obj.Unknown != nil && m.Unknown:
 		return 0, true
+	case obj.IsNet() && m.AnyNet:
+		return 0, true
+	case obj.IsNet() && m.OwnListener:
+		if (obj.Inet != nil && obj.Inet.OwnListener) || (obj.Unix != nil && obj.Unix.OwnListener) {
+			return ownListenerDepth, true
+		}
+	case obj.Inet != nil && m.Inet != nil:
+		return m.Inet.match(obj.Inet)
+	case obj.Unix != nil && m.Unix != nil:
+		return m.Unix.match(obj.Unix)
+	}
+	return 0, false
+}
+
+// ownListenerDepth is deeper than any address rule: an Ask on an address
+// does not override it, a Deny still does.
+const ownListenerDepth = 1 << 20
+
+func (m *InetMatch) match(o *InetObject) (int, bool) {
+	if m.Proto != 0 && m.Proto != o.Proto {
+		return 0, false
+	}
+	if m.PortLo != 0 || m.PortHi != 0 {
+		if p := o.Addr.Port(); p < m.PortLo || p > m.PortHi {
+			return 0, false
+		}
+	}
+	d := 1
+	if m.Prefix.IsValid() {
+		a := o.Addr.Addr().Unmap()
+		if !m.Prefix.Contains(a) {
+			return 0, false
+		}
+		bits := m.Prefix.Bits()
+		if m.Prefix.Addr().Is4() {
+			bits += 96
+		}
+		d += 4 * (bits + 1)
+	}
+	if m.PortLo != 0 || m.PortHi != 0 {
+		d += 2
+	}
+	if m.Proto != 0 {
+		d++
+	}
+	return d, true
+}
+
+func (m *UnixMatch) match(o *UnixObject) (int, bool) {
+	if m.Abstract != o.Abstract {
+		return 0, false
+	}
+	if m.Abstract {
+		if o.Name == m.Name || (m.Prefix && strings.HasPrefix(o.Name, m.Name)) {
+			return len(m.Name) + 1, true
+		}
+		return 0, false
+	}
+	p := filepath.Clean(o.Path)
+	if p == m.Path || (m.Prefix && Under(p, m.Path)) {
+		return len(m.Path), true
 	}
 	return 0, false
 }

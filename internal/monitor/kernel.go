@@ -12,9 +12,10 @@ import (
 )
 
 // toLSM translates r for the kernel. The BPF programs have no operations,
-// no "ask" and see no unreadable paths.
+// no "ask" and see no unreadable paths: a file rule must cover every file
+// op.
 func toLSM(r rules.Rule) (*lsm.Rule, *lsm.ProcRule, error) {
-	if r.Ops != rules.OpAll || r.Verdict == rules.Ask || r.Object.Unknown {
+	if r.Verdict == rules.Ask || r.Object.Unknown || r.Object.IsNet() || r.Ops&rules.OpFiles != rules.OpFiles {
 		return nil, nil, fmt.Errorf("%w: %+v", ErrUnsupported, r)
 	}
 	deny := r.Verdict == rules.Deny

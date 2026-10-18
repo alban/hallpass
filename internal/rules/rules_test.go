@@ -119,6 +119,7 @@ func TestOpString(t *testing.T) {
 	for op, want := range map[Op]string{
 		OpWrite | OpCreate: "write", OpCreate: "create", OpMkdir: "create directory",
 		OpSymlink: "create symlink", OpDelete: "delete", OpLink: "link", OpRename: "rename", OpTruncate: "truncate",
+		OpConnect: "connect", OpSend: "send",
 	} {
 		if got := op.String(); got != want {
 			t.Errorf("%b: %q, want %q", op, got, want)

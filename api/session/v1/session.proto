@@ -128,7 +128,26 @@ message Object {
     PathObject path = 1;
     ProcObject proc = 2;
     string unknown = 3; // why the path could not be read
+    InetObject inet = 4;
+    UnixObject unix = 5;
   }
+}
+
+// An IPv4 or IPv6 destination; IPv4-mapped addresses are unmapped.
+message InetObject {
+  uint32 proto = 1; // IP protocol number: 6 tcp, 17 udp...
+  string addr = 2;  // e.g. "1.2.3.4", "2001:db8::1"
+  uint32 port = 3;
+  bool own_listener = 4; // loopback listener started inside the sandbox
+}
+
+// A unix socket destination: a path, or an abstract name.
+message UnixObject {
+  string path = 1;
+  bool abstract = 2;
+  string name = 3;  // abstract name, without the leading NUL
+  int32 type = 4;   // SOCK_STREAM, SOCK_DGRAM, SOCK_SEQPACKET
+  bool own_listener = 5;
 }
 
 message PathObject {
@@ -237,7 +256,25 @@ message ObjectMatch {
     PathMatch path = 1;
     ProcMatch proc = 2;
     bool unknown = 3;
+    InetMatch inet = 4;
+    UnixMatch unix = 5;
+    bool own_listener = 6; // loopback/unix listeners started inside the sandbox
+    bool any_net = 7;      // every network destination, unix included
   }
+}
+
+message InetMatch {
+  uint32 proto = 1;  // 0: any
+  string prefix = 2; // e.g. "10.0.0.0/8"; empty: any address, any family
+  uint32 port_lo = 3; // both 0: any port
+  uint32 port_hi = 4;
+}
+
+message UnixMatch {
+  string path = 1;
+  bool abstract = 2;
+  string name = 3;
+  bool prefix = 4; // a tree for a path, a name prefix for an abstract name
 }
 
 message PathMatch {

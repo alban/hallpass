@@ -5,6 +5,8 @@ package sessionapi
 
 import (
 	"errors"
+	"fmt"
+	"net/netip"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -38,6 +40,16 @@ func toPBObject(o rules.Object) *pb.Object {
 		return &pb.Object{Kind: &pb.Object_Proc{Proc: &pb.ProcObject{Name: o.Proc.Name, Target: toPBSubject(o.Proc.Target)}}}
 	case o.Unknown != nil:
 		return &pb.Object{Kind: &pb.Object_Unknown{Unknown: o.Unknown.Error()}}
+	case o.Inet != nil:
+		return &pb.Object{Kind: &pb.Object_Inet{Inet: &pb.InetObject{
+			Proto: uint32(o.Inet.Proto), Addr: o.Inet.Addr.Addr().String(), Port: uint32(o.Inet.Addr.Port()),
+			OwnListener: o.Inet.OwnListener,
+		}}}
+	case o.Unix != nil:
+		return &pb.Object{Kind: &pb.Object_Unix{Unix: &pb.UnixObject{
+			Path: o.Unix.Path, Abstract: o.Unix.Abstract, Name: o.Unix.Name, Type: int32(o.Unix.Type),
+			OwnListener: o.Unix.OwnListener,
+		}}}
 	}
 	return &pb.Object{}
 }
@@ -92,6 +104,20 @@ func toPBRule(r rules.Rule) *pb.Rule {
 		out.Object.Kind = &pb.ObjectMatch_Proc{Proc: &pb.ProcMatch{Name: o.Proc.Name, Comm: o.Proc.Comm}}
 	case o.Unknown:
 		out.Object.Kind = &pb.ObjectMatch_Unknown{Unknown: true}
+	case o.Inet != nil:
+		m := &pb.InetMatch{Proto: uint32(o.Inet.Proto), PortLo: uint32(o.Inet.PortLo), PortHi: uint32(o.Inet.PortHi)}
+		if o.Inet.Prefix.IsValid() {
+			m.Prefix = o.Inet.Prefix.String()
+		}
+		out.Object.Kind = &pb.ObjectMatch_Inet{Inet: m}
+	case o.Unix != nil:
+		out.Object.Kind = &pb.ObjectMatch_Unix{Unix: &pb.UnixMatch{
+			Path: o.Unix.Path, Abstract: o.Unix.Abstract, Name: o.Unix.Name, Prefix: o.Unix.Prefix,
+		}}
+	case o.OwnListener:
+		out.Object.Kind = &pb.ObjectMatch_OwnListener{OwnListener: true}
+	case o.AnyNet:
+		out.Object.Kind = &pb.ObjectMatch_AnyNet{AnyNet: true}
 	}
 	if !r.Expires.IsZero() {
 		out.Expires = timestamppb.New(r.Expires)
@@ -116,6 +142,27 @@ func fromPBRule(r *pb.Rule) (rules.Rule, error) {
 		out.Object.Proc = &rules.ProcMatch{Name: k.Proc.GetName(), Comm: k.Proc.GetComm()}
 	case *pb.ObjectMatch_Unknown:
 		out.Object.Unknown = k.Unknown
+	case *pb.ObjectMatch_Inet:
+		i := k.Inet
+		if i.GetProto() > 0xffff || i.GetPortLo() > 0xffff || i.GetPortHi() > 0xffff {
+			return out, errors.New("inet rule: protocol or port out of range")
+		}
+		m := &rules.InetMatch{Proto: uint16(i.GetProto()), PortLo: uint16(i.GetPortLo()), PortHi: uint16(i.GetPortHi())}
+		if s := i.GetPrefix(); s != "" {
+			p, err := netip.ParsePrefix(s)
+			if err != nil {
+				return out, fmt.Errorf("inet rule: %w", err)
+			}
+			m.Prefix = p
+		}
+		out.Object.Inet = m
+	case *pb.ObjectMatch_Unix:
+		u := k.Unix
+		out.Object.Unix = &rules.UnixMatch{Path: u.GetPath(), Abstract: u.GetAbstract(), Name: u.GetName(), Prefix: u.GetPrefix()}
+	case *pb.ObjectMatch_OwnListener:
+		out.Object.OwnListener = k.OwnListener
+	case *pb.ObjectMatch_AnyNet:
+		out.Object.AnyNet = k.AnyNet
 	default:
 		return out, errors.New("rule without an object")
 	}

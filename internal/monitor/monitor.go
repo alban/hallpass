@@ -11,6 +11,7 @@ package monitor
 import (
 	"errors"
 	"fmt"
+	"net/netip"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -449,8 +450,10 @@ func (m *Monitor) check(r *rules.Rule) error {
 	if o.Proc != nil {
 		n++
 	}
-	if o.Unknown {
-		n++
+	for _, set := range []bool{o.Unknown, o.Inet != nil, o.Unix != nil, o.OwnListener, o.AnyNet} {
+		if set {
+			n++
+		}
 	}
 	if n != 1 {
 		return fmt.Errorf("monitor: rule %+v: want exactly one object", *r)
@@ -469,6 +472,31 @@ func (m *Monitor) check(r *rules.Rule) error {
 			}
 		}
 		r.Object.Path = &rules.PathMatch{Path: p, Tree: o.Path.Tree}
+	}
+	if i := o.Inet; i != nil {
+		if i.PortLo > i.PortHi || (i.PortLo == 0) != (i.PortHi == 0) {
+			return fmt.Errorf("monitor: rule ports %d-%d", i.PortLo, i.PortHi)
+		}
+		in := *i
+		if in.Prefix.IsValid() {
+			if in.Prefix.Addr().Is4In6() && in.Prefix.Bits() >= 96 {
+				in.Prefix = netip.PrefixFrom(in.Prefix.Addr().Unmap(), in.Prefix.Bits()-96)
+			}
+			in.Prefix = in.Prefix.Masked()
+		}
+		r.Object.Inet = &in
+	}
+	if u := o.Unix; u != nil && !u.Abstract {
+		if !filepath.IsAbs(u.Path) {
+			return fmt.Errorf("monitor: rule unix path %q is not absolute", u.Path)
+		}
+		p := filepath.Clean(u.Path)
+		if !m.procRoot {
+			if res, err := filepath.EvalSymlinks(p); err == nil {
+				p = res
+			}
+		}
+		r.Object.Unix = &rules.UnixMatch{Path: p, Prefix: u.Prefix}
 	}
 	if m.kernel != nil {
 		if _, _, err := toLSM(*r); err != nil {
