@@ -7,7 +7,7 @@ Every client on the [previous page](clients.md) except the terminal prompt and t
 
 ## Where it is served
 
-- **On a workstation**, each session serves its own unix socket, `$XDG_RUNTIME_DIR/hallpass/<pid>.sock`, where `<pid>` is the supervisor's. It accepts only clients of the same user that are not themselves sandboxed (it refuses any process running under a seccomp filter), so a sandboxed program cannot answer its own requests. A client should check the other way round too, that the socket is served by that pid and not by a fake from the sandbox; the Go clients in this repository do.
+- **On a workstation**, each session serves its own unix socket, `$XDG_RUNTIME_DIR/hallpass/<pid>.sock` (without `XDG_RUNTIME_DIR`, `hallpass-<uid>/<pid>.sock` in `$TMPDIR` or `/tmp`, in a directory that must be the user's, mode 0700), where `<pid>` is the supervisor's. It accepts only clients of the same user that are not themselves sandboxed (it refuses any process running under a seccomp filter), so a sandboxed program cannot answer its own requests. A client should check the other way round too, that the socket is served by that pid and not by a fake from the sandbox; the Go clients in this repository do.
 - **In Kubernetes**, the `hallpass-node` agent serves every session of its node on port 7323, reached through `kubectl port-forward` (see [who can answer](../kubernetes/answer.md#who-can-answer)). `List` returns the sessions; the other calls select one with the `hallpass-session` gRPC metadata, set to a `SessionInfo.id`.
 
 ## Calls

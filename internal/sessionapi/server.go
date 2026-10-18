@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 
+	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -34,6 +35,34 @@ func SocketDir() string {
 // SocketPath returns the socket of the session supervised by pid.
 func SocketPath(pid int) string {
 	return filepath.Join(SocketDir(), strconv.Itoa(pid)+".sock")
+}
+
+// ensureSocketDir creates dir, a directory of this user only (0700). Without
+// XDG_RUNTIME_DIR it is in the shared os.TempDir(), where another user could
+// have created it first, or put a symlink there: an existing dir must be a
+// directory owned by this user, and it is made 0700.
+func ensureSocketDir(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	fd, err := unix.Open(dir, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("socket directory %s: %w", dir, err)
+	}
+	defer unix.Close(fd)
+	var st unix.Stat_t
+	if err := unix.Fstat(fd, &st); err != nil {
+		return fmt.Errorf("socket directory %s: %w", dir, err)
+	}
+	if int(st.Uid) != os.Getuid() {
+		return fmt.Errorf("socket directory %s is owned by uid %d, not by this user", dir, st.Uid)
+	}
+	if st.Mode&0o777 != 0o700 {
+		if err := unix.Fchmod(fd, 0o700); err != nil {
+			return fmt.Errorf("socket directory %s: %w", dir, err)
+		}
+	}
+	return nil
 }
 
 // Session is what the server needs from the session beyond its monitor.
@@ -70,8 +99,7 @@ type service struct {
 
 // Listen serves sess and m on SocketPath(os.Getpid()).
 func Listen(m *monitor.Monitor, sess Session) (*Server, error) {
-	dir := SocketDir()
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := ensureSocketDir(SocketDir()); err != nil {
 		return nil, err
 	}
 	path := SocketPath(os.Getpid())

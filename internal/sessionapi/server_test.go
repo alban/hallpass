@@ -5,6 +5,7 @@ package sessionapi
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -55,6 +56,81 @@ func TestDial(t *testing.T) {
 	}
 	if _, err := c.Answer(context.Background(), &pb.AnswerRequest{Request: 1, Answer: "once"}); err == nil {
 		t.Error("Answer of an unknown request succeeded")
+	}
+}
+
+// TestSocketDirFallback checks the socket directory in os.TempDir(), used
+// without XDG_RUNTIME_DIR: it must be this user's only.
+func TestSocketDirFallback(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_RUNTIME_DIR", "")
+	t.Setenv("TMPDIR", tmp)
+	dir := SocketDir()
+	if want := filepath.Join(tmp, fmt.Sprintf("hallpass-%d", os.Getuid())); dir != want {
+		t.Fatalf("SocketDir = %s, want %s", dir, want)
+	}
+	perm := func() os.FileMode {
+		t.Helper()
+		fi, err := os.Lstat(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return fi.Mode().Perm()
+	}
+
+	if err := ensureSocketDir(dir); err != nil {
+		t.Fatalf("new dir: %v", err)
+	}
+	if p := perm(); p != 0o700 {
+		t.Errorf("new dir: mode %o, want 700", p)
+	}
+
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureSocketDir(dir); err != nil {
+		t.Fatalf("own 0755 dir: %v", err)
+	}
+	if p := perm(); p != 0o700 {
+		t.Errorf("own 0755 dir: mode %o, want 700", p)
+	}
+
+	if err := os.Remove(dir); err != nil {
+		t.Fatal(err)
+	}
+	target := t.TempDir()
+	if err := os.Symlink(target, dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureSocketDir(dir); err == nil {
+		t.Error("symlink: accepted")
+	}
+
+	if err := os.Remove(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureSocketDir(dir); err == nil {
+		t.Error("regular file: accepted")
+	}
+
+	if os.Getuid() != 0 {
+		t.Log("not root: skipping the dir of another user")
+		return
+	}
+	if err := os.Remove(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(dir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(dir, 65534, 65534); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureSocketDir(dir); err == nil || !strings.Contains(err.Error(), "owned by uid 65534") {
+		t.Errorf("dir of another user: %v, want a refusal", err)
 	}
 }
 
