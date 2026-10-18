@@ -535,6 +535,59 @@ check again sh -c 'echo x > "$HOME/once"'
 	}
 }
 
+// TestTar extracts an archive with directories: GNU tar >= 1.35 opens them
+// with openat2(RESOLVE_BENEATH), which fails when openat2 is not mediated.
+func TestTar(t *testing.T) {
+	if _, err := exec.LookPath("tar"); err != nil {
+		t.Skip("no tar")
+	}
+	for _, mode := range []string{"lite", "strict"} {
+		t.Run(mode, func(t *testing.T) {
+			if mode == "strict" {
+				if os.Geteuid() != 0 {
+					strictSkip(t, "needs root (go test -exec sudo)")
+				}
+				if err := lsm.Active(); err != nil {
+					strictSkip(t, err.Error())
+				}
+			}
+			e := newEnv(t)
+			src := e.root + "/src"
+			if err := os.MkdirAll(src+"/a/b", 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(src+"/a/b/f", []byte("x\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			tarball := e.root + "/t.tar"
+			if out, err := exec.Command("tar", "cf", tarball, "-C", src, "a").CombinedOutput(); err != nil {
+				t.Fatalf("tar cf: %v\n%s", err, out)
+			}
+			script := `
+check() { name=$1; shift; if "$@"; then echo "$name=allowed"; else echo "$name=denied"; fi; }
+check proj tar xf "` + tarball + `"
+check home tar xf "` + tarball + `" -C "$HOME"
+`
+			c := e.cmd(script, "--mode="+mode, "--ask=deny")
+			out, err := c.CombinedOutput()
+			if err != nil {
+				t.Fatalf("%v\n%s", err, out)
+			}
+			for _, want := range []string{"proj=allowed", "home=denied"} {
+				if !strings.Contains(string(out), want+"\n") {
+					t.Errorf("output lacks %q:\n%s", want, out)
+				}
+			}
+			if b, err := os.ReadFile(e.proj + "/a/b/f"); err != nil || string(b) != "x\n" {
+				t.Errorf("a/b/f: %q, %v", b, err)
+			}
+			if _, err := os.Lstat(e.home + "/a"); err == nil {
+				t.Errorf("%s/a was created", e.home)
+			}
+		})
+	}
+}
+
 // strictSkip skips, or fails under HALLPASS_REQUIRE_LSM=1 (see make test-vm).
 func strictSkip(t *testing.T, why string) {
 	t.Helper()

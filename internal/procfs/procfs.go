@@ -16,6 +16,7 @@
 package procfs
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
@@ -62,6 +63,34 @@ func ReadCString(pid uint32, addr uint64) (string, error) {
 	return "", fmt.Errorf("path not NUL-terminated within %d bytes", pathMax)
 }
 
+// openHowSize is the size of struct open_how in its first version: flags,
+// mode and resolve.
+const openHowSize = 24
+
+// ReadOpenHow reads openat2's struct open_how of size bytes at addr from the
+// target's memory. Like the kernel, it fails with EINVAL when size is too
+// small and EFAULT when the memory cannot be read; it ignores the fields of
+// later versions, which the kernel checks.
+func ReadOpenHow(pid uint32, addr, size uint64) (unix.OpenHow, error) {
+	if size < openHowSize {
+		return unix.OpenHow{}, unix.EINVAL
+	}
+	f, err := os.Open(fmt.Sprintf("/proc/%d/mem", pid))
+	if err != nil {
+		return unix.OpenHow{}, err
+	}
+	defer f.Close()
+	var b [openHowSize]byte
+	if n, _ := f.ReadAt(b[:], int64(addr)); n != len(b) {
+		return unix.OpenHow{}, unix.EFAULT
+	}
+	return unix.OpenHow{
+		Flags:   binary.NativeEndian.Uint64(b[0:]),
+		Mode:    binary.NativeEndian.Uint64(b[8:]),
+		Resolve: binary.NativeEndian.Uint64(b[16:]),
+	}, nil
+}
+
 // DirFDArg extracts a signed dirfd from a raw syscall argument register. A
 // negative DirFD index in the rule means "relative to cwd".
 func DirFDArg(v uint64) int64 { return int64(int32(v)) }
@@ -86,40 +115,55 @@ func ProcRoot(tid uint32) string {
 // symlinks and ".." at the top are clamped to it, and the result is relative
 // to it: a container path such as /workspace/x.
 func Resolve(pid uint32, root string, dirfd int64, raw string, followLast bool) (Target, error) {
+	return resolve(pid, root, dirfd, raw, followLast, false)
+}
+
+// ResolveInRoot is Resolve for openat2's RESOLVE_IN_ROOT: the directory of
+// dirfd (or the cwd) is the root of raw, below root. Absolute paths and
+// symlinks start from it, ".." stops at it, and magic links fail with ELOOP,
+// as in the kernel. The result is still relative to root.
+func ResolveInRoot(pid uint32, root string, dirfd int64, raw string, followLast bool) (Target, error) {
+	return resolve(pid, root, dirfd, raw, followLast, true)
+}
+
+func resolve(pid uint32, root string, dirfd int64, raw string, followLast, inRoot bool) (Target, error) {
 	r, err := newRootView(pid, root)
 	if err != nil {
 		return Target{}, err
 	}
-	var start string
-	switch {
-	case filepath.IsAbs(raw):
-		start = raw
-	default:
-		var base string
-		if dirfd == atFDCWD {
-			base = fmt.Sprintf("/proc/%d/cwd", pid)
-		} else {
-			base = fmt.Sprintf("/proc/%d/fd/%d", pid, dirfd)
-		}
-		dir, err := os.Readlink(base)
-		if err != nil {
-			return Target{}, fmt.Errorf("readlink %s: %w", base, err)
-		}
-		if !filepath.IsAbs(dir) {
-			return Target{}, fmt.Errorf("dirfd %d is not a directory (%s)", dirfd, dir)
-		}
-		if dir, err = r.inside(dir); err != nil {
-			return Target{}, fmt.Errorf("dirfd %d: %w", dirfd, err)
-		}
-		if !sameFile(r.host(dir), base) {
-			// The name is not the directory's: it is on a mount the
-			// target's root does not reach, such as a detached mount
-			// (fsmount, open_tree), or it was deleted.
-			return unnamed(base, raw, dirfd)
-		}
-		start = dir + "/" + raw
+	if filepath.IsAbs(raw) && !inRoot {
+		return r.walk(raw, followLast)
 	}
-	return r.walk(start, followLast)
+	var base string
+	if dirfd == atFDCWD {
+		base = fmt.Sprintf("/proc/%d/cwd", pid)
+	} else {
+		base = fmt.Sprintf("/proc/%d/fd/%d", pid, dirfd)
+	}
+	dir, err := os.Readlink(base)
+	if err != nil {
+		return Target{}, fmt.Errorf("readlink %s: %w", base, err)
+	}
+	if !filepath.IsAbs(dir) {
+		return Target{}, fmt.Errorf("dirfd %d is not a directory (%s)", dirfd, dir)
+	}
+	if dir, err = r.inside(dir); err != nil {
+		return Target{}, fmt.Errorf("dirfd %d: %w", dirfd, err)
+	}
+	if !sameFile(r.host(dir), base) {
+		// The name is not the directory's: it is on a mount the
+		// target's root does not reach, such as a detached mount
+		// (fsmount, open_tree), or it was deleted.
+		if inRoot {
+			return Target{}, fmt.Errorf("dirfd %d is not reachable from the root", dirfd)
+		}
+		return unnamed(base, raw, dirfd)
+	}
+	if inRoot {
+		r.floor, r.inRoot = dir, true
+		return r.walk(raw, followLast)
+	}
+	return r.walk(dir+"/"+raw, followLast)
 }
 
 // sameFile reports whether paths a and b are the same file.
@@ -180,10 +224,15 @@ type rootView struct {
 	// self and thread are the targets of /proc/self and /proc/thread-self
 	// in the target's procfs.
 	self, thread string
+	// floor is where walks start, ".." stops and absolute symlinks
+	// restart: "/", or the dirfd of RESOLVE_IN_ROOT, below root.
+	floor string
+	// inRoot: RESOLVE_IN_ROOT, which does not follow magic links.
+	inRoot bool
 }
 
 func newRootView(pid uint32, root string) (*rootView, error) {
-	r := &rootView{pid: pid, root: filepath.Clean(root), link: "/"}
+	r := &rootView{pid: pid, root: filepath.Clean(root), link: "/", floor: "/"}
 	tgid, tid := strconv.FormatUint(uint64(pid), 10), strconv.FormatUint(uint64(pid), 10)
 	if r.root != "/" {
 		l, err := os.Readlink(r.root)
@@ -287,18 +336,20 @@ func (r *rootView) rewriteSelf(p string) string {
 	return p
 }
 
-// walk resolves start, a path below r.root, one component at a time.
-// Absolute symlinks restart from r.root, and ".." stops at it, as for the
+// walk resolves start, a path below r.floor, one component at a time.
+// Absolute symlinks restart from r.floor, and ".." stops at it, as for the
 // target.
 func (r *rootView) walk(start string, followLast bool) (Target, error) {
 	comps := split(start)
-	cur := "/"
+	cur := r.floor
 	links := 0
 	for i := 0; i < len(comps); i++ {
 		last := i == len(comps)-1
 		if comps[i] == ".." {
 			// cur is fully resolved, so its lexical parent is the real one.
-			cur = filepath.Dir(cur)
+			if cur != r.floor {
+				cur = filepath.Dir(cur)
+			}
 			continue
 		}
 		next := r.rewriteSelf(filepath.Join(cur, comps[i]))
@@ -333,18 +384,26 @@ func (r *rootView) walk(start string, followLast bool) (Target, error) {
 		switch {
 		case !filepath.IsAbs(dest):
 			if strings.HasPrefix(next, "/proc/") && strings.Contains(dest, ":") {
+				if r.inRoot {
+					return Target{}, unix.ELOOP
+				}
 				// Magic link to a pipe, socket or anon inode.
 				return Target{Special: dest}, nil
 			}
-			dest = cur + "/" + dest
+			// Relative: from the symlink's directory, cur.
 		case strings.HasPrefix(next, "/proc/"):
+			if r.inRoot {
+				return Target{}, unix.ELOOP
+			}
 			// A magic link (cwd, fd/<n>) is named from our root.
 			if dest, err = r.inside(dest); err != nil {
 				return Target{}, err
 			}
+			cur = "/"
+		default:
+			cur = r.floor
 		}
 		comps = append(split(dest), comps[i+1:]...)
-		cur = "/"
 		i = -1
 	}
 	return Target{Path: cur}, nil

@@ -134,7 +134,11 @@ func (m *Monitor) handle(l *listener, n seccomp.Notif) {
 		_ = l.n.Deny(n.ID, int32(unix.EPERM))
 		return
 	}
-	op := opOf(sc, n)
+	flags, inRoot, done := m.openFlags(l, n, sc)
+	if done {
+		return
+	}
+	op := opOf(sc, flags)
 	if sc.Op == "exec" {
 		m.exec(l, n, sc)
 		return
@@ -173,7 +177,11 @@ func (m *Monitor) handle(l *listener, n seccomp.Notif) {
 		if pa.DirFD >= 0 {
 			dirfd = procfs.DirFDArg(n.Args[pa.DirFD])
 		}
-		t, err := procfs.Resolve(n.PID, root, dirfd, raw, followLast(sc, n, i))
+		resolve := procfs.Resolve
+		if inRoot {
+			resolve = procfs.ResolveInRoot
+		}
+		t, err := resolve(n.PID, root, dirfd, raw, followLast(sc, n, i, flags))
 		if err != nil {
 			obj := rules.Object{Path: &rules.PathObject{Path: raw}}
 			m.deny(l, n, sc, op, []rules.Object{obj}, []Reason{{Builtin: "unresolvable"}})
@@ -569,12 +577,44 @@ func only(n, i int, why Reason) []Reason {
 	return out
 }
 
-// opOf returns the operation of syscall n.
-func opOf(sc seccomp.Rule, n seccomp.Notif) rules.Op {
+// openFlags returns the open flags of an open syscall n, 0 for the others,
+// and whether openat2 resolves its path with RESOLVE_IN_ROOT. For openat2,
+// it reads them from the target's memory, and answers n itself (done) when
+// they cannot be read or carry no write intent: such an openat2 is
+// continued, as the filter lets read-only openat through. In lite mode, the
+// target can change them after the check, like its path; in strict mode,
+// the kernel checks the opened file.
+func (m *Monitor) openFlags(l *listener, n seccomp.Notif, sc seccomp.Rule) (flags uint64, inRoot, done bool) {
+	switch {
+	case sc.Name == "openat2":
+		how, err := procfs.ReadOpenHow(n.PID, n.Args[2], n.Args[3])
+		if err != nil {
+			errno := unix.EFAULT
+			if errors.Is(err, unix.EINVAL) {
+				errno = unix.EINVAL
+			}
+			_ = l.n.Deny(n.ID, int32(errno))
+			return 0, false, true
+		}
+		if how.Flags&seccomp.WriteIntentMask == 0 {
+			if err := l.n.Continue(n.ID); err != nil && !errors.Is(err, unix.ENOENT) {
+				m.warn("continue: " + err.Error())
+			}
+			return 0, false, true
+		}
+		return how.Flags, how.Resolve&unix.RESOLVE_IN_ROOT != 0, false
+	case sc.Kind == seccomp.NotifyIfWrite:
+		return n.Args[sc.FlagsArg], false, false
+	}
+	return 0, false, false
+}
+
+// opOf returns the operation of syscall sc, with open flags flags.
+func opOf(sc seccomp.Rule, flags uint64) rules.Op {
 	switch sc.Op {
 	case "write":
 		op := rules.OpWrite
-		if sc.Name == "creat" || (sc.Kind == seccomp.NotifyIfWrite && n.Args[sc.FlagsArg]&unix.O_CREAT != 0) {
+		if sc.Name == "creat" || flags&unix.O_CREAT != 0 {
 			op |= rules.OpCreate
 		}
 		return op
@@ -597,15 +637,14 @@ func opOf(sc seccomp.Rule, n seccomp.Notif) rules.Op {
 }
 
 // followLast reports whether the kernel follows a symlink in the last
-// component of path argument i of this syscall.
-func followLast(sc seccomp.Rule, n seccomp.Notif, i int) bool {
+// component of path argument i of this syscall, with open flags flags.
+func followLast(sc seccomp.Rule, n seccomp.Notif, i int, flags uint64) bool {
 	switch sc.Name {
-	case "openat", "open":
-		f := n.Args[sc.FlagsArg]
-		if f&unix.O_NOFOLLOW != 0 {
+	case "openat", "open", "openat2":
+		if flags&unix.O_NOFOLLOW != 0 {
 			return false
 		}
-		return !(f&unix.O_CREAT != 0 && f&unix.O_EXCL != 0)
+		return !(flags&unix.O_CREAT != 0 && flags&unix.O_EXCL != 0)
 	case "creat", "truncate":
 		return true
 	case "linkat":

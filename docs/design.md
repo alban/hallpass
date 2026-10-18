@@ -74,6 +74,7 @@ Lite mode is best effort:
 
 - Only writes are mediated (write-intent `open`, create, delete, rename, link, `truncate`, `mknod`).
 - Allowed syscalls continue with `SECCOMP_USER_NOTIF_FLAG_CONTINUE`, so a malicious multi-threaded process can change the path between the check and the kernel acting on it (TOCTOU). Strict mode (BPF-LSM) closes this.
+- `openat2` passes its flags in memory (`struct open_how`), which the seccomp filter cannot read: every `openat2` reaches hallpass, which reads the flags and lets the read-only ones through. A malicious process can change the flags after the check, as it can change the path. Strict mode closes this too.
 - Pre-existing hard links to protected files are not detected.
 - Network and `execve` policy are not implemented yet (see above).
 

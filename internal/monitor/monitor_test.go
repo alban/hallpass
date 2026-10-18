@@ -135,6 +135,15 @@ func (f *fakeNotifier) mkdir(path string) uint64 {
 	return f.send(unix.SYS_MKDIRAT, map[int]string{1: path}, nil)
 }
 
+// openat2 notifies openat2(dirfd, path, how, size).
+func (f *fakeNotifier) openat2(dirfd int, path string, how unix.OpenHow, size uint64) uint64 {
+	h := &how
+	f.mu.Lock()
+	f.alive = append(f.alive, h)
+	f.mu.Unlock()
+	return f.send(unix.SYS_OPENAT2, map[int]string{1: path}, map[int]uint64{0: uint64(int64(dirfd)), 2: uint64(uintptr(unsafe.Pointer(h))), 3: size})
+}
+
 func (f *fakeNotifier) expect(t *testing.T, id uint64, errno int32) {
 	t.Helper()
 	select {
@@ -513,6 +522,68 @@ func TestProcRoot(t *testing.T) {
 	fx.f.expect(t, id, 0)
 	d := fx.next(t, func(ev Event) bool { return ev.Decided != nil && ev.Decided.Syscall == "openat" }).Decided
 	if !d.Allowed || d.Why[0].Builtin != "own-proc" {
+		t.Fatalf("decided %+v", d)
+	}
+}
+
+// TestOpenat2 checks that the monitor reads struct open_how: the filter
+// cannot, and notifies every openat2.
+func TestOpenat2(t *testing.T) {
+	fx := setup(t, nil, true)
+	ok := filepath.Join(fx.dir, "ok")
+	if err := os.Mkdir(ok, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.m.Apply(Decision{AddRules: []rules.Rule{tree(ok, rules.Allow), tree(fx.dir+"/no", rules.Deny)}}); err != nil {
+		t.Fatal(err)
+	}
+	const size = uint64(unsafe.Sizeof(unix.OpenHow{}))
+	decided := func() *Decided {
+		return fx.next(t, func(ev Event) bool { return ev.Decided != nil }).Decided
+	}
+
+	// Without write intent, as GNU tar's O_PATH|O_DIRECTORY: continued
+	// silently, as a read-only openat never reaches the monitor.
+	id := fx.f.openat2(unix.AT_FDCWD, fx.dir+"/no", unix.OpenHow{Flags: unix.O_PATH | unix.O_DIRECTORY, Resolve: unix.RESOLVE_BENEATH}, size)
+	fx.f.expect(t, id, 0)
+	// An open_how the kernel would refuse, or cannot be read.
+	fx.f.expect(t, fx.f.openat2(unix.AT_FDCWD, ok+"/f", unix.OpenHow{}, 8), int32(unix.EINVAL))
+	fx.f.expect(t, fx.f.send(unix.SYS_OPENAT2, map[int]string{1: ok + "/f"}, map[int]uint64{2: 8, 3: size}), int32(unix.EFAULT))
+
+	fx.f.expect(t, fx.f.openat2(unix.AT_FDCWD, ok+"/f", unix.OpenHow{Flags: unix.O_WRONLY | unix.O_CREAT}, size), 0)
+	d := decided()
+	if !d.Allowed || d.Syscall != "openat2" || d.Objects[0].Path.Path != ok+"/f" || d.Op&rules.OpCreate == 0 {
+		t.Fatalf("decided %+v", d)
+	}
+	fx.f.expect(t, fx.f.openat2(unix.AT_FDCWD, fx.dir+"/no/f", unix.OpenHow{Flags: unix.O_RDWR}, size), int32(unix.EACCES))
+	if d := decided(); d.Allowed || d.Op&rules.OpCreate != 0 {
+		t.Fatalf("decided %+v", d)
+	}
+
+	// RESOLVE_IN_ROOT: "/no/f" and a symlink to "/no" name fx.dir/no
+	// under the root fx.dir, ".." stops there.
+	if err := os.Symlink("/no", filepath.Join(ok, "abs")); err != nil {
+		t.Fatal(err)
+	}
+	root, err := unix.Open(fx.dir, unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(root)
+	for _, p := range []string{"/no/f", "ok/abs/f", "../../no/f"} {
+		fx.f.expect(t, fx.f.openat2(root, p, unix.OpenHow{Flags: unix.O_WRONLY, Resolve: unix.RESOLVE_IN_ROOT}, size), int32(unix.EACCES))
+		if d := decided(); d.Allowed || d.Objects[0].Path.Path != fx.dir+"/no/f" {
+			t.Fatalf("%s: decided %+v", p, d)
+		}
+	}
+	// A magic link cannot be followed in a root.
+	slash, err := unix.Open("/", unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(slash)
+	fx.f.expect(t, fx.f.openat2(slash, "/proc/self/cwd/f", unix.OpenHow{Flags: unix.O_WRONLY, Resolve: unix.RESOLVE_IN_ROOT}, size), int32(unix.EACCES))
+	if d := decided(); d.Allowed || d.Why[0].Builtin != "unresolvable" {
 		t.Fatalf("decided %+v", d)
 	}
 }

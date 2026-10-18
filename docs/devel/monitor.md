@@ -129,8 +129,8 @@ Lite mode sees syscalls, strict mode sees LSM hooks:
 
 | Op | seccomp (`seccomp/rules.go`) | LSM hook |
 |---|---|---|
-| Write | `openat` (write flags), `open`, `creat` | `file_open` |
-| Create | `mknodat`, `openat` O_CREAT | `path_mknod`, `inode_create` |
+| Write | `openat` (write flags), `openat2`, `open`, `creat` | `file_open` |
+| Create | `mknodat`, `openat`/`openat2` O_CREAT | `path_mknod`, `inode_create` |
 | Mkdir | `mkdirat` | `path_mkdir` |
 | Symlink | `symlinkat` | `path_symlink` |
 | Delete | `unlinkat` | `path_unlink`, `path_rmdir` |
@@ -143,6 +143,14 @@ file; it reports `OpWrite|OpCreate`, and a rule must allow both. Strict
 mode sees the exact op. Prompt text ("create directory", "delete") is
 rendered by the UX from `Op`. BPF has no ops yet, so rules must use
 `OpAll` for now.
+
+`openat2` passes its flags in `struct open_how`, out of the filter's
+reach: every call is notified, and the monitor reads the struct
+(`procfs.ReadOpenHow`) and continues the calls without write intent.
+`RESOLVE_IN_ROOT` paths are resolved with `procfs.ResolveInRoot`, which
+clamps `..` and absolute symlinks at the dirfd and refuses magic links,
+as the kernel does. The other `RESOLVE_*` flags only make the kernel
+refuse more, so the plain resolution is safe for them.
 
 ### Objects
 

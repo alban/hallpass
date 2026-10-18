@@ -40,10 +40,11 @@ type Rule struct {
 	Paths    []PathArg
 }
 
-const (
-	writeIntentMask = unix.O_ACCMODE | unix.O_CREAT | unix.O_TRUNC
-	namespaceMask   = unix.CLONE_NEWUSER | unix.CLONE_NEWNS
-)
+// WriteIntentMask are the open flags that make an open a write: the monitor
+// is notified of the opens that set any of them.
+const WriteIntentMask = unix.O_ACCMODE | unix.O_CREAT | unix.O_TRUNC
+
+const namespaceMask = unix.CLONE_NEWUSER | unix.CLONE_NEWNS
 
 // commonRules are the rules shared by every supported architecture, using the
 // *at syscalls that exist everywhere.
@@ -66,9 +67,12 @@ func commonRules(allowUserns bool) []Rule {
 		{Nr: unix.SYS_EXECVE, Name: "execve", Kind: Notify, Op: "exec", Paths: []PathArg{{-1, 0}}},
 		{Nr: unix.SYS_EXECVEAT, Name: "execveat", Kind: Notify, Op: "exec", Paths: []PathArg{{0, 1}}},
 
-		// openat2 hides its flags behind a struct pointer that cBPF cannot
-		// read; ENOSYS makes libc fall back to openat.
-		{Nr: unix.SYS_OPENAT2, Name: "openat2", Kind: Errno, Errno: uint32(unix.ENOSYS)},
+		// openat2 hides its flags in struct open_how, which cBPF cannot
+		// read: every openat2 is notified, and the monitor continues
+		// the ones without write intent. There is no fallback to
+		// openat to rely on: libc has no openat2 wrapper, and callers
+		// such as GNU tar fail on ENOSYS.
+		{Nr: unix.SYS_OPENAT2, Name: "openat2", Kind: Notify, Op: "write", Paths: []PathArg{{0, 1}}},
 		// io_uring performs I/O without per-operation syscalls.
 		{Nr: unix.SYS_IO_URING_SETUP, Name: "io_uring_setup", Kind: Errno, Errno: uint32(unix.EPERM)},
 	}
@@ -94,7 +98,7 @@ func commonRules(allowUserns bool) []Rule {
 func (r Rule) Mask() uint32 {
 	switch r.Kind {
 	case NotifyIfWrite:
-		return writeIntentMask
+		return WriteIntentMask
 	case ErrnoIfNamespace:
 		return namespaceMask
 	}

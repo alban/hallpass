@@ -7,10 +7,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"testing"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
@@ -275,6 +277,123 @@ func TestResolveRoot(t *testing.T) {
 	if got, err := Resolve(pid, root, AtFDCWD, "/proc/inside/f", true); err != nil || got.Path != "/etc/f" {
 		t.Errorf("magic link inside the root: got %+v, %v, want /etc/f", got, err)
 	}
+}
+
+// TestResolveInRoot checks ResolveInRoot against the kernel's own
+// openat2(RESOLVE_IN_ROOT), from "/" and from a root directory: the kernel
+// uses only the dirfd as the root, so the inode must be the same.
+func TestResolveInRoot(t *testing.T) {
+	outside, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(outside, "root")
+	for _, d := range []string{"root/workspace/a", "root/workspace/etc", "root/etc", "root/a"} {
+		if err := os.MkdirAll(filepath.Join(outside, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	links := map[string]string{
+		"workspace/abs":    "/etc",        // the dirfd's etc
+		"workspace/escape": "../../../..", // ".." stops at the dirfd
+		"workspace/up":     "a/..",
+		"workspace/a/rel":  "../etc",
+		"workspace/dang":   "/new/f",
+	}
+	for l, dst := range links {
+		if err := os.Symlink(dst, filepath.Join(root, l)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dir, err := os.Open(filepath.Join(root, "workspace"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dir.Close()
+	dirfd := int(dir.Fd())
+	pid := uint32(os.Getpid())
+	for _, tc := range []struct {
+		raw    string
+		follow bool
+		want   string // below root
+	}{
+		{"/etc", true, "/workspace/etc"},
+		{"abs", true, "/workspace/etc"},
+		{"abs", false, "/workspace/abs"},
+		{"/abs/../a", true, "/workspace/a"},
+		{"escape/etc", true, "/workspace/etc"},
+		{"../../../a", true, "/workspace/a"},
+		{"up/etc", true, "/workspace/etc"},
+		{"a/rel", true, "/workspace/etc"},
+		{"dang", true, "/workspace/new/f"},
+		{"/x", true, "/workspace/x"},
+	} {
+		for _, r := range []string{"/", root} {
+			got, err := ResolveInRoot(pid, r, int64(dirfd), tc.raw, tc.follow)
+			if err != nil {
+				t.Errorf("ResolveInRoot(%s, %s): %v", r, tc.raw, err)
+				continue
+			}
+			want := tc.want
+			if r == "/" {
+				want = root + tc.want
+			}
+			if got.Path != want {
+				t.Errorf("ResolveInRoot(%s, %s, follow=%v) = %s, want %s", r, tc.raw, tc.follow, got.Path, want)
+			}
+		}
+		var flags uint64 = unix.O_PATH
+		if !tc.follow {
+			flags |= unix.O_NOFOLLOW
+		}
+		fd, err := unix.Openat2(dirfd, tc.raw, &unix.OpenHow{Flags: flags, Resolve: unix.RESOLVE_IN_ROOT})
+		if err != nil {
+			if _, serr := os.Lstat(root + tc.want); serr == nil {
+				t.Errorf("kernel: openat2(%s): %v, but %s exists", tc.raw, err, tc.want)
+			}
+			continue
+		}
+		var ks, ws unix.Stat_t
+		if err := unix.Fstat(fd, &ks); err != nil {
+			t.Fatal(err)
+		}
+		unix.Close(fd)
+		if err := unix.Lstat(root+tc.want, &ws); err != nil || ks.Ino != ws.Ino || ks.Dev != ws.Dev {
+			t.Errorf("kernel: openat2(%s) is not %s", tc.raw, tc.want)
+		}
+	}
+
+	// The kernel does not follow magic links under RESOLVE_IN_ROOT.
+	slash, err := os.Open("/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer slash.Close()
+	for _, raw := range []string{"proc/self/fd/0", "proc/self/cwd/x"} {
+		if got, err := ResolveInRoot(pid, "/", int64(slash.Fd()), raw, true); err == nil {
+			t.Errorf("ResolveInRoot(%s) = %+v, want ELOOP", raw, got)
+		}
+		if fd, err := unix.Openat2(int(slash.Fd()), raw, &unix.OpenHow{Flags: unix.O_PATH, Resolve: unix.RESOLVE_IN_ROOT}); err == nil {
+			unix.Close(fd)
+			t.Errorf("kernel: openat2(%s) followed a magic link", raw)
+		}
+	}
+}
+
+func TestReadOpenHow(t *testing.T) {
+	how := unix.OpenHow{Flags: unix.O_WRONLY | unix.O_CREAT, Mode: 0o644, Resolve: unix.RESOLVE_BENEATH}
+	addr := uint64(uintptr(unsafe.Pointer(&how)))
+	got, err := ReadOpenHow(uint32(os.Getpid()), addr, uint64(unsafe.Sizeof(how)))
+	if err != nil || got != how {
+		t.Errorf("ReadOpenHow = %+v, %v, want %+v", got, err, how)
+	}
+	if _, err := ReadOpenHow(uint32(os.Getpid()), addr, 16); err != unix.EINVAL {
+		t.Errorf("size 16: %v, want EINVAL", err)
+	}
+	if _, err := ReadOpenHow(uint32(os.Getpid()), 8, 24); err != unix.EFAULT {
+		t.Errorf("address 8: %v, want EFAULT", err)
+	}
+	runtime.KeepAlive(&how)
 }
 
 // TestResolveProcRoot resolves through /proc/self/root, the agent's case

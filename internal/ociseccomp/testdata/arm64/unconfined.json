@@ -126,8 +126,7 @@
 			"names": [
 				"openat2"
 			],
-			"action": "SCMP_ACT_ERRNO",
-			"errnoRet": 38
+			"action": "SCMP_ACT_NOTIFY"
 		},
 		{
 			"names": [

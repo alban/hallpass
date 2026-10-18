@@ -59,7 +59,7 @@ func TestFilter(t *testing.T) {
 		{"openat trunc", auditArch, unix.SYS_OPENAT, []uint64{at, 0, unix.O_RDONLY | unix.O_TRUNC}, retUserNotif},
 		{"unlinkat", auditArch, unix.SYS_UNLINKAT, nil, retUserNotif},
 		{"renameat2", auditArch, unix.SYS_RENAMEAT2, nil, retUserNotif},
-		{"openat2", auditArch, unix.SYS_OPENAT2, nil, retErrno | uint32(unix.ENOSYS)},
+		{"openat2", auditArch, unix.SYS_OPENAT2, nil, retUserNotif},
 		{"io_uring", auditArch, unix.SYS_IO_URING_SETUP, nil, retErrno | uint32(unix.EPERM)},
 		{"unshare userns", auditArch, unix.SYS_UNSHARE, []uint64{unix.CLONE_NEWUSER}, retErrno | uint32(unix.EPERM)},
 		{"unshare mntns", auditArch, unix.SYS_UNSHARE, []uint64{unix.CLONE_NEWNS}, retErrno | uint32(unix.EPERM)},
