@@ -317,8 +317,11 @@ func (t *Term) makeRoom() {
 	}
 	// Scroll with line feeds on the last row, keeping the program's
 	// attributes (DECSC/DECRC) but scrolling in blank lines (SGR 0), then
-	// move the cursor up by as much.
-	s := fmt.Sprintf("\x1b7\x1b[0m\x1b[%d;1H%s\x1b8\x1b[%dA", t.rows, strings.Repeat("\n", n), n)
+	// move the cursor up by as much. Origin mode and margins would keep
+	// the cursor or the scrolling inside the program's region: lift them
+	// meanwhile.
+	s := fmt.Sprintf("\x1b7%s\x1b[0m\x1b[%d;1H%s%s\x1b8\x1b[%dA",
+		t.esc.absolute(true), t.rows, strings.Repeat("\n", n), t.esc.restore(true), n)
 	t.write(s)
 	_, _ = t.emu.WriteString(s)
 }
@@ -490,6 +493,13 @@ func (t *Term) Prompt(lines []string, accept string, guard, timeout time.Duratio
 		time.Sleep(10 * time.Millisecond)
 		t.mu.Lock()
 	}
+	if t.esc.inSequence() {
+		// Still unfinished: cancel it. The overlay's ESC would abort it
+		// in most terminals too, but CAN is defined to, in all of them.
+		t.write("\x18")
+		_, _ = t.emu.WriteString("\x18")
+		t.esc.step(0x18)
+	}
 	for len(t.keys) > 0 {
 		<-t.keys
 	}
@@ -504,8 +514,10 @@ func (t *Term) Prompt(lines []string, accept string, guard, timeout time.Duratio
 		t.unknown[y] = t.rowUnknown(y)
 	}
 	t.painted = append([]string(nil), t.snap[:t.overlayTop()]...)
-	// DECSC saves cursor, attributes and charset for closeOverlay.
-	t.write("\x1b7" + t.drawOverlay() + t.paint())
+	// DECSC saves cursor, attributes and charset for closeOverlay. The
+	// overlay positions the cursor on the whole screen: without origin
+	// mode, which the program may have set.
+	t.write("\x1b7" + t.esc.absolute(false) + t.drawOverlay() + t.paint())
 	t.mu.Unlock()
 
 	shown := time.Now()
@@ -632,7 +644,7 @@ func (t *Term) closeOverlay() {
 				paintRow(&b, y, line)
 			}
 		}
-		b.WriteString("\x1b8") // DECRC
+		b.WriteString(t.esc.restore(false) + "\x1b8") // DECRC
 		b.Write(t.held)
 		t.esc.feed(t.held)
 	} else {
@@ -642,7 +654,7 @@ func (t *Term) closeOverlay() {
 			paintRow(&b, y, t.renderRow(y))
 		}
 		p := t.emu.CursorPosition()
-		fmt.Fprintf(&b, "\x1b8\x1b[%d;%dH", p.Y+1, p.X+1)
+		fmt.Fprintf(&b, "%s\x1b8\x1b[%d;%dH", t.esc.restore(false), t.esc.originRow(p.Y), p.X+1)
 	}
 	t.write(b.String())
 	t.ov, t.held, t.snap, t.unknown, t.painted = nil, nil, nil, nil, nil
