@@ -69,6 +69,19 @@ func buildFilter(arch uint32, x32 uint32, rules []Rule) ([]bpf.RawInstruction, e
 				bpf.RetConstant{Val: hit},
 				bpf.RetConstant{Val: retAllow},
 			)
+		case NotifyIfSet:
+			// A pointer: both halves of the argument.
+			off := uint32(offArgs + 8*r.FlagsArg)
+			ins = append(ins,
+				bpf.LoadAbsolute{Off: offNr, Size: 4},
+				bpf.JumpIf{Cond: bpf.JumpEqual, Val: nr, SkipFalse: 6},
+				bpf.LoadAbsolute{Off: off, Size: 4},
+				bpf.JumpIf{Cond: bpf.JumpEqual, Val: 0, SkipFalse: 2},
+				bpf.LoadAbsolute{Off: off + 4, Size: 4},
+				bpf.JumpIf{Cond: bpf.JumpEqual, Val: 0, SkipTrue: 1},
+				bpf.RetConstant{Val: retUserNotif},
+				bpf.RetConstant{Val: retAllow},
+			)
 		}
 	}
 

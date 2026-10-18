@@ -24,12 +24,14 @@ func runFilter(t *testing.T, prog []bpf.RawInstruction, arch uint32, nr int, arg
 	}
 	// x/net/bpf loads in network byte order, the kernel's seccomp in host
 	// order: store each 32-bit word big-endian so the VM sees the values
-	// the kernel would. Only the low half of each argument is used.
+	// the kernel would: the low half of each argument first (little
+	// endian), then the high half.
 	data := make([]byte, 64)
 	binary.BigEndian.PutUint32(data[offNr:], uint32(nr))
 	binary.BigEndian.PutUint32(data[offArch:], arch)
 	for i, a := range args {
 		binary.BigEndian.PutUint32(data[offArgs+8*i:], uint32(a))
+		binary.BigEndian.PutUint32(data[offArgs+8*i+4:], uint32(a>>32))
 	}
 	ret, err := vm.Run(data)
 	if err != nil {
@@ -67,6 +69,13 @@ func TestFilter(t *testing.T) {
 		{"clone thread", auditArch, unix.SYS_CLONE, []uint64{unix.CLONE_VM | unix.CLONE_THREAD}, retAllow},
 		{"clone3", auditArch, unix.SYS_CLONE3, nil, retErrno | uint32(unix.ENOSYS)},
 		{"read", auditArch, unix.SYS_READ, nil, retAllow},
+		{"connect", auditArch, unix.SYS_CONNECT, nil, retUserNotif},
+		{"sendto connected", auditArch, unix.SYS_SENDTO, []uint64{3, 0x1000, 10, 0, 0, 0}, retAllow},
+		{"sendto addr", auditArch, unix.SYS_SENDTO, []uint64{3, 0x1000, 10, 0, 0x2000, 16}, retUserNotif},
+		{"sendto high addr", auditArch, unix.SYS_SENDTO, []uint64{3, 0x1000, 10, 0, 0x7fff_0000_0000, 16}, retUserNotif},
+		{"sendmsg", auditArch, unix.SYS_SENDMSG, nil, retUserNotif},
+		{"sendmmsg", auditArch, unix.SYS_SENDMMSG, nil, retUserNotif},
+		{"recvfrom", auditArch, unix.SYS_RECVFROM, nil, retAllow},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := runFilter(t, prog, tc.arch, tc.nr, tc.args...); got != tc.want {

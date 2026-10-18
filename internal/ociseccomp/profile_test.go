@@ -161,6 +161,7 @@ var flagValues = []uint64{
 	unix.CLONE_VM | unix.CLONE_FS | unix.CLONE_FILES | unix.CLONE_SIGHAND | unix.CLONE_THREAD,
 	unix.CLONE_NEWUSER | unix.CLONE_NEWNS | unix.CLONE_NEWPID,
 	1 << 40,
+	0x7fff_0000_0000, // a pointer above 4 GiB
 }
 
 // want is what the CLI filter does with the syscall, applied on top of what
@@ -181,6 +182,10 @@ func want(r seccomp.Rule, base verdict, flags uint64) verdict {
 	case seccomp.ErrnoIfNamespace:
 		if uint32(flags)&r.Mask() != 0 {
 			return verdict{specs.ActErrno, uint(r.Errno)}
+		}
+	case seccomp.NotifyIfSet:
+		if flags != 0 {
+			return verdict{action: specs.ActNotify, errno: uint(unix.EPERM)}
 		}
 	}
 	return base

@@ -11,6 +11,7 @@
 package launch
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
@@ -92,7 +93,7 @@ func Start(spec ProcSpec) (proc *os.Process, seccompFD int, release func() error
 	}
 	childSock.Close()
 
-	fd, err := recvFD(parentSock)
+	fd, err := recvListener(parentSock, cmd.Process.Pid)
 	if err != nil {
 		unix.Close(parentSock)
 		return cmd.Process, -1, nil, errors.New("sandbox setup failed")
@@ -156,16 +157,16 @@ func ChildMain() {
 		fatal("child: install filter: %v", err)
 	}
 
-	if err := sendFD(fd, listenerFD); err != nil {
+	if err := sendFDNum(fd, listenerFD); err != nil {
 		fatal("child: send listener fd: %v", err)
 	}
-	_ = unix.Close(listenerFD)
 	// Exec only once the parent has attached the listener (and, in strict
 	// mode, made us a member).
 	var b [1]byte
 	if n, err := unix.Read(fd, b[:]); n != 1 || err != nil {
 		fatal("child: the supervisor did not start the sandbox")
 	}
+	_ = unix.Close(listenerFD)
 	_ = unix.Close(fd)
 
 	// Scrub our bookkeeping from the environment before exec.
@@ -197,35 +198,30 @@ func cleanEnv() []string {
 	return env
 }
 
-// sendFD passes a single fd over a unix socket using SCM_RIGHTS.
-func sendFD(sock, fd int) error {
-	rights := unix.UnixRights(fd)
-	return unix.Sendmsg(sock, []byte{0}, rights, nil, 0)
+// sendFDNum tells the parent which fd number the listener has, for it to
+// copy it with pidfd_getfd. Passing the fd itself would need sendmsg,
+// which the filter may notify: nobody would answer it yet. Like runc,
+// only write and read are used until the parent has the listener.
+func sendFDNum(sock, fd int) error {
+	var b [4]byte
+	binary.NativeEndian.PutUint32(b[:], uint32(fd))
+	_, err := unix.Write(sock, b[:])
+	return err
 }
 
-// recvFD receives a single fd sent with SCM_RIGHTS.
-func recvFD(sock int) (int, error) {
-	buf := make([]byte, 1)
-	oob := make([]byte, unix.CmsgSpace(4))
-	_, oobn, _, _, err := unix.Recvmsg(sock, buf, oob, 0)
+// recvListener copies the listener fd of child pid, whose number the child
+// sent with sendFDNum.
+func recvListener(sock, pid int) (int, error) {
+	var b [4]byte
+	if n, err := unix.Read(sock, b[:]); err != nil || n != len(b) {
+		return -1, fmt.Errorf("read listener fd number: %d bytes, %v", n, err)
+	}
+	pidfd, err := unix.PidfdOpen(pid, 0)
 	if err != nil {
 		return -1, err
 	}
-	scms, err := unix.ParseSocketControlMessage(oob[:oobn])
-	if err != nil {
-		return -1, err
-	}
-	if len(scms) == 0 {
-		return -1, fmt.Errorf("no control message")
-	}
-	fds, err := unix.ParseUnixRights(&scms[0])
-	if err != nil {
-		return -1, err
-	}
-	if len(fds) == 0 {
-		return -1, fmt.Errorf("no fd in control message")
-	}
-	return fds[0], nil
+	defer unix.Close(pidfd)
+	return unix.PidfdGetfd(pidfd, int(binary.NativeEndian.Uint32(b[:])), 0)
 }
 
 func fatal(format string, a ...any) {

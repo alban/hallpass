@@ -46,4 +46,12 @@ func TestSelect(t *testing.T) {
 			t.Errorf("--mediate=files lost %s", name)
 		}
 	}
+	for _, name := range []string{"connect", "sendto", "sendmsg", "sendmmsg"} {
+		if has(Select(all, DefaultCategories), name) {
+			t.Errorf("default categories kept %s", name)
+		}
+		if !has(Select(all, Network), name) {
+			t.Errorf("--mediate=network lost %s", name)
+		}
+	}
 }

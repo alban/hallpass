@@ -93,7 +93,7 @@ func (p *plugin) adjust(pod *api.PodSandbox, ctr *api.Container) (*api.Container
 	if err != nil {
 		return nil, err
 	}
-	prof, err := ociseccomp.Profile(toOCISeccomp(ctr.GetLinux().GetSeccompPolicy()), seccomp.Rules(false), ociseccomp.Options{
+	prof, err := ociseccomp.Profile(toOCISeccomp(ctr.GetLinux().GetSeccompPolicy()), seccomp.Select(seccomp.Rules(false), seccomp.DefaultCategories), ociseccomp.Options{
 		ListenerPath:     p.listenerPath,
 		ListenerMetadata: string(md),
 		WaitKillableRecv: p.waitKillable,

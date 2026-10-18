@@ -148,6 +148,9 @@ func (m *Monitor) handle(l *listener, n seccomp.Notif) (ask func()) {
 		_ = l.n.Deny(n.ID, int32(unix.EPERM))
 		return
 	}
+	if sc.Category() == seccomp.Network {
+		return m.handleNet(l, n, sc)
+	}
 	flags, inRoot, done := m.openFlags(l, n, sc)
 	if done {
 		return
@@ -223,7 +226,12 @@ func (m *Monitor) handle(l *listener, n seccomp.Notif) (ask func()) {
 		}
 		items = append(items, it)
 	}
+	return m.decide(l, n, sc, op, items)
+}
 
+// decide decides the items of a syscall read from the target, or returns
+// ask, which asks a human and must run in its own goroutine.
+func (m *Monitor) decide(l *listener, n seccomp.Notif, sc seccomp.Rule, op rules.Op, items []item) (ask func()) {
 	// The strings were read from the target's memory: make sure the
 	// notification is still the same syscall of the same live task.
 	if !l.n.IDValid(n.ID) {
@@ -551,6 +559,10 @@ func requestKey(op rules.Op, obj rules.Object, subject rules.Subject, id uint64)
 		return fmt.Sprintf("%d\x00%d\x00path\x00%s", tgid, op, obj.Path.Path)
 	case obj.Proc != nil:
 		return fmt.Sprintf("%d\x00%d\x00proc\x00%s\x00%s", tgid, op, obj.Proc.Name, obj.Proc.Target.Chain[0].Comm)
+	case obj.Inet != nil:
+		return fmt.Sprintf("%d\x00%d\x00inet\x00%d\x00%s", tgid, op, obj.Inet.Proto, obj.Inet.Addr)
+	case obj.Unix != nil:
+		return fmt.Sprintf("%d\x00%d\x00unix\x00%t\x00%s\x00%s", tgid, op, obj.Unix.Abstract, obj.Unix.Path, obj.Unix.Name)
 	}
 	return fmt.Sprintf("unique\x00%d", id)
 }

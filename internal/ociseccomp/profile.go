@@ -135,6 +135,8 @@ func Profile(base *specs.LinuxSeccomp, rules []seccomp.Rule, opts Options) (*spe
 			syscalls, err = m.ifFlags(r, entries[r.Name], specs.ActNotify, nil)
 		case seccomp.ErrnoIfNamespace:
 			syscalls, err = m.ifFlags(r, entries[r.Name], specs.ActErrno, errnoRet(r.Errno))
+		case seccomp.NotifyIfSet:
+			syscalls, err = m.ifSet(r, entries[r.Name], specs.ActNotify, nil)
 		default:
 			err = fmt.Errorf("unknown rule kind %d", r.Kind)
 		}
@@ -201,20 +203,43 @@ func (m merger) always(r seccomp.Rule, entries []specs.LinuxSyscall, action spec
 // set in r.FlagsArg, and leave the syscall to the base otherwise. libseccomp
 // has no "any bit set" operator, so each bit gets its own rule.
 func (m merger) ifFlags(r seccomp.Rule, entries []specs.LinuxSyscall, action specs.LinuxSeccompAction, errno *uint) ([]specs.LinuxSyscall, error) {
+	mask := uint64(r.Mask())
+	idx := uint(r.FlagsArg)
+	var hits []specs.LinuxSeccompArg
+	for b := mask; b != 0; b &= b - 1 {
+		bit := uint64(1) << bits.TrailingZeros64(b)
+		hits = append(hits, specs.LinuxSeccompArg{Index: idx, Value: bit, ValueTwo: bit, Op: specs.OpMaskedEqual})
+	}
+	miss := specs.LinuxSeccompArg{Index: idx, Value: mask, ValueTwo: 0, Op: specs.OpMaskedEqual}
+	return m.conditional(r, entries, action, errno, hits, miss, func(a specs.LinuxSeccompArg) bool { return excludes(a, mask) })
+}
+
+// ifSet handles the rules that apply action when r.FlagsArg is not zero,
+// and leave the syscall to the base otherwise.
+func (m merger) ifSet(r seccomp.Rule, entries []specs.LinuxSyscall, action specs.LinuxSeccompAction, errno *uint) ([]specs.LinuxSyscall, error) {
+	idx := uint(r.FlagsArg)
+	hit := specs.LinuxSeccompArg{Index: idx, Value: 0, Op: specs.OpNotEqual}
+	miss := specs.LinuxSeccompArg{Index: idx, Value: 0, Op: specs.OpEqualTo}
+	return m.conditional(r, entries, action, errno, []specs.LinuxSeccompArg{hit}, miss, func(a specs.LinuxSeccompArg) bool { return a == miss })
+}
+
+// conditional applies action when any condition of hits (on one
+// argument) matches, and leaves the syscall to the base when miss, their
+// complement, matches. excluded reports whether a base condition on that
+// argument only matches values miss matches too.
+func (m merger) conditional(r seccomp.Rule, entries []specs.LinuxSyscall, action specs.LinuxSeccompAction, errno *uint, hitConds []specs.LinuxSeccompArg, miss specs.LinuxSeccompArg, excluded func(specs.LinuxSeccompArg) bool) ([]specs.LinuxSyscall, error) {
 	if alwaysDenied(entries) {
 		return entries, nil
 	}
-	mask := uint64(r.Mask())
-	idx := uint(r.FlagsArg)
+	idx := miss.Index
 	hits := func(args []specs.LinuxSeccompArg) []specs.LinuxSyscall {
 		var out []specs.LinuxSyscall
-		for b := mask; b != 0; b &= b - 1 {
-			bit := uint64(1) << bits.TrailingZeros64(b)
+		for _, h := range hitConds {
 			out = append(out, specs.LinuxSyscall{
 				Names:    []string{r.Name},
 				Action:   action,
 				ErrnoRet: errno,
-				Args:     append(clone(args), specs.LinuxSeccompArg{Index: idx, Value: bit, ValueTwo: bit, Op: specs.OpMaskedEqual}),
+				Args:     append(clone(args), h),
 			})
 		}
 		return out
@@ -232,9 +257,9 @@ func (m merger) ifFlags(r seccomp.Rule, entries []specs.LinuxSyscall, action spe
 			continue
 		}
 		if a, ok := argAt(e.Args, idx); ok {
-			if excludes(a, mask) {
-				// The base already restricts the flags to values
-				// without these bits (e.g. clone in the
+			if excluded(a) {
+				// The base already restricts the argument to
+				// values miss matches (e.g. clone in the
 				// RuntimeDefault profile): what it allows is fine.
 				out = append(out, e)
 				continue
@@ -247,7 +272,7 @@ func (m merger) ifFlags(r seccomp.Rule, entries []specs.LinuxSyscall, action spe
 		if len(e.Args) == 0 && e.Action == m.defaultAction {
 			continue
 		}
-		e.Args = append(clone(e.Args), specs.LinuxSeccompArg{Index: idx, Value: mask, ValueTwo: 0, Op: specs.OpMaskedEqual})
+		e.Args = append(clone(e.Args), miss)
 		out = append(out, e)
 	}
 	return out, nil

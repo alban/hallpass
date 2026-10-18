@@ -24,6 +24,9 @@ const (
 	// ErrnoIfNamespace fails the syscall with Errno when the flags in
 	// FlagsArg request a new user or mount namespace; otherwise allows.
 	ErrnoIfNamespace
+	// NotifyIfSet notifies when the argument FlagsArg (a pointer) is not
+	// zero; otherwise allows.
+	NotifyIfSet
 )
 
 // PathArg locates a (dirfd, path) pair in the syscall arguments. DirFD is the
@@ -39,7 +42,7 @@ type Rule struct {
 	Nr       int
 	Name     string
 	Kind     Kind
-	FlagsArg int    // for NotifyIfWrite and ErrnoIfNamespace
+	FlagsArg int    // for NotifyIfWrite, ErrnoIfNamespace and NotifyIfSet
 	Errno    uint32 // for Errno and ErrnoIfNamespace
 	Op       string // operation shown in prompts
 	Paths    []PathArg
@@ -158,6 +161,15 @@ func commonRules(allowUserns bool) []Rule {
 		{Nr: unix.SYS_OPENAT2, Name: "openat2", Kind: Notify, Op: "write", Paths: []PathArg{{0, 1}}},
 		// io_uring performs I/O without per-operation syscalls.
 		{Nr: unix.SYS_IO_URING_SETUP, Name: "io_uring_setup", Kind: Errno, Errno: uint32(unix.EPERM)},
+
+		// Network: the destination of connect, and of the sends that
+		// carry one. sendmsg and sendmmsg hide it in struct msghdr:
+		// every call is notified, and the monitor continues the ones
+		// without an address at once.
+		{Nr: unix.SYS_CONNECT, Name: "connect", Kind: Notify, Op: "connect", Cat: Network},
+		{Nr: unix.SYS_SENDTO, Name: "sendto", Kind: NotifyIfSet, FlagsArg: 4, Op: "send", Cat: Network},
+		{Nr: unix.SYS_SENDMSG, Name: "sendmsg", Kind: Notify, Op: "send", Cat: Network},
+		{Nr: unix.SYS_SENDMMSG, Name: "sendmmsg", Kind: Notify, Op: "send", Cat: Network},
 	}
 	if !allowUserns {
 		// Inside a private mount namespace a process could bind-mount a

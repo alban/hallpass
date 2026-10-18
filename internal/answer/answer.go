@@ -99,6 +99,9 @@ func grant(p Policy, d *monitor.Decision, rs []rules.Rule, obj rules.Object, exp
 		m.Path = &rules.PathMatch{Path: folder, Tree: true}
 	case obj.Proc != nil:
 		m.Proc = &rules.ProcMatch{Name: obj.Proc.Name, Comm: comm(obj.Proc)}
+	case obj.IsNet():
+		// The address alone: no subject or subtree answers yet.
+		m = rules.ExactNet(obj)
 	default:
 		return
 	}
@@ -121,6 +124,8 @@ func exact(obj rules.Object) rules.ObjectMatch {
 		return rules.ObjectMatch{Path: &rules.PathMatch{Path: obj.Path.Path}}
 	case obj.Proc != nil:
 		return rules.ObjectMatch{Proc: &rules.ProcMatch{Name: obj.Proc.Name, Comm: comm(obj.Proc)}}
+	case obj.IsNet():
+		return rules.ExactNet(obj)
 	}
 	return rules.ObjectMatch{Unknown: true}
 }
@@ -131,6 +136,8 @@ func sameMatch(a, b rules.ObjectMatch) bool {
 		return *a.Path == *b.Path
 	case a.Proc != nil && b.Proc != nil:
 		return *a.Proc == *b.Proc
+	case a.IsNet() || b.IsNet():
+		return a.IsNet() && b.IsNet() && a.NetString() == b.NetString()
 	}
 	return a.Unknown && b.Unknown
 }
@@ -164,6 +171,12 @@ func Request(p Policy, req *monitor.Request, waiting int) ui.Request {
 		r.Path = ProcPath(obj.Proc)
 		what := fmt.Sprintf("%s of %q processes outside the sandbox", obj.Proc.Name, comm(obj.Proc))
 		r.Scope, r.Never = what, what
+	case obj.Inet != nil:
+		r.Path = obj.Inet.String()
+		r.Scope, r.Never = r.Path, r.Path
+	case obj.Unix != nil:
+		r.Path = obj.Unix.String()
+		r.Scope, r.Never = r.Path, r.Path
 	default:
 		// Allowing it skips every rule, including the denies, and a
 		// process can make its path unreadable on purpose: so only "once"

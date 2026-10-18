@@ -101,6 +101,9 @@ func goHelper(mode string) int {
 		fmt.Println("syscallexec:", <-done)
 		return 1
 	}
+	if mode == "net" {
+		return netHelper(os.Args[1:])
+	}
 	fmt.Println("unknown helper mode", mode)
 	return 1
 }
