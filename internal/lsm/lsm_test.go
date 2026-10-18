@@ -63,6 +63,23 @@ func TestLoad(t *testing.T) {
 	}
 }
 
+// TestReadOwnSecurityfs reads the LSM list as a container does where
+// securityfs is not mounted.
+func TestReadOwnSecurityfs(t *testing.T) {
+	needRoot(t)
+	want, err := os.ReadFile("/sys/kernel/security/lsm")
+	if err != nil {
+		t.Skip(err)
+	}
+	got, err := readOwnSecurityfs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
 func TestFromFDs(t *testing.T) {
 	needRoot(t)
 	if err := Supported(); err != nil {

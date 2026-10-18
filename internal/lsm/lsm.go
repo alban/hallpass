@@ -97,12 +97,17 @@ func Active() error {
 }
 
 // ActiveIn is Active, reading the active LSM list in root directory root:
-// the host's, for a process in a container (/proc/1/root).
+// the host's, for a process in a container (/proc/1/root). Where securityfs
+// is not mounted there (e.g. a kind node), it mounts its own, which needs
+// CAP_SYS_ADMIN.
 func ActiveIn(root string) error {
 	if err := Supported(); err != nil {
 		return err
 	}
 	b, err := os.ReadFile(filepath.Join(root, "/sys/kernel/security/lsm"))
+	if errors.Is(err, os.ErrNotExist) {
+		b, err = readOwnSecurityfs()
+	}
 	if err != nil {
 		return fmt.Errorf("cannot read the active LSMs: %w", err)
 	}
@@ -112,6 +117,31 @@ func ActiveIn(root string) error {
 		}
 	}
 	return fmt.Errorf("BPF-LSM is not active (%s); add bpf to the lsm= kernel parameter", strings.TrimSpace(string(b)))
+}
+
+// readOwnSecurityfs reads the active LSM list from a new securityfs mount,
+// detached: attached nowhere, gone once closed.
+func readOwnSecurityfs() ([]byte, error) {
+	fsfd, err := unix.Fsopen("securityfs", unix.FSOPEN_CLOEXEC)
+	if err != nil {
+		return nil, fmt.Errorf("fsopen securityfs: %w", err)
+	}
+	defer unix.Close(fsfd)
+	if err := unix.FsconfigCreate(fsfd); err != nil {
+		return nil, fmt.Errorf("securityfs: %w", err)
+	}
+	mfd, err := unix.Fsmount(fsfd, unix.FSMOUNT_CLOEXEC, unix.MOUNT_ATTR_RDONLY|unix.MOUNT_ATTR_NOSUID|unix.MOUNT_ATTR_NODEV|unix.MOUNT_ATTR_NOEXEC)
+	if err != nil {
+		return nil, fmt.Errorf("fsmount securityfs: %w", err)
+	}
+	defer unix.Close(mfd)
+	fd, err := unix.Openat(mfd, "lsm", unix.O_RDONLY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, err
+	}
+	f := os.NewFile(uintptr(fd), "securityfs/lsm")
+	defer f.Close()
+	return io.ReadAll(f)
 }
 
 type nodeKey struct {
