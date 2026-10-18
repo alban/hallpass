@@ -20,7 +20,7 @@ $ hallpass --allow ~/.copilot --allow ~/.cache/copilot -- copilot
 $ hallpass --ask=allow --log=writes.jsonl -- make install
 ```
 
-Nothing is ever asked or denied, except the always-denied paths (`--deny`, `~/.config/hallpass`). Each write is logged with the reason `audit` when it would have been asked, `policy` when the rules allow it anyway:
+Nothing is ever asked or denied, except the always-denied paths (`--deny`, `~/.config/hallpass` and the hallpass binary). Each write is logged with the reason `audit` when it would have been asked, `policy` when the rules allow it anyway:
 
 ```json
 {"time":"...","pid":60083,"exe":"/usr/bin/dash","syscall":"openat","path":"/home/me/elsewhere","decision":"allow","reason":"audit"}
