@@ -54,6 +54,7 @@ nav:
       - Web UI: answers/web.md
       - Write a client: answers/api.md
   - How it works: design.md
+  - Comparison: comparison.md
 
 markdown_extensions:
   - admonition
