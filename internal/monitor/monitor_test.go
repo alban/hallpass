@@ -518,10 +518,18 @@ func TestProcRoot(t *testing.T) {
 }
 
 func TestExecContinued(t *testing.T) {
-	// No rule at all: an exec is continued anyway, even in strict mode.
-	fx := setup(t, &fakeKernel{}, true)
+	// No rule at all: an exec is continued anyway, even in strict mode,
+	// once its task is a member.
+	k := &fakeKernel{}
+	fx := setup(t, k, true)
 	id := fx.f.send(unix.SYS_EXECVE, map[int]string{0: "/usr/bin/true"}, nil)
 	fx.f.expect(t, id, 0)
+	k.mu.Lock()
+	members := len(k.members)
+	k.mu.Unlock()
+	if members != 1 {
+		t.Fatalf("%d members after execve", members)
+	}
 	d := fx.next(t, func(ev Event) bool { return ev.Decided != nil }).Decided
 	if !d.Allowed || d.Syscall != "execve" || d.Why[0].Builtin != "execve" ||
 		len(d.Objects) != 1 || d.Objects[0].Path.Path != "/usr/bin/true" {
@@ -534,7 +542,7 @@ func TestExecContinued(t *testing.T) {
 func TestStrict(t *testing.T) {
 	k := &fakeKernel{}
 	fx := setup(t, k, false)
-	if len(k.members) != 1 || k.syncs != 1 {
+	if len(k.members) != 0 || k.syncs != 1 {
 		t.Fatalf("members %v syncs %d", k.members, k.syncs)
 	}
 	ask := tree(fx.dir, rules.Ask)

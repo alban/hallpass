@@ -90,8 +90,10 @@ replaces the whole rule set. The node agent needs a session id in them:
 `monitor.Kernel` then becomes a per-session view of the shared `LSM`.
 
 The first exec is the barrier: the container's first `execve` is
-notified, so the agent marks the init process as a member (on
-`Attach`) before it runs the container's binary.
+notified, so the agent marks the task as a member when it handles that
+notification, before the container's binary runs. Not on `Attach`: the
+init process is still runc's then, and it reopens its exec fifo for
+writing, which the session's rules would deny.
 
 Paths: `bpf_path_d_path` resolves from the task's root, so rule paths
 are container paths already; `Sync` resolves them to inodes through

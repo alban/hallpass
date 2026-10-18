@@ -303,9 +303,9 @@ func New(cfg Config) (*Monitor, error)
 
 // Attach starts mediating the processes behind seccompFD. rootPID is
 // the process the filter was installed on, in the monitor's pid
-// namespace; in strict mode it becomes a BPF member. The launcher must
-// keep it from running untrusted code until Attach returns. Called once
-// per listener.
+// namespace. In strict mode, tasks become BPF members on their execve,
+// which the filter must notify: the root may still run trusted runtime
+// code until then (runc init). Called once per listener.
 func (m *Monitor) Attach(seccompFD, rootPID int) error
 
 // Events subscribes a client; each call returns a new channel. Opened,
@@ -481,7 +481,7 @@ const (
   rules and retry, since the request stays pending.
 - **No `os.Process`**: the monitor does not wait for or signal processes.
   Liveness comes from the listener fd (POLLHUP when no task uses the
-  filter); the root pid is only used for `/proc` and `AddMember`. Since
+  filter); the root pid is only used for `/proc`. Since
   Linux 6.11 (95036a79e7b5), `SECCOMP_IOCTL_NOTIF_RECV` on a filter with
   no task left returns `ENOENT` at once instead of blocking, which is
   also its error for a task killed before its notification was received:

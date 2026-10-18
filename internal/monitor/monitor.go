@@ -270,11 +270,11 @@ func (m *Monitor) attach(n Notifier, root int, hup <-chan struct{}, j *seccomp.J
 	}
 	m.mu.Unlock()
 	if m.kernel != nil {
+		// The root is not made a member here: it may still run the
+		// container runtime's init (runc reopens its exec fifo). Each
+		// task becomes one on its execve (exec).
 		m.kmu.Lock()
-		err := m.kernel.AddMember(root)
-		if err == nil {
-			err = m.syncLocked(m.currentRules())
-		}
+		err := m.syncLocked(m.currentRules())
 		if err == nil {
 			l.mountFD, err = unix.Open(fmt.Sprintf("/proc/%d/mountinfo", root), unix.O_RDONLY|unix.O_CLOEXEC, 0)
 		}
