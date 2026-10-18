@@ -45,7 +45,7 @@ hallpass combines two kernel mechanisms:
 
 ## Get started
 
-Requires Linux 5.5 or later, amd64 or arm64.
+Requires Linux 5.9 or later (strict mode: 6.12), amd64 or arm64.
 
 ```console
 go build ./cmd/hallpass

@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- Linux with seccomp user notification (5.0+; `SECCOMP_USER_NOTIF_FLAG_CONTINUE` needs 5.5+). Check `/proc/sys/kernel/seccomp/actions_avail` contains `user_notif`.
+- Linux 5.9 or later, with seccomp user notification: check `/proc/sys/kernel/seccomp/actions_avail` contains `user_notif`. hallpass uses the `SECCOMP_IOCTL_NOTIF_ID_VALID` ioctl number fixed in 5.9. CI tests 6.1 and later.
 - arm64 or amd64.
 - Desktop prompts: a session D-Bus with an `org.freedesktop.Notifications` service supporting actions (GNOME, KDE, most notification daemons).
 - Strict mode has more requirements: see [Strict mode](strict.md#requirements).
