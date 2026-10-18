@@ -177,7 +177,9 @@ func Request(p Policy, req *monitor.Request, waiting int) ui.Request {
 		r.Scope, r.Never = what, what
 	case obj.Inet != nil:
 		r.Path = obj.Inet.String()
-		r.Scope, r.Never = r.Path, r.Path
+		// Answers cover every protocol (rules.ExactNet).
+		r.Scope = obj.Inet.Addr.String()
+		r.Never = r.Scope
 		if obj.Inet.OwnListener {
 			r.Note = OwnListenerNote
 		}

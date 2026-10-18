@@ -273,7 +273,7 @@ func TestEnforceNet(t *testing.T) {
 		}
 		t.Cleanup(func() { ln.Close() })
 	}
-	allowed, other := tcp(), tcp()
+	allowed, other, anyProto := tcp(), tcp(), tcp()
 	udp, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -314,6 +314,8 @@ func TestEnforceNet(t *testing.T) {
 			{Prefix: netip.MustParsePrefix("127.0.0.1/32"), Proto: unix.IPPROTO_TCP, PortLo: uint16(allowed), PortHi: uint16(allowed)},
 			{Prefix: netip.MustParsePrefix("127.0.0.0/8"), Proto: unix.IPPROTO_UDP, PortLo: uint16(udpPort), PortHi: uint16(udpPort)},
 			{Prefix: netip.MustParsePrefix("127.0.0.1/32"), Proto: unix.IPPROTO_UDP, PortLo: uint16(other), PortHi: uint16(other), Expires: time.Now().Add(-time.Second)},
+			// An answer: any protocol.
+			{Prefix: netip.MustParsePrefix("127.0.0.1/32"), PortLo: uint16(anyProto), PortHi: uint16(anyProto), Expires: time.Now().Add(time.Hour)},
 		},
 		Abstract: []AbstractRule{
 			{Name: abs + "o", Prefix: true},
@@ -341,6 +343,8 @@ func TestEnforceNet(t *testing.T) {
 	}{
 		{"connect " + lo(allowed), true, true},
 		{"connect " + lo(other), false, true},
+		{"connect " + lo(anyProto), true, true},
+		{"sendto " + lo(anyProto), true, true},
 		{"connect6 [::ffff:127.0.0.1]:" + strconv.Itoa(allowed), true, true},
 		{"connect6 [::ffff:127.0.0.1]:" + strconv.Itoa(other), false, true},
 		{"fastopen " + lo(other), false, true},

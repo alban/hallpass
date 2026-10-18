@@ -848,7 +848,9 @@ static __always_inline bool inet_granted(struct hp_grant *g, struct inet_dest *d
 	for (int i = 0; i < GRANT_INET; i++) {
 		struct grant_inet *gi = &g->inet[i];
 
-		if (gi->set && gi->port == d->port && gi->proto == d->proto && eq16(gi->addr, d->addr))
+		/* proto 0: any, as in rules (the socket's protocol was unknown). */
+		if (gi->set && gi->port == d->port && (!gi->proto || gi->proto == d->proto) &&
+		    eq16(gi->addr, d->addr))
 			return true;
 	}
 	return false;

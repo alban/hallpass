@@ -139,7 +139,7 @@ func netTry(kind, addr string) error {
 	}
 	defer unix.Close(fd)
 	switch kind {
-	case "connect":
+	case "connect", "udpconnect":
 		return unix.Connect(fd, sa)
 	case "sendto":
 		return unix.Sendto(fd, []byte("x"), 0, sa)
@@ -423,7 +423,8 @@ H a1 connect %[3]s
 					t.Fatalf("read prompt: %v\n%s", err, out.String())
 				}
 				pr := req.Prompt
-				if pr.GetOp() != st.op || !strings.HasPrefix(pr.GetPath(), st.path) || pr.GetScope() != pr.GetPath() || pr.GetNote() != st.note {
+				scope := strings.TrimPrefix(strings.TrimPrefix(pr.GetPath(), "tcp "), "udp ")
+				if pr.GetOp() != st.op || !strings.HasPrefix(pr.GetPath(), st.path) || pr.GetScope() != scope || pr.GetNote() != st.note {
 					t.Errorf("prompt %v, want %s %s* (note %q)", pr, st.op, st.path, st.note)
 				}
 				p.answer(req.Id, st.reply)
@@ -440,5 +441,53 @@ H a1 connect %[3]s
 				t.Logf("output:\n%s", out.String())
 			}
 		})
+	}
+}
+
+// TestNetAnyProto: glibc's getaddrinfo connects a UDP socket to an address
+// (sending nothing) before the program connects with TCP. An answer covers
+// every protocol, so that is one prompt.
+func TestNetAnyProto(t *testing.T) {
+	for _, mode := range modes(t) {
+		for _, reply := range []string{"temp", "always"} {
+			t.Run(mode+"/"+reply, func(t *testing.T) {
+				e := newEnv(t)
+				nt := listenOutside(t, e.root)
+				self, err := os.Executable()
+				if err != nil {
+					t.Fatal(err)
+				}
+				script := fmt.Sprintf(`
+H() { HALLPASS_E2E_HELPER=net "$HP_SELF" "$@"; }
+H uc udpconnect %[1]s
+H tc connect %[1]s
+`, nt.tcp)
+				// A second prompt is dismissed after the timeout: tc=denied.
+				c := e.cmd(script, "--ask=answer", "--timeout=5s", "--mediate=files,exec,network", "--mode="+mode)
+				c.Env = append(c.Env, "HP_SELF="+self)
+				var out strings.Builder
+				c.Stdout, c.Stderr = &out, &out
+				if err := c.Start(); err != nil {
+					t.Fatal(err)
+				}
+				p := dialPrompts(t, e, c)
+				req, err := p.nextRequest(10 * time.Second)
+				if err != nil {
+					t.Fatalf("read prompt: %v\n%s", err, out.String())
+				}
+				if pr := req.Prompt; pr.GetPath() != "udp "+nt.tcp || pr.GetScope() != nt.tcp {
+					t.Errorf("prompt %v, want udp %s", pr, nt.tcp)
+				}
+				p.answer(req.Id, reply)
+				if err := c.Wait(); err != nil {
+					t.Fatalf("hallpass: %v\n%s", err, out.String())
+				}
+				for _, want := range []string{"uc=ok", "tc=ok"} {
+					if !strings.Contains(out.String(), want+"\n") {
+						t.Errorf("output lacks %q\n%s", want, out.String())
+					}
+				}
+			})
+		}
 	}
 }

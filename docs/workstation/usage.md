@@ -46,7 +46,7 @@ With `--mediate=files,exec,network`, hallpass also asks before a sandboxed proce
 ```
  hallpass: curl (pid 4242) wants to connect
  tcp 140.82.112.3:443
- [t] and [a] allow: tcp 140.82.112.3:443
+ [t] and [a] allow: 140.82.112.3:443
 ```
 
 Destinations are shown as addresses, not names: `tcp 1.2.3.4:443`, `udp [2001:db8::1]:53`, `unix /run/user/1000/bus`, `unix @name` (abstract). Answers cover that destination only. One kind is allowed without asking: a loopback or unix listener started inside the sandbox, such as a test server the agent runs; with `--no-implicit` it is asked, with the note "listener started inside the sandbox".

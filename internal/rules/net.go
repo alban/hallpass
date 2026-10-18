@@ -218,14 +218,17 @@ func parseUnix(s string) (ObjectMatch, error) {
 	return ObjectMatch{Unix: u}, nil
 }
 
-// ExactNet returns the match for exactly o's destination: one address,
-// port and protocol, or one unix path or abstract name.
+// ExactNet returns the match for exactly o's destination: one address and
+// port, any protocol, or one unix path or abstract name. Answers use it:
+// the protocol is left out because glibc's getaddrinfo connects a UDP
+// socket to each address (to sort them, sending nothing) before the
+// program connects with TCP, and both should be one question.
 func ExactNet(o Object) ObjectMatch {
 	if o.Unix != nil {
 		return ObjectMatch{Unix: &UnixMatch{Path: o.Unix.Path, Abstract: o.Unix.Abstract, Name: o.Unix.Name}}
 	}
 	a := o.Inet.Addr.Addr().Unmap()
-	m := &InetMatch{Proto: o.Inet.Proto, Prefix: netip.PrefixFrom(a, a.BitLen())}
+	m := &InetMatch{Prefix: netip.PrefixFrom(a, a.BitLen())}
 	if p := o.Inet.Addr.Port(); p != 0 {
 		m.PortLo, m.PortHi = p, p
 	}

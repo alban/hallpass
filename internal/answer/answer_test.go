@@ -32,7 +32,7 @@ func TestRequest(t *testing.T) {
 	}
 	r = Request(p, &monitor.Request{Objects: []rules.Object{{Unknown: errors.New("EFAULT")}}}, 0)
 	r = Request(p, &monitor.Request{Op: rules.OpConnect, Objects: []rules.Object{{Inet: &rules.InetObject{Proto: 6, Addr: netip.MustParseAddrPort("127.0.0.1:80"), OwnListener: true}}}}, 0)
-	if r.Op != "connect" || r.Path != "tcp 127.0.0.1:80" || r.Scope != r.Path || r.Never != r.Path || r.Note != OwnListenerNote {
+	if r.Op != "connect" || r.Path != "tcp 127.0.0.1:80" || r.Scope != "127.0.0.1:80" || r.Never != r.Scope || r.Note != OwnListenerNote {
 		t.Errorf("inet: %+v", r)
 	}
 	r = Request(p, &monitor.Request{Op: rules.OpSend, Objects: []rules.Object{{Unix: &rules.UnixObject{Abstract: true, Name: "x"}}}}, 0)
@@ -47,10 +47,10 @@ func TestNetAnswers(t *testing.T) {
 	obj := rules.Object{Inet: &rules.InetObject{Proto: 6, Addr: netip.MustParseAddrPort("[::1]:443")}}
 	var d monitor.Decision
 	grant(p, &d, nil, obj, time.Time{})
-	if len(d.AddRules) != 1 || d.AddRules[0].Object.NetString() != "tcp:[::1]:443" {
+	if len(d.AddRules) != 1 || d.AddRules[0].Object.NetString() != "[::1]:443" {
 		t.Fatalf("grant: %+v", d.AddRules)
 	}
-	if m := exact(obj); m.NetString() != "tcp:[::1]:443" {
+	if m := exact(obj); m.NetString() != "[::1]:443" {
 		t.Errorf("never: %+v", m)
 	}
 	u := rules.Object{Unix: &rules.UnixObject{Path: "/run/x.sock"}}

@@ -119,8 +119,16 @@ func TestEvalNet(t *testing.T) {
 
 func TestExactNet(t *testing.T) {
 	o := inet(6, "[::ffff:1.2.3.4]:443")
-	if got := ExactNet(o).NetString(); got != "tcp:1.2.3.4:443" {
+	m := ExactNet(o)
+	if got := m.NetString(); got != "1.2.3.4:443" {
 		t.Errorf("ExactNet = %q", got)
+	}
+	r := []Rule{{Ops: OpNet, Object: m, Verdict: Allow}}
+	if _, _, ok := Eval(r, OpConnect, inet(17, "1.2.3.4:443"), time.Time{}); !ok {
+		t.Error("ExactNet of tcp does not match udp")
+	}
+	if _, _, ok := Eval(r, OpConnect, inet(6, "1.2.3.4:444"), time.Time{}); ok {
+		t.Error("ExactNet matches another port")
 	}
 	u := Object{Unix: &UnixObject{Abstract: true, Name: "a"}}
 	if got := ExactNet(u).NetString(); got != "unix:@a" {
