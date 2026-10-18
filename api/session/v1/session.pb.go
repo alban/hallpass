@@ -856,6 +856,7 @@ type Prompt struct {
 	Scope         string `protobuf:"bytes,7,opt,name=scope,proto3" json:"scope,omitempty"`
 	Never         string `protobuf:"bytes,8,opt,name=never,proto3" json:"never,omitempty"` // what "never" covers
 	Warn          string `protobuf:"bytes,9,opt,name=warn,proto3" json:"warn,omitempty"`   // e.g. "SSH keys — secret store"
+	Note          string `protobuf:"bytes,10,opt,name=note,proto3" json:"note,omitempty"`  // e.g. "listener started inside the sandbox"
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -949,6 +950,13 @@ func (x *Prompt) GetNever() string {
 func (x *Prompt) GetWarn() string {
 	if x != nil {
 		return x.Warn
+	}
+	return ""
+}
+
+func (x *Prompt) GetNote() string {
+	if x != nil {
+		return x.Note
 	}
 	return ""
 }
@@ -2595,7 +2603,7 @@ const file_session_proto_rawDesc = "" +
 	"\aobjects\x18\x04 \x03(\v2\x1b.hallpass.session.v1.ObjectR\aobjects\x126\n" +
 	"\asubject\x18\x05 \x01(\v2\x1c.hallpass.session.v1.SubjectR\asubject\x12/\n" +
 	"\x05facts\x18\x06 \x03(\v2\x19.hallpass.session.v1.FactR\x05facts\x123\n" +
-	"\x06prompt\x18\a \x01(\v2\x1b.hallpass.session.v1.PromptR\x06prompt\"\xc4\x01\n" +
+	"\x06prompt\x18\a \x01(\v2\x1b.hallpass.session.v1.PromptR\x06prompt\"\xd8\x01\n" +
 	"\x06Prompt\x12\x0e\n" +
 	"\x02op\x18\x01 \x01(\tR\x02op\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12\x10\n" +
@@ -2605,7 +2613,9 @@ const file_session_proto_rawDesc = "" +
 	"\aparents\x18\x06 \x03(\tR\aparents\x12\x14\n" +
 	"\x05scope\x18\a \x01(\tR\x05scope\x12\x14\n" +
 	"\x05never\x18\b \x01(\tR\x05never\x12\x12\n" +
-	"\x04warn\x18\t \x01(\tR\x04warn\"\x88\x02\n" +
+	"\x04warn\x18\t \x01(\tR\x04warn\x12\x12\n" +
+	"\x04note\x18\n" +
+	" \x01(\tR\x04note\"\x88\x02\n" +
 	"\x06Object\x125\n" +
 	"\x04path\x18\x01 \x01(\v2\x1f.hallpass.session.v1.PathObjectH\x00R\x04path\x125\n" +
 	"\x04proc\x18\x02 \x01(\v2\x1f.hallpass.session.v1.ProcObjectH\x00R\x04proc\x12\x1a\n" +

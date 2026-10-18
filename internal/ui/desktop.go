@@ -106,6 +106,9 @@ func (d *Desktop) Ask(ctx context.Context, r Request) Answer {
 		body += fmt.Sprintf("\n<b><span foreground=\"#cc0000\">[!] %s</span></b>",
 			html.EscapeString(sanitize(r.Warn)))
 	}
+	if r.Note != "" {
+		body += "\n(" + html.EscapeString(sanitize(r.Note)) + ")"
+	}
 	if o := r.Origin(); o != "" {
 		body += "\nby: " + html.EscapeString(o)
 	}

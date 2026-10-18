@@ -121,6 +121,7 @@ message Prompt {
   string scope = 7;
   string never = 8;  // what "never" covers
   string warn = 9;   // e.g. "SSH keys — secret store"
+  string note = 10;  // e.g. "listener started inside the sandbox"
 }
 
 message Object {

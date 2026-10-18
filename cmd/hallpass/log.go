@@ -10,6 +10,7 @@ import (
 
 	"github.com/alban/hallpass/internal/answer"
 	"github.com/alban/hallpass/internal/monitor"
+	"github.com/alban/hallpass/internal/rules"
 )
 
 // logEntry is one line of --log.
@@ -19,6 +20,7 @@ type logEntry struct {
 	Exe      string `json:"exe,omitempty"`
 	Syscall  string `json:"syscall"`
 	Path     string `json:"path,omitempty"`
+	Net      string `json:"net,omitempty"` // e.g. "tcp 127.0.0.1:80", "unix @name"
 	Decision string `json:"decision"`
 	Reason   string `json:"reason"`
 }
@@ -56,8 +58,12 @@ func decidedEntry(d *monitor.Decided, audit bool) logEntry {
 	}
 	if d.Source == monitor.SourceLSM {
 		e.Reason = "lsm"
-		if len(d.Objects) > 0 && d.Objects[0].Path != nil {
-			e.Path = d.Objects[0].Path.Path
+		if len(d.Objects) > 0 {
+			o := d.Objects[0]
+			if o.Path != nil {
+				e.Path = o.Path.Path
+			}
+			e.Net = netName(o)
 		}
 		return e
 	}
@@ -93,6 +99,7 @@ func decidedEntry(d *monitor.Decided, audit bool) logEntry {
 		default:
 			e.Path = ""
 		}
+		e.Net = netName(o)
 	}
 	if e.Reason != "" {
 		return e
@@ -111,4 +118,15 @@ func decidedEntry(d *monitor.Decided, audit bool) logEntry {
 		}
 	}
 	return e
+}
+
+// netName shows a network destination, "" for other objects.
+func netName(o rules.Object) string {
+	switch {
+	case o.Inet != nil:
+		return o.Inet.String()
+	case o.Unix != nil:
+		return o.Unix.String()
+	}
+	return ""
 }

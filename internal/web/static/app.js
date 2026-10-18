@@ -35,24 +35,59 @@ function el(tag, props, ...children) {
 function opName(op) {
   op = op || 0;
   const names = [[1, "write"], [2, "create"], [4, "create directory"], [8, "create symlink"],
-    [16, "delete"], [32, "link"], [64, "rename"], [128, "truncate"]];
+    [16, "delete"], [32, "link"], [64, "rename"], [128, "truncate"], [256, "connect"], [512, "send"]];
   for (const [bit, name] of names) if (op & bit) return name;
   return "?";
 }
 
 function opsNames(ops) {
-  const names = ["write", "create", "mkdir", "symlink", "delete", "link", "rename", "truncate"];
+  const names = ["write", "create", "mkdir", "symlink", "delete", "link", "rename", "truncate", "connect", "send"];
   const out = [];
   names.forEach((n, i) => { if (ops & (1 << i)) out.push(n); });
-  return out.length === 8 ? "all" : out.join(",");
+  if (out.length === 10) return "all";
+  if ((ops & 0xff) === 0xff) return ["files", ...out.slice(8)].join(",");
+  if ((ops & 0x300) === 0x300) return [...out.slice(0, -2), "network"].join(",");
+  return out.join(",");
+}
+
+function protoName(p) {
+  return p === 6 ? "tcp" : p === 17 ? "udp" : "ip/" + (p || 0);
+}
+
+function inetAddr(addr, port) {
+  return (addr.includes(":") ? "[" + addr + "]" : addr) + ":" + (port || 0);
 }
 
 function objectText(o) {
   if (!o) return "";
   if (o.path) return o.path.path;
   if (o.proc) return "/proc: " + (o.proc.name || "");
+  if (o.inet) return protoName(o.inet.proto) + " " + inetAddr(o.inet.addr || "", o.inet.port) + (o.inet.ownListener ? " (listener started inside the sandbox)" : "");
+  if (o.unix) return "unix " + (o.unix.abstract ? "@" + (o.unix.name || "") : o.unix.path || "") + (o.unix.ownListener ? " (listener started inside the sandbox)" : "");
   if ("unknown" in o) return "(unknown path: " + o.unknown + ")";
   return "?";
+}
+
+// netMatchText mirrors rules.ObjectMatch.NetString.
+function netMatchText(o) {
+  if (o.anyNet) return "all";
+  if (o.ownListener) return "listeners started inside the sandbox";
+  if (o.unix) {
+    const u = o.unix;
+    if (u.abstract) return "unix:@" + (u.name || "") + (u.prefix ? "*" : "");
+    return "unix:" + (u.prefix ? (u.path || "").replace(/\/$/, "") + "/**" : u.path || "");
+  }
+  if (o.inet) {
+    const i = o.inet;
+    let s = i.proto ? protoName(i.proto) + ":" : "";
+    const [addr, bits] = (i.prefix || "").split("/");
+    const v6 = (addr || "").includes(":");
+    if (!addr) s += "*";
+    else s += (v6 ? "[" + addr + "]" : addr) + (bits && bits !== (v6 ? "128" : "32") ? "/" + bits : "");
+    if (i.portLo || i.portHi) s += ":" + (i.portLo || 0) + ((i.portHi || 0) !== (i.portLo || 0) ? "-" + (i.portHi || 0) : "");
+    return s;
+  }
+  return "";
 }
 
 function baseName(p) { return (p || "").split("/").pop(); }
@@ -229,6 +264,7 @@ function pendingCard(pid, r) {
     el("div", {}, baseName(p.exe) + " (pid " + (p.pid || 0) + ") wants to " + (p.op || opName(r.op)) + ":"),
     el("div", { class: "path" }, p.path || (r.objects || []).map(objectText).join(" → ")),
     p.warn ? el("div", { class: "warn" }, p.warn) : null,
+    p.note ? el("div", { class: "meta" }, "(" + p.note + ")") : null,
     origin ? el("div", { class: "meta" }, "by: " + origin) : null,
     facts.length ? el("div", { class: "meta" }, "facts: " + facts.join(", ")) : null,
     el("div", { class: "meta" }, "session " + sessionLabel(pid) + " · " + (r.syscall || "")),
@@ -281,6 +317,7 @@ function ruleRow(pid, r) {
   if (o.path) obj = o.path.path + (o.path.tree ? "/**" : "");
   else if (o.proc) obj = "/proc: " + (o.proc.name || "*") + (o.proc.comm ? " of " + o.proc.comm : "");
   else if (o.unknown) obj = "(unknown paths)";
+  else if (o.anyNet || o.ownListener || o.inet || o.unix) obj = "network: " + netMatchText(o);
   const verdict = (r.verdict || "ALLOW").toLowerCase();
   const err = el("span", { class: "error" });
   const remove = el("button", {

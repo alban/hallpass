@@ -20,6 +20,7 @@ import (
 	"github.com/alban/hallpass/internal/launch"
 	"github.com/alban/hallpass/internal/lsm"
 	"github.com/alban/hallpass/internal/privsep"
+	"github.com/alban/hallpass/internal/rules"
 	"github.com/alban/hallpass/internal/seccomp"
 	"github.com/alban/hallpass/internal/tty"
 	"github.com/alban/hallpass/internal/ui"
@@ -77,7 +78,9 @@ type options struct {
 	allowTTY    bool
 	wait        string
 	mediate     seccomp.Category
-	args        []string // command to run
+	// allowNet and denyNet are --allow-net and --deny-net.
+	allowNet, denyNet []rules.ObjectMatch
+	args              []string // command to run
 }
 
 // parseFlags parses and checks argv. When it returns ok == false, the run
@@ -102,6 +105,9 @@ func parseFlags(argv []string, printPolicy bool) (o options, code int, ok bool) 
 	fs.StringVar(&o.escalate, "escalate", "", "strict mode, when not root: how to run the loader as root: "+strings.Join(privsep.Tools, " | ")+" (default: the saved choice, else ask on a terminal, else auto)")
 	fs.StringVar(&o.wait, "wait", "main", "exit when the main process exits (main), or keep supervising its background processes until they all exit (all)")
 	mediate := fs.String("mediate", seccomp.DefaultCategories.String(), "comma-separated `categories` of syscalls to mediate: files, exec, network (network is experimental)")
+	var allowNet, denyNet listFlag
+	fs.Var(&allowNet, "allow-net", "network `destination` allowed without asking (repeatable; needs --mediate with network): all, [tcp:|udp:]ADDR[/N][:PORT[-PORT]] (ADDR * for any, IPv6 in brackets), unix:/path, unix:/dir/**, unix:@name, unix:@prefix*")
+	fs.Var(&denyNet, "deny-net", "network `destination` always denied (repeatable, same syntax, wins over --allow-net)")
 	if err := fs.Parse(argv); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return o, 0, false
@@ -111,6 +117,22 @@ func parseFlags(argv []string, printPolicy bool) (o options, code int, ok bool) 
 	var err error
 	if o.mediate, err = seccomp.ParseCategories(*mediate); err != nil {
 		return o, fail(fmt.Errorf("--mediate: %w", err)), false
+	}
+	for _, f := range []struct {
+		name string
+		in   listFlag
+		out  *[]rules.ObjectMatch
+	}{{"allow-net", allowNet, &o.allowNet}, {"deny-net", denyNet, &o.denyNet}} {
+		if len(f.in) > 0 && o.mediate&seccomp.Network == 0 {
+			return o, fail(fmt.Errorf("--%s needs network in --mediate", f.name)), false
+		}
+		for _, s := range f.in {
+			m, err := rules.ParseNet(s)
+			if err != nil {
+				return o, fail(fmt.Errorf("--%s: %w", f.name, err)), false
+			}
+			*f.out = append(*f.out, m)
+		}
 	}
 	if o.noImplicit {
 		explicit := false
@@ -274,6 +296,12 @@ func (o *options) buildPolicy(home string) *defaults.Defaults {
 	d := defaults.New(home, granted, append(allows, o.allow...), o.deny)
 	if !o.noImplicit && o.mediate&seccomp.Network != 0 {
 		d.AllowOwnListeners()
+	}
+	for _, m := range o.allowNet {
+		d.AllowNet(m)
+	}
+	for _, m := range o.denyNet {
+		d.DenyNet(m)
 	}
 	return d
 }

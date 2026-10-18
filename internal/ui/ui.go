@@ -88,7 +88,10 @@ type Request struct {
 	Never string
 	// Warn, when set, is a warning about the request (e.g. "SSH keys —
 	// secret store"); the prompt shows it in red.
-	Warn    string
+	Warn string
+	// Note, when set, is a fact about the request, e.g. "listener started
+	// inside the sandbox".
+	Note    string
 	Waiting int // other requests queued behind this one
 	// More, if not nil, sends the new value of Waiting while the request
 	// is asked about.
@@ -232,6 +235,9 @@ func (r Request) Text() (string, map[string]Answer) {
 	fmt.Fprintf(&b, "%s (pid %d) wants to %s:\n  %s\n", sanitize(baseName(r.Exe)), r.PID, sanitize(r.Op), sanitize(r.Path))
 	if r.Warn != "" {
 		fmt.Fprintf(&b, "  [!] %s\n", sanitize(r.Warn))
+	}
+	if r.Note != "" {
+		fmt.Fprintf(&b, "  (%s)\n", sanitize(r.Note))
 	}
 	if o := r.Origin(); o != "" {
 		fmt.Fprintf(&b, "  by: %s\n", o)

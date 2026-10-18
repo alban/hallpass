@@ -333,3 +333,112 @@ H abstract inside-unix %s
 		}
 	}
 }
+
+// TestNetAllow checks --allow-net and --deny-net.
+func TestNetAllow(t *testing.T) {
+	for _, mode := range modes(t) {
+		for _, tc := range []struct {
+			name  string
+			flags func(e env) []string
+			want  map[string]string // label: outcome; the others: denied
+		}{
+			{"all", func(env) []string { return []string{"--allow-net=all"} }, map[string]string{
+				"tcp": "ok", "mapped": "ok", "udpto": "ok", "udpmsg": "ok", "udpunspec": "ok", "unix": "ok", "unixgram": "ok", "abstract": "ok",
+			}},
+			{"deny wins", func(env) []string { return []string{"--allow-net=all", "--deny-net=tcp:127.0.0.0/8"} }, map[string]string{
+				"udpto": "ok", "udpmsg": "ok", "udpunspec": "ok", "unix": "ok", "unixgram": "ok", "abstract": "ok",
+			}},
+			{"some", func(e env) []string {
+				return []string{"--allow-net=udp:127.0.0.1", "--allow-net=unix:@hallpass-e2e-*", "--allow-net=unix:" + e.root + "/s.sock"}
+			}, map[string]string{
+				"udpto": "ok", "udpmsg": "ok", "udpunspec": "ok", "unix": "ok", "abstract": "ok",
+			}},
+		} {
+			t.Run(mode+"/"+tc.name, func(t *testing.T) {
+				e := newEnv(t)
+				nt := listenOutside(t, e.root)
+				log := e.root + "/log"
+				got := e.netCmd(t, nt, append(tc.flags(e), "--ask=deny", "--mediate=files,exec,network", "--mode="+mode, "--log="+log)...)
+				for _, l := range netLabels {
+					want := tc.want[l]
+					if want == "" {
+						want = "denied"
+					}
+					if got[l] != want {
+						t.Errorf("%s: %q, want %q", l, got[l], want)
+					}
+				}
+				b, err := os.ReadFile(log)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if line := `"net":"tcp ` + nt.tcp + `","decision":"` + map[string]string{"ok": "allow", "": "deny"}[tc.want["tcp"]]; !strings.Contains(string(b), line) {
+					t.Errorf("log lacks %s:\n%s", line, b)
+				}
+			})
+		}
+	}
+}
+
+// TestNetPrompt answers network prompts: address-only answers, and the
+// note on a listener started inside the sandbox.
+func TestNetPrompt(t *testing.T) {
+	for _, mode := range modes(t) {
+		t.Run(mode, func(t *testing.T) {
+			e := newEnv(t)
+			nt := listenOutside(t, e.root)
+			self, err := os.Executable()
+			if err != nil {
+				t.Fatal(err)
+			}
+			script := fmt.Sprintf(`
+H() { HALLPASS_E2E_HELPER=net "$HP_SELF" "$@"; }
+H in inside-tcp 127.0.0.1:0
+H t1 connect %[1]s
+H t2 connect %[1]s
+H t3 connect %[1]s
+H u1 sendto %[2]s
+H u2 sendmsg %[2]s
+H a1 connect %[3]s
+`, nt.tcp, nt.udp, nt.abstract)
+			// --no-implicit: the listener inside is asked about.
+			c := e.cmd(script, "--ask=answer", "--timeout=20s", "--mediate=files,exec,network", "--no-implicit", "--allow=/", "--mode="+mode)
+			c.Env = append(c.Env, "HP_SELF="+self)
+			var out strings.Builder
+			c.Stdout, c.Stderr = &out, &out
+			if err := c.Start(); err != nil {
+				t.Fatal(err)
+			}
+			p := dialPrompts(t, e, c)
+			// "never" covers t3 too; "always" covers u2.
+			for _, st := range []struct{ op, path, note, reply string }{
+				{"connect", "tcp 127.0.0.1:", "listener started inside the sandbox", "once"},
+				{"connect", "tcp " + nt.tcp, "", "once"},
+				{"connect", "tcp " + nt.tcp, "", "never"},
+				{"send", "udp " + nt.udp, "", "always"},
+				{"connect", "unix " + nt.abstract, "", "deny"},
+			} {
+				req, err := p.nextRequest(10 * time.Second)
+				if err != nil {
+					t.Fatalf("read prompt: %v\n%s", err, out.String())
+				}
+				pr := req.Prompt
+				if pr.GetOp() != st.op || !strings.HasPrefix(pr.GetPath(), st.path) || pr.GetScope() != pr.GetPath() || pr.GetNote() != st.note {
+					t.Errorf("prompt %v, want %s %s* (note %q)", pr, st.op, st.path, st.note)
+				}
+				p.answer(req.Id, st.reply)
+			}
+			if err := c.Wait(); err != nil {
+				t.Fatalf("hallpass: %v\n%s", err, out.String())
+			}
+			for _, want := range []string{"in=ok", "t1=ok", "t2=denied", "t3=denied", "u1=ok", "u2=ok", "a1=denied"} {
+				if !strings.Contains(out.String(), want+"\n") {
+					t.Errorf("output lacks %q", want)
+				}
+			}
+			if t.Failed() {
+				t.Logf("output:\n%s", out.String())
+			}
+		})
+	}
+}

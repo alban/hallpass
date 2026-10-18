@@ -34,6 +34,9 @@ type Defaults struct {
 	// ownListeners allows connections to listeners started inside the
 	// sandbox.
 	ownListeners bool
+	// netAllow and netDeny are network destinations (--allow-net,
+	// --deny-net).
+	netAllow, netDeny []rules.ObjectMatch
 }
 
 // warnLoc is a sensitive location: a write under path is still asked about,
@@ -98,6 +101,13 @@ func (d *Defaults) AllowDevice(path string) {
 // AllowOwnListeners allows connections and sends to the loopback or unix
 // listeners started inside the sandbox, when network is mediated.
 func (d *Defaults) AllowOwnListeners() { d.ownListeners = true }
+
+// AllowNet allows connections and sends to m, a network match
+// (rules.ParseNet).
+func (d *Defaults) AllowNet(m rules.ObjectMatch) { d.netAllow = append(d.netAllow, m) }
+
+// DenyNet denies connections and sends to m, a network match.
+func (d *Defaults) DenyNet(m rules.ObjectMatch) { d.netDeny = append(d.netDeny, m) }
 
 // sensitiveLabels maps a location under home to a human name for its secrets.
 // Writes there are asked about like anywhere else, but the prompt is flagged
@@ -192,6 +202,12 @@ func (d *Defaults) Rules() []rules.Rule {
 			Set:     Set,
 		})
 	}
+	for _, m := range d.netDeny {
+		rs = append(rs, rules.Rule{Ops: rules.OpNet, Object: m, Verdict: rules.Deny, Set: Set})
+	}
+	for _, m := range d.netAllow {
+		rs = append(rs, rules.Rule{Ops: rules.OpNet, Object: m, Verdict: rules.Allow, Set: Set})
+	}
 	return rs
 }
 
@@ -203,7 +219,7 @@ func (d *Defaults) Describe(rs []rules.Rule) []string {
 	for _, s := range deny {
 		out = append(out, "  "+s)
 	}
-	out = append(out, "Writable without asking:")
+	out = append(out, "Allowed without asking:")
 	for _, s := range allow {
 		out = append(out, "  "+s)
 	}

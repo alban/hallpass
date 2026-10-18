@@ -25,6 +25,7 @@ export interface Prompt {
   scope?: string;
   never?: string;
   warn?: string;
+  note?: string;
 }
 
 export interface PendingRequest {
@@ -36,7 +37,14 @@ export interface PendingRequest {
 export interface Rule {
   id?: string;
   ops?: number;
-  object?: { path?: { path?: string; tree?: boolean }; proc?: { name?: string; comm?: string } };
+  object?: {
+    path?: { path?: string; tree?: boolean };
+    proc?: { name?: string; comm?: string };
+    inet?: { proto?: number; prefix?: string; portLo?: number; portHi?: number };
+    unix?: { path?: string; abstract?: boolean; name?: string; prefix?: boolean };
+    ownListener?: boolean;
+    anyNet?: boolean;
+  };
   verdict?: 'ALLOW' | 'DENY' | 'ASK';
   label?: string;
   expires?: string;
@@ -89,6 +97,47 @@ export function ruleObject(r: Rule): string {
   }
   if (r.object?.proc) {
     return `proc ${r.object.proc.name || r.object.proc.comm || ''}`;
+  }
+  const net = netMatch(r.object);
+  return net ? `network: ${net}` : '';
+}
+
+function protoName(p: number): string {
+  return p === 6 ? 'tcp' : p === 17 ? 'udp' : `ip/${p}`;
+}
+
+// netMatch mirrors rules.ObjectMatch.NetString: '' if o is not a network
+// match.
+export function netMatch(o: Rule['object']): string {
+  if (o?.anyNet) {
+    return 'all';
+  }
+  if (o?.ownListener) {
+    return 'listeners started inside the sandbox';
+  }
+  if (o?.unix) {
+    const u = o.unix;
+    if (u.abstract) {
+      return `unix:@${u.name || ''}${u.prefix ? '*' : ''}`;
+    }
+    return `unix:${u.prefix ? (u.path || '').replace(/\/$/, '') + '/**' : u.path || ''}`;
+  }
+  if (o?.inet) {
+    const i = o.inet;
+    let s = i.proto ? `${protoName(i.proto)}:` : '';
+    const [addr, bits] = (i.prefix || '').split('/');
+    const v6 = (addr || '').includes(':');
+    if (!addr) {
+      s += '*';
+    } else {
+      s += (v6 ? `[${addr}]` : addr) + (bits && bits !== (v6 ? '128' : '32') ? `/${bits}` : '');
+    }
+    const lo = i.portLo || 0;
+    const hi = i.portHi || 0;
+    if (lo || hi) {
+      s += `:${lo}${hi !== lo ? `-${hi}` : ''}`;
+    }
+    return s;
   }
   return '';
 }

@@ -4,6 +4,7 @@
 package defaults
 
 import (
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -163,9 +164,35 @@ func TestDescribe(t *testing.T) {
 		rules.Rule{Ops: rules.OpAll, Verdict: rules.Deny, Object: rules.ObjectMatch{Proc: &rules.ProcMatch{Name: "mem", Comm: "node"}}},
 	)
 	s := strings.Join(d.Describe(rs), "\n")
-	for _, want := range []string{"  ~/.ssh (SSH keys)\n", "  ~/src/proj (project)\n", "  ~/.bashrc (this path only)\n", "  /dev/null\n", "  ~/tmp/hallpass-1 ($TMPDIR, removed at exit if empty)\n", "~/.npm (until ", "/proc/<pid>/mem of node processes\nWritable", "flagged as a secret store:\n"} {
+	for _, want := range []string{"  ~/.ssh (SSH keys)\n", "  ~/src/proj (project)\n", "  ~/.bashrc (this path only)\n", "  /dev/null\n", "  ~/tmp/hallpass-1 ($TMPDIR, removed at exit if empty)\n", "~/.npm (until ", "/proc/<pid>/mem of node processes\nAllowed", "flagged as a secret store:\n"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("Describe lacks %q:\n%s", want, s)
 		}
+	}
+}
+
+func TestNet(t *testing.T) {
+	d := newTest()
+	all, _ := rules.ParseNet("all")
+	ssh, _ := rules.ParseNet("tcp:10.0.0.0/8:22")
+	d.AllowNet(all)
+	d.DenyNet(ssh)
+	rs := d.Rules()
+	at := time.Now()
+	for _, tc := range []struct {
+		addr string
+		want rules.Verdict
+	}{{"10.1.2.3:22", rules.Deny}, {"10.1.2.3:80", rules.Allow}, {"[::1]:22", rules.Allow}} {
+		obj := rules.Object{Inet: &rules.InetObject{Proto: 6, Addr: netip.MustParseAddrPort(tc.addr)}}
+		if v, _, ok := rules.Eval(rs, rules.OpConnect, obj, at); !ok || v != tc.want {
+			t.Errorf("%s: %v %v, want %v", tc.addr, v, ok, tc.want)
+		}
+	}
+	if v, _, ok := rules.Eval(rs, rules.OpWrite, rules.Object{Path: &rules.PathObject{Path: "/etc/x"}}, at); ok && v == rules.Allow {
+		t.Error("allow-net all allows files")
+	}
+	s := strings.Join(d.Describe(rs), "\n")
+	if !strings.Contains(s, "network: tcp:10.0.0.0/8:22\nAllowed") || !strings.Contains(s, "network: all\n") {
+		t.Errorf("Describe:\n%s", s)
 	}
 }

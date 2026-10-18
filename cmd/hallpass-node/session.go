@@ -170,6 +170,10 @@ func objectName(o rules.Object) string {
 	switch {
 	case o.Path != nil:
 		return clean(o.Path.Path)
+	case o.Inet != nil:
+		return clean(o.Inet.String())
+	case o.Unix != nil:
+		return clean(o.Unix.String())
 	case o.Unknown != nil:
 		return "(unknown path)"
 	}
@@ -256,7 +260,7 @@ func (s *session) Prompt(req *monitor.Request) *pb.Prompt {
 	return &pb.Prompt{
 		Op: r.Op, Path: r.Path, Exe: r.Exe, Pid: r.PID,
 		Cmdline: r.Cmdline, Parents: r.Parents,
-		Scope: r.Scope, Never: r.Never, Warn: r.Warn,
+		Scope: r.Scope, Never: r.Never, Warn: r.Warn, Note: r.Note,
 	}
 }
 

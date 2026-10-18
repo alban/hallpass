@@ -20,6 +20,10 @@ import (
 // maxParents bounds the parent chain shown in prompts.
 const maxParents = 4
 
+// OwnListenerNote is the prompt's note on a destination a process of the
+// sandbox listens on.
+const OwnListenerNote = "listener started inside the sandbox"
+
 // Policy is what the mapping needs from the session's policy
 // (*defaults.Defaults).
 type Policy interface {
@@ -174,9 +178,15 @@ func Request(p Policy, req *monitor.Request, waiting int) ui.Request {
 	case obj.Inet != nil:
 		r.Path = obj.Inet.String()
 		r.Scope, r.Never = r.Path, r.Path
+		if obj.Inet.OwnListener {
+			r.Note = OwnListenerNote
+		}
 	case obj.Unix != nil:
 		r.Path = obj.Unix.String()
 		r.Scope, r.Never = r.Path, r.Path
+		if obj.Unix.OwnListener {
+			r.Note = OwnListenerNote
+		}
 	default:
 		// Allowing it skips every rule, including the denies, and a
 		// process can make its path unreadable on purpose: so only "once"

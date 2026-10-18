@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { ClusterStore, ConnectFn, Deps, Link, maxBackoff, pendingCount } from './store';
-import { answerAllowed, sessionName } from './types';
+import { answerAllowed, ruleObject, sessionName } from './types';
 
 // A fake wasm client and port-forward: each open() creates a connection
 // the test drives.
@@ -179,5 +179,20 @@ describe('types', () => {
       'n/p/c'
     );
     expect(sessionName({ info: { command: ['sh', '-c'] } })).toBe('sh -c');
+  });
+
+  it('names network rules', () => {
+    expect(ruleObject({ object: { anyNet: true } })).toBe('network: all');
+    expect(ruleObject({ object: { inet: { proto: 6, prefix: '10.0.0.0/8', portLo: 22, portHi: 22 } } })).toBe(
+      'network: tcp:10.0.0.0/8:22'
+    );
+    expect(ruleObject({ object: { inet: { prefix: '::1/128', portLo: 80, portHi: 90 } } })).toBe(
+      'network: [::1]:80-90'
+    );
+    expect(ruleObject({ object: { inet: {} } })).toBe('network: *');
+    expect(ruleObject({ object: { unix: { abstract: true, name: 'x', prefix: true } } })).toBe(
+      'network: unix:@x*'
+    );
+    expect(ruleObject({ object: { unix: { path: '/run/', prefix: true } } })).toBe('network: unix:/run/**');
   });
 });

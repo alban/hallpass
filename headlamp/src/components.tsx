@@ -138,6 +138,7 @@ function PendingTable(props: {
               <StatusLabel status="warning">{r.request.prompt.warn}</StatusLabel>
             </>
           )}
+          {r.request.prompt?.note && ` (${r.request.prompt.note})`}
         </>
       ),
     },
