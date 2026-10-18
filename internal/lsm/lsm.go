@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,11 +39,13 @@ const (
 )
 
 // Rule allows or denies a host path: the path and everything below it (Tree)
-// or that exact path only.
+// or that exact path only. With Net, it is about connections and datagrams
+// to the unix sockets bound there, not about writing files.
 type Rule struct {
 	Path    string // absolute and clean
 	Tree    bool
 	Deny    bool
+	Net     bool
 	Expires time.Time // zero: never (deny rules never expire)
 }
 
@@ -54,16 +57,19 @@ type ProcRule struct {
 	Expires    time.Time
 }
 
-// Event is one decision of the BPF programs.
+// Event is one decision of the BPF programs. Network events (op connect
+// or send) have Inet or Unix set, not Path.
 type Event struct {
 	PID     uint32
 	Comm    string
 	Op      string
 	Path    string
+	Inet    *InetDest
+	Unix    *UnixDest
 	Allowed bool
 }
 
-var opNames = [...]string{1: "open", "create", "mkdir", "rmdir", "unlink", "symlink", "link", "rename", "truncate"}
+var opNames = [...]string{1: "open", "create", "mkdir", "rmdir", "unlink", "symlink", "link", "rename", "truncate", "connect", "send"}
 
 // kfuncs are the kernel functions bpf/hallpass.bpf.c calls. The programs do
 // not load without them.
@@ -153,6 +159,7 @@ type nodeKey struct {
 // any number of sessions (see Session), each with its own members.
 type LSM struct {
 	members, protected, grants, rules, proc, events, cfgs *ebpf.Map
+	inet, abstract                                        *ebpf.Map
 	// links keep the programs attached; closing them detaches.
 	links []io.Closer
 	// linkFDs are the links' fds, for handing them to another process.
@@ -171,6 +178,8 @@ type LSM struct {
 	stale      map[uint32]map[nodeKey]hallpassRuleVal
 	staleProcs map[uint32]map[hallpassProcKey]hallpassProcVal
 	staleCfg   map[uint32]hallpassSessionCfg
+	staleInet  map[uint32]map[hallpassInetKey]hallpassInetVal
+	staleAbs   map[uint32]map[hallpassAbstractKey]hallpassAbstractVal
 	reading    bool
 }
 
@@ -189,6 +198,8 @@ type Session struct {
 	cfg   hallpassSessionCfg
 	nodes map[nodeKey]hallpassRuleVal
 	procs map[hallpassProcKey]hallpassProcVal
+	inet  map[hallpassInetKey]hallpassInetVal
+	abs   map[hallpassAbstractKey]hallpassAbstractVal
 	// The last rules given to Sync, for re-syncing in GrantOnce.
 	lastRules []Rule
 	lastProcs []ProcRule
@@ -224,6 +235,32 @@ var attachOrder = []string{
 	"hp_task_alloc", "hp_sb_alloc", "hp_sb_free", "hp_sb_kern_mount", "hp_task_kill", "hp_file_send_sigiotask",
 	"hp_file_open", "hp_path_mknod", "hp_path_mkdir", "hp_path_rmdir", "hp_path_unlink",
 	"hp_path_symlink", "hp_path_link", "hp_path_rename", "hp_path_truncate",
+	"hp_socket_post_create", "hp_sk_free", "hp_socket_connect", "hp_socket_sendmsg",
+	"hp_unix_stream_connect", "hp_unix_may_send",
+}
+
+// tracingOrder lists the tracing programs, attached after attachOrder, with
+// their hook: the sys_exit tracepoint, then fexit of a kernel function
+// (listenHook: the hook depends on the kernel).
+var tracingOrder = []struct{ prog, hook string }{
+	{"hp_sys_exit", sysExitHook},
+	{"hp_listen", listenHook},
+}
+
+// listenHook stands for the function of hp_listen: __inet_listen_sk, which
+// MPTCP listeners go through too, else inet_listen on kernels before 6.7.
+const listenHook = "listen"
+
+// tracingHook returns the kernel function or tracepoint of hook.
+func tracingHook(kernel *btf.Spec, hook string) string {
+	if hook != listenHook {
+		return hook
+	}
+	var fn *btf.Func
+	if kernel.TypeByName("__inet_listen_sk", &fn) == nil {
+		return "__inet_listen_sk"
+	}
+	return "inet_listen"
 }
 
 func programsByName(p *hallpassPrograms) map[string]*ebpf.Program {
@@ -235,6 +272,10 @@ func programsByName(p *hallpassPrograms) map[string]*ebpf.Program {
 		"hp_path_rmdir": p.HpPathRmdir, "hp_path_unlink": p.HpPathUnlink,
 		"hp_path_symlink": p.HpPathSymlink, "hp_path_link": p.HpPathLink,
 		"hp_path_rename": p.HpPathRename, "hp_path_truncate": p.HpPathTruncate,
+		"hp_socket_post_create": p.HpSocketPostCreate, "hp_sk_free": p.HpSkFree,
+		"hp_socket_connect": p.HpSocketConnect, "hp_socket_sendmsg": p.HpSocketSendmsg,
+		"hp_unix_stream_connect": p.HpUnixStreamConnect, "hp_unix_may_send": p.HpUnixMaySend,
+		"hp_sys_exit": p.HpSysExit, "hp_listen": p.HpListen,
 	}
 }
 
@@ -246,6 +287,15 @@ func Load(logAllowed bool) (*LSM, error) {
 		return nil, err
 	}
 	if err := spec.Variables["log_allowed"].Set(logAllowed); err != nil {
+		return nil, err
+	}
+	kernel, err := btf.LoadKernelSpec()
+	if err != nil {
+		return nil, fmt.Errorf("kernel BTF: %w", err)
+	}
+	listen := tracingHook(kernel, listenHook)
+	spec.Programs["hp_listen"].AttachTo = listen
+	if err := spec.Variables["listen_sk"].Set(listen != "inet_listen"); err != nil {
 		return nil, err
 	}
 	var objs hallpassObjects
@@ -262,7 +312,12 @@ func Load(logAllowed bool) (*LSM, error) {
 	m := &objs.hallpassMaps
 	l.members, l.protected, l.grants, l.rules, l.proc, l.events = m.Members, m.Protected, m.Grants, m.Rules, m.Proc, m.Events
 	l.cfgs = m.Sessions
+	l.inet, l.abstract = m.InetRules, m.AbstractRules
 	m.OwnedSbs.Close()
+	m.Listeners.Close()
+	m.ListenSks.Close()
+	m.Socks.Close()
+	m.Scratch.Close()
 	progs := programsByName(&objs.hallpassPrograms)
 	for _, name := range attachOrder {
 		prog := progs[name]
@@ -280,15 +335,18 @@ func Load(logAllowed bool) (*LSM, error) {
 			l.linkFDs = append(l.linkFDs, f.FD())
 		}
 	}
-	// Removes each grant (GrantOnce) when its syscall returns.
-	lk, err := link.AttachTracing(link.TracingOptions{Program: objs.HpSysExit})
-	if err != nil {
-		l.Close()
-		return nil, fmt.Errorf("attach %s: %w", objs.HpSysExit, err)
-	}
-	l.links = append(l.links, lk)
-	if f, ok := lk.(interface{ FD() int }); ok {
-		l.linkFDs = append(l.linkFDs, f.FD())
+	// hp_sys_exit removes each grant (GrantOnce) when its syscall returns.
+	for _, t := range tracingOrder {
+		prog := progs[t.prog]
+		lk, err := link.AttachTracing(link.TracingOptions{Program: prog})
+		if err != nil {
+			l.Close()
+			return nil, fmt.Errorf("attach %s: %w", prog, err)
+		}
+		l.links = append(l.links, lk)
+		if f, ok := lk.(interface{ FD() int }); ok {
+			l.linkFDs = append(l.linkFDs, f.FD())
+		}
 	}
 	if err := l.start(); err != nil {
 		l.Close()
@@ -307,7 +365,7 @@ func (l *LSM) start() error {
 const sysExitHook = "sys_exit"
 
 // hookIDs returns the kernel BTF IDs of the LSM hooks of attachOrder, then
-// of the sys_exit tracepoint.
+// of the hooks of tracingOrder.
 func hookIDs() ([]btf.TypeID, []string, error) {
 	spec, err := loadHallpass()
 	if err != nil {
@@ -317,8 +375,8 @@ func hookIDs() ([]btf.TypeID, []string, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("kernel BTF: %w", err)
 	}
-	ids := make([]btf.TypeID, len(attachOrder)+1)
-	hooks := make([]string, len(attachOrder)+1)
+	ids := make([]btf.TypeID, len(attachOrder), len(attachOrder)+len(tracingOrder))
+	hooks := make([]string, len(attachOrder), len(attachOrder)+len(tracingOrder))
 	for i, name := range attachOrder {
 		ps := spec.Programs[name]
 		if ps == nil {
@@ -333,26 +391,38 @@ func hookIDs() ([]btf.TypeID, []string, error) {
 		}
 		hooks[i] = ps.AttachTo
 	}
-	tp, err := kernel.AnyTypeByName("btf_trace_" + sysExitHook)
-	if err != nil {
-		return nil, nil, fmt.Errorf("tracepoint %s: %w", sysExitHook, err)
+	for _, t := range tracingOrder {
+		name := tracingHook(kernel, t.hook)
+		if t.hook == sysExitHook {
+			name = "btf_trace_" + sysExitHook
+		}
+		typ, err := kernel.AnyTypeByName(name)
+		if err != nil {
+			return nil, nil, fmt.Errorf("hook %s: %w", t.hook, err)
+		}
+		id, err := kernel.TypeID(typ)
+		if err != nil {
+			return nil, nil, err
+		}
+		ids = append(ids, id)
+		hooks = append(hooks, tracingHook(kernel, t.hook))
 	}
-	if ids[len(attachOrder)], err = kernel.TypeID(tp); err != nil {
-		return nil, nil, err
-	}
-	hooks[len(attachOrder)] = sysExitHook
 	return ids, hooks, nil
 }
 
-// checkLink makes sure lk attaches a BPF-LSM program to hook (BTF ID id), or
-// a program to the sys_exit tracepoint, so a helper cannot hand over a link
-// that enforces nothing. It only needs the link fd, no privileges.
-func checkLink(lk link.Link, hook string, id btf.TypeID) error {
+// checkLink makes sure lk attaches a BPF-LSM program to hook (BTF ID id), a
+// program to the sys_exit tracepoint, or an fexit program to function hook,
+// so a helper cannot hand over a link that enforces nothing. It only needs
+// the link fd, no privileges.
+func checkLink(lk link.Link, hook string, id btf.TypeID, fexit bool) error {
 	info, err := lk.Info()
 	if err != nil {
 		return fmt.Errorf("link for %s: %w", hook, err)
 	}
 	want := ebpf.AttachLSMMac
+	if fexit {
+		want = ebpf.AttachTraceFExit
+	}
 	if hook == sysExitHook {
 		if rt := info.RawTracepoint(); info.Type != link.RawTracepointType || rt == nil || rt.Name != sysExitHook {
 			return fmt.Errorf("link is not attached to %s", hook)
@@ -368,8 +438,8 @@ func checkLink(lk link.Link, hook string, id btf.TypeID) error {
 
 // maps are l's maps in the order of FDs, with their types.
 func (l *LSM) maps() ([]**ebpf.Map, []ebpf.MapType) {
-	return []**ebpf.Map{&l.members, &l.protected, &l.grants, &l.rules, &l.proc, &l.events, &l.cfgs},
-		[]ebpf.MapType{ebpf.TaskStorage, ebpf.TaskStorage, ebpf.TaskStorage, ebpf.Hash, ebpf.Hash, ebpf.RingBuf, ebpf.Hash}
+	return []**ebpf.Map{&l.members, &l.protected, &l.grants, &l.rules, &l.proc, &l.events, &l.cfgs, &l.inet, &l.abstract},
+		[]ebpf.MapType{ebpf.TaskStorage, ebpf.TaskStorage, ebpf.TaskStorage, ebpf.Hash, ebpf.Hash, ebpf.RingBuf, ebpf.Hash, ebpf.LPMTrie, ebpf.LPMTrie}
 }
 
 // FDs returns the fds that make up l, in the order FromFDs expects: the
@@ -389,11 +459,12 @@ func (l *LSM) FDs() []int {
 func FromFDs(fds []int) (*LSM, error) {
 	l := newLSM()
 	maps, want := l.maps()
-	if len(fds) != len(want)+len(attachOrder)+1 {
+	nfds := len(want) + len(attachOrder) + len(tracingOrder)
+	if len(fds) != nfds {
 		for _, fd := range fds {
 			unix.Close(fd)
 		}
-		return nil, fmt.Errorf("got %d fds, want %d", len(fds), len(want)+len(attachOrder)+1)
+		return nil, fmt.Errorf("got %d fds, want %d", len(fds), nfds)
 	}
 	ids, hooks, err := hookIDs()
 	for i, fd := range fds {
@@ -411,7 +482,8 @@ func FromFDs(fds []int) (*LSM, error) {
 			if f, ok := lk.(interface{ FD() int }); ok {
 				l.linkFDs = append(l.linkFDs, f.FD())
 			}
-			err = checkLink(lk, hooks[i-len(want)], ids[i-len(want)])
+			j := i - len(want)
+			err = checkLink(lk, hooks[j], ids[j], j > len(attachOrder))
 			continue
 		}
 		var m *ebpf.Map
@@ -491,6 +563,38 @@ func (l *LSM) adopt() error {
 	if err := sit.Err(); err != nil {
 		return fmt.Errorf("read the session settings: %w", err)
 	}
+	var ik hallpassInetKey
+	var iv hallpassInetVal
+	iit := l.inet.Iterate()
+	for iit.Next(&ik, &iv) {
+		if l.staleInet == nil {
+			l.staleInet = map[uint32]map[hallpassInetKey]hallpassInetVal{}
+		}
+		if l.staleInet[ik.Session] == nil {
+			l.staleInet[ik.Session] = map[hallpassInetKey]hallpassInetVal{}
+		}
+		l.staleInet[ik.Session][ik] = iv
+		l.nextID = max(l.nextID, ik.Session+1)
+	}
+	if err := iit.Err(); err != nil {
+		return fmt.Errorf("read the inet rules: %w", err)
+	}
+	var ak hallpassAbstractKey
+	var av hallpassAbstractVal
+	ait := l.abstract.Iterate()
+	for ait.Next(&ak, &av) {
+		if l.staleAbs == nil {
+			l.staleAbs = map[uint32]map[hallpassAbstractKey]hallpassAbstractVal{}
+		}
+		if l.staleAbs[ak.Session] == nil {
+			l.staleAbs[ak.Session] = map[hallpassAbstractKey]hallpassAbstractVal{}
+		}
+		l.staleAbs[ak.Session][ak] = av
+		l.nextID = max(l.nextID, ak.Session+1)
+	}
+	if err := ait.Err(); err != nil {
+		return fmt.Errorf("read the abstract unix rules: %w", err)
+	}
 	return nil
 }
 
@@ -512,7 +616,17 @@ func (l *LSM) DropStale() {
 	for id := range l.staleCfg {
 		_ = l.cfgs.Delete(id)
 	}
-	l.stale, l.staleProcs, l.staleCfg = nil, nil, nil
+	for _, m := range l.staleInet {
+		for k := range m {
+			_ = l.inet.Delete(k)
+		}
+	}
+	for _, m := range l.staleAbs {
+		for k := range m {
+			_ = l.abstract.Delete(k)
+		}
+	}
+	l.stale, l.staleProcs, l.staleCfg, l.staleInet, l.staleAbs = nil, nil, nil, nil, nil
 }
 
 // Close detaches the programs: no sandbox is restricted any more.
@@ -565,6 +679,8 @@ func (l *LSM) newSession(id uint32, root int) (*Session, error) {
 		mountinfo: "/proc/self/mountinfo",
 		nodes:     map[nodeKey]hallpassRuleVal{},
 		procs:     map[hallpassProcKey]hallpassProcVal{},
+		inet:      map[hallpassInetKey]hallpassInetVal{},
+		abs:       map[hallpassAbstractKey]hallpassAbstractVal{},
 		done:      make(chan struct{}),
 	}
 	if root != 0 {
@@ -591,6 +707,14 @@ func (l *LSM) newSession(id uint32, root int) (*Session, error) {
 	if c, ok := l.staleCfg[id]; ok {
 		s.cfg = c
 		delete(l.staleCfg, id)
+	}
+	if m := l.staleInet[id]; m != nil {
+		s.inet = m
+		delete(l.staleInet, id)
+	}
+	if m := l.staleAbs[id]; m != nil {
+		s.abs = m
+		delete(l.staleAbs, id)
 	}
 	l.sessions[id] = s
 	l.nextID = max(l.nextID, id+1)
@@ -645,6 +769,17 @@ func (s *Session) Close() error {
 		}
 	}
 	s.nodes, s.procs = nil, nil
+	for k := range s.inet {
+		if e := s.l.inet.Delete(k); e != nil && !errors.Is(e, ebpf.ErrKeyNotExist) {
+			err = e
+		}
+	}
+	for k := range s.abs {
+		if e := s.l.abstract.Delete(k); e != nil && !errors.Is(e, ebpf.ErrKeyNotExist) {
+			err = e
+		}
+	}
+	s.inet, s.abs = nil, nil
 	if e := s.l.cfgs.Delete(s.id); e != nil && !errors.Is(e, ebpf.ErrKeyNotExist) {
 		err = e
 	}
@@ -743,6 +878,28 @@ func (l *LSM) read() {
 		if int(ev.Op) < len(opNames) {
 			e.Op = opNames[ev.Op]
 		}
+		switch ev.Family {
+		case unix.AF_INET6:
+			e.Path = ""
+			e.Inet = &InetDest{Addr: netip.AddrPortFrom(netip.AddrFrom16(ev.Addr).Unmap(), ev.Port), Proto: ev.Proto}
+			fn(e)
+			continue
+		case unix.AF_UNIX:
+			e.Unix = &UnixDest{}
+			if ev.NameLen > 0 {
+				b := make([]byte, min(int(ev.NameLen), len(ev.Path)))
+				for i := range b {
+					b[i] = byte(ev.Path[i])
+				}
+				e.Unix.Abstract, e.Unix.Name = true, string(b)
+			} else {
+				// Only the name of the socket file is known.
+				e.Unix.Path = "…/" + cstr(ev.Name[:])
+			}
+			e.Path = ""
+			fn(e)
+			continue
+		}
 		if n := cstr(ev.Name[:]); n != "" {
 			if e.Path == "" {
 				// Source of a link: the hook gets no path for its directory.
@@ -822,6 +979,14 @@ func (s *Session) sync() ([]mount, error) {
 			}
 			v := nodes[k]
 			switch {
+			case r.Net && r.Deny && r.Tree:
+				v.NetDenyTree = 1
+			case r.Net && r.Deny:
+				v.NetDenyExact = 1
+			case r.Net && r.Tree:
+				v.NetAllowTree = max(v.NetAllowTree, exp)
+			case r.Net:
+				v.NetAllowExact = max(v.NetAllowExact, exp)
 			case r.Deny && r.Tree:
 				v.DenyTree = 1
 			case r.Deny:
@@ -901,10 +1066,18 @@ func (s *Session) procKey(name, comm string) hallpassProcKey {
 
 // GrantOnce lets thread tid, a member blocked in a syscall that seccomp
 // handed to the supervisor, write paths (exactly), and the /proc file of
-// proc when its Name is set, during that syscall only: the kernel removes
+// proc when its Name is set, and reach the network destinations of net,
+// during that syscall only: the kernel removes
 // the grant when the syscall returns, even if it is restarted, and no other
 // thread can use it. It must be called before the syscall is continued.
-func (s *Session) GrantOnce(tid int, paths []string, proc ProcRule) error {
+// Unix sockets bound to a path are granted with paths.
+func (s *Session) GrantOnce(tid int, paths []string, proc ProcRule, net NetGrant) error {
+	if len(net.Inet) > len(hallpassHpGrant{}.Inet) {
+		return fmt.Errorf("allow once: too many addresses (%d)", len(net.Inet))
+	}
+	if net.Abstract != nil && len(*net.Abstract) >= len(hallpassHpGrant{}.Abstract) {
+		return fmt.Errorf("allow once: abstract unix name too long")
+	}
 	fd, err := unix.PidfdOpen(tid, unix.PIDFD_THREAD)
 	if err != nil {
 		return fmt.Errorf("pidfd_open %d: %w", tid, err)
@@ -944,6 +1117,7 @@ func (s *Session) GrantOnce(tid int, paths []string, proc ProcRule) error {
 	if proc.Name != "" {
 		v.Proc = s.procKey(proc.Name, proc.Comm)
 	}
+	net.fill(&v)
 	return s.l.grants.Update(uint32(fd), v, ebpf.UpdateAny)
 }
 

@@ -13,6 +13,25 @@ import (
 	"github.com/cilium/ebpf"
 )
 
+type hallpassAbstractKey struct {
+	_         structs.HostLayout
+	Prefixlen uint32
+	Session   uint32
+	Name      [108]int8
+}
+
+type hallpassAbstractVal struct {
+	_ structs.HostLayout
+	E [8]struct {
+		_      structs.HostLayout
+		Expiry uint64
+		Deny   uint8
+		Exact  uint8
+		Len    uint8
+		Pad    [5]uint8
+	}
+}
+
 type hallpassEvent struct {
 	_       structs.HostLayout
 	Ts      uint64
@@ -23,6 +42,11 @@ type hallpassEvent struct {
 	Comm    [16]int8
 	Name    [256]int8
 	Path    [4096]int8
+	Family  uint16
+	Port    uint16
+	Proto   uint16
+	NameLen uint16
+	Addr    [16]uint8
 }
 
 type hallpassHpGrant struct {
@@ -30,14 +54,70 @@ type hallpassHpGrant struct {
 	Seq   uint64
 	Nodes [2]uint64
 	Proc  hallpassProcKey
+	Inet  [4]struct {
+		_     structs.HostLayout
+		Addr  [16]uint8
+		Port  uint16
+		Proto uint16
+		Set   uint8
+		Pad   [3]uint8
+	}
+	AbstractSet uint32
+	AbstractLen uint32
+	Abstract    [108]int8
+	_           [4]byte
 }
 
 type hallpassHpScratch struct {
 	_     structs.HostLayout
 	Depth uint32
-	Pad   uint32
+	Bits  uint32
 	Chain [64]uint64
 	Key   hallpassRuleKey
+	Leaf  uint64
+}
+
+type hallpassHpSock struct {
+	_           structs.HostLayout
+	Id          uint64
+	AllowedPeer uint64
+	Creator     uint32
+	Pad         uint32
+}
+
+type hallpassInetKey struct {
+	_         structs.HostLayout
+	Prefixlen uint32
+	Session   uint32
+	Addr      [16]uint8
+}
+
+type hallpassInetVal struct {
+	_ structs.HostLayout
+	E [8]struct {
+		_      structs.HostLayout
+		Expiry uint64
+		PortLo uint16
+		PortHi uint16
+		Proto  uint16
+		Deny   uint8
+		Pad    uint8
+	}
+}
+
+type hallpassListenKey struct {
+	_     structs.HostLayout
+	Netns uint32
+	Port  uint16
+	Pad   uint16
+	Addr  [16]uint8
+}
+
+type hallpassListenVal struct {
+	_       structs.HostLayout
+	Sk      uint64
+	Session uint32
+	Mixed   uint32
 }
 
 type hallpassProcKey struct {
@@ -64,27 +144,38 @@ type hallpassRuleKey struct {
 }
 
 type hallpassRuleVal struct {
-	_          structs.HostLayout
-	Cookie     uint64
-	AllowTree  uint64
-	AllowExact uint64
-	DenyTree   uint8
-	DenyExact  uint8
-	Pad        [6]uint8
+	_             structs.HostLayout
+	Cookie        uint64
+	AllowTree     uint64
+	AllowExact    uint64
+	NetAllowTree  uint64
+	NetAllowExact uint64
+	DenyTree      uint8
+	DenyExact     uint8
+	NetDenyTree   uint8
+	NetDenyExact  uint8
+	Pad           [4]uint8
 }
 
 type hallpassSessionCfg struct {
-	_       structs.HostLayout
-	Mediate uint32
-	Pad     uint32
+	_            structs.HostLayout
+	Mediate      uint32
+	Flags        uint32
+	AnyUnixAllow uint64
+	AnyUnixDeny  uint8
+	Pad          [7]uint8
 }
 
 // Names of all BPF objects in the ELF.
 //
 // Used for safe lookups in a Collection or CollectionSpec.
 const (
+	hallpassMapAbstractRules        = "abstract_rules"
 	hallpassMapEvents               = "events"
 	hallpassMapGrants               = "grants"
+	hallpassMapInetRules            = "inet_rules"
+	hallpassMapListenSks            = "listen_sks"
+	hallpassMapListeners            = "listeners"
 	hallpassMapMembers              = "members"
 	hallpassMapOwnedSbs             = "owned_sbs"
 	hallpassMapProc                 = "proc"
@@ -92,8 +183,10 @@ const (
 	hallpassMapRules                = "rules"
 	hallpassMapScratch              = "scratch"
 	hallpassMapSessions             = "sessions"
+	hallpassMapSocks                = "socks"
 	hallpassProgHpFileOpen          = "hp_file_open"
 	hallpassProgHpFileSendSigiotask = "hp_file_send_sigiotask"
+	hallpassProgHpListen            = "hp_listen"
 	hallpassProgHpPathLink          = "hp_path_link"
 	hallpassProgHpPathMkdir         = "hp_path_mkdir"
 	hallpassProgHpPathMknod         = "hp_path_mknod"
@@ -105,9 +198,16 @@ const (
 	hallpassProgHpSbAlloc           = "hp_sb_alloc"
 	hallpassProgHpSbFree            = "hp_sb_free"
 	hallpassProgHpSbKernMount       = "hp_sb_kern_mount"
+	hallpassProgHpSkFree            = "hp_sk_free"
+	hallpassProgHpSocketConnect     = "hp_socket_connect"
+	hallpassProgHpSocketPostCreate  = "hp_socket_post_create"
+	hallpassProgHpSocketSendmsg     = "hp_socket_sendmsg"
 	hallpassProgHpSysExit           = "hp_sys_exit"
 	hallpassProgHpTaskAlloc         = "hp_task_alloc"
 	hallpassProgHpTaskKill          = "hp_task_kill"
+	hallpassProgHpUnixMaySend       = "hp_unix_may_send"
+	hallpassProgHpUnixStreamConnect = "hp_unix_stream_connect"
+	hallpassVarListenSk             = "listen_sk"
 	hallpassVarLogAllowed           = "log_allowed"
 	hallpassVarUnusedEvent          = "unused_event"
 )
@@ -156,6 +256,7 @@ type hallpassSpecs struct {
 type hallpassProgramSpecs struct {
 	HpFileOpen          *ebpf.ProgramSpec `ebpf:"hp_file_open"`
 	HpFileSendSigiotask *ebpf.ProgramSpec `ebpf:"hp_file_send_sigiotask"`
+	HpListen            *ebpf.ProgramSpec `ebpf:"hp_listen"`
 	HpPathLink          *ebpf.ProgramSpec `ebpf:"hp_path_link"`
 	HpPathMkdir         *ebpf.ProgramSpec `ebpf:"hp_path_mkdir"`
 	HpPathMknod         *ebpf.ProgramSpec `ebpf:"hp_path_mknod"`
@@ -167,30 +268,42 @@ type hallpassProgramSpecs struct {
 	HpSbAlloc           *ebpf.ProgramSpec `ebpf:"hp_sb_alloc"`
 	HpSbFree            *ebpf.ProgramSpec `ebpf:"hp_sb_free"`
 	HpSbKernMount       *ebpf.ProgramSpec `ebpf:"hp_sb_kern_mount"`
+	HpSkFree            *ebpf.ProgramSpec `ebpf:"hp_sk_free"`
+	HpSocketConnect     *ebpf.ProgramSpec `ebpf:"hp_socket_connect"`
+	HpSocketPostCreate  *ebpf.ProgramSpec `ebpf:"hp_socket_post_create"`
+	HpSocketSendmsg     *ebpf.ProgramSpec `ebpf:"hp_socket_sendmsg"`
 	HpSysExit           *ebpf.ProgramSpec `ebpf:"hp_sys_exit"`
 	HpTaskAlloc         *ebpf.ProgramSpec `ebpf:"hp_task_alloc"`
 	HpTaskKill          *ebpf.ProgramSpec `ebpf:"hp_task_kill"`
+	HpUnixMaySend       *ebpf.ProgramSpec `ebpf:"hp_unix_may_send"`
+	HpUnixStreamConnect *ebpf.ProgramSpec `ebpf:"hp_unix_stream_connect"`
 }
 
 // hallpassMapSpecs contains maps before they are loaded into the kernel.
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type hallpassMapSpecs struct {
-	Events    *ebpf.MapSpec `ebpf:"events"`
-	Grants    *ebpf.MapSpec `ebpf:"grants"`
-	Members   *ebpf.MapSpec `ebpf:"members"`
-	OwnedSbs  *ebpf.MapSpec `ebpf:"owned_sbs"`
-	Proc      *ebpf.MapSpec `ebpf:"proc"`
-	Protected *ebpf.MapSpec `ebpf:"protected"`
-	Rules     *ebpf.MapSpec `ebpf:"rules"`
-	Scratch   *ebpf.MapSpec `ebpf:"scratch"`
-	Sessions  *ebpf.MapSpec `ebpf:"sessions"`
+	AbstractRules *ebpf.MapSpec `ebpf:"abstract_rules"`
+	Events        *ebpf.MapSpec `ebpf:"events"`
+	Grants        *ebpf.MapSpec `ebpf:"grants"`
+	InetRules     *ebpf.MapSpec `ebpf:"inet_rules"`
+	ListenSks     *ebpf.MapSpec `ebpf:"listen_sks"`
+	Listeners     *ebpf.MapSpec `ebpf:"listeners"`
+	Members       *ebpf.MapSpec `ebpf:"members"`
+	OwnedSbs      *ebpf.MapSpec `ebpf:"owned_sbs"`
+	Proc          *ebpf.MapSpec `ebpf:"proc"`
+	Protected     *ebpf.MapSpec `ebpf:"protected"`
+	Rules         *ebpf.MapSpec `ebpf:"rules"`
+	Scratch       *ebpf.MapSpec `ebpf:"scratch"`
+	Sessions      *ebpf.MapSpec `ebpf:"sessions"`
+	Socks         *ebpf.MapSpec `ebpf:"socks"`
 }
 
 // hallpassVariableSpecs contains global variables before they are loaded into the kernel.
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type hallpassVariableSpecs struct {
+	ListenSk    *ebpf.VariableSpec `ebpf:"listen_sk"`
 	LogAllowed  *ebpf.VariableSpec `ebpf:"log_allowed"`
 	UnusedEvent *ebpf.VariableSpec `ebpf:"unused_event"`
 }
@@ -215,21 +328,30 @@ func (o *hallpassObjects) Close() error {
 //
 // It can be passed to loadHallpassObjects or ebpf.CollectionSpec.LoadAndAssign.
 type hallpassMaps struct {
-	Events    *ebpf.Map `ebpf:"events"`
-	Grants    *ebpf.Map `ebpf:"grants"`
-	Members   *ebpf.Map `ebpf:"members"`
-	OwnedSbs  *ebpf.Map `ebpf:"owned_sbs"`
-	Proc      *ebpf.Map `ebpf:"proc"`
-	Protected *ebpf.Map `ebpf:"protected"`
-	Rules     *ebpf.Map `ebpf:"rules"`
-	Scratch   *ebpf.Map `ebpf:"scratch"`
-	Sessions  *ebpf.Map `ebpf:"sessions"`
+	AbstractRules *ebpf.Map `ebpf:"abstract_rules"`
+	Events        *ebpf.Map `ebpf:"events"`
+	Grants        *ebpf.Map `ebpf:"grants"`
+	InetRules     *ebpf.Map `ebpf:"inet_rules"`
+	ListenSks     *ebpf.Map `ebpf:"listen_sks"`
+	Listeners     *ebpf.Map `ebpf:"listeners"`
+	Members       *ebpf.Map `ebpf:"members"`
+	OwnedSbs      *ebpf.Map `ebpf:"owned_sbs"`
+	Proc          *ebpf.Map `ebpf:"proc"`
+	Protected     *ebpf.Map `ebpf:"protected"`
+	Rules         *ebpf.Map `ebpf:"rules"`
+	Scratch       *ebpf.Map `ebpf:"scratch"`
+	Sessions      *ebpf.Map `ebpf:"sessions"`
+	Socks         *ebpf.Map `ebpf:"socks"`
 }
 
 func (m *hallpassMaps) Close() error {
 	return _HallpassClose(
+		m.AbstractRules,
 		m.Events,
 		m.Grants,
+		m.InetRules,
+		m.ListenSks,
+		m.Listeners,
 		m.Members,
 		m.OwnedSbs,
 		m.Proc,
@@ -237,6 +359,7 @@ func (m *hallpassMaps) Close() error {
 		m.Rules,
 		m.Scratch,
 		m.Sessions,
+		m.Socks,
 	)
 }
 
@@ -244,6 +367,7 @@ func (m *hallpassMaps) Close() error {
 //
 // It can be passed to loadHallpassObjects or ebpf.CollectionSpec.LoadAndAssign.
 type hallpassVariables struct {
+	ListenSk    *ebpf.Variable `ebpf:"listen_sk"`
 	LogAllowed  *ebpf.Variable `ebpf:"log_allowed"`
 	UnusedEvent *ebpf.Variable `ebpf:"unused_event"`
 }
@@ -254,6 +378,7 @@ type hallpassVariables struct {
 type hallpassPrograms struct {
 	HpFileOpen          *ebpf.Program `ebpf:"hp_file_open"`
 	HpFileSendSigiotask *ebpf.Program `ebpf:"hp_file_send_sigiotask"`
+	HpListen            *ebpf.Program `ebpf:"hp_listen"`
 	HpPathLink          *ebpf.Program `ebpf:"hp_path_link"`
 	HpPathMkdir         *ebpf.Program `ebpf:"hp_path_mkdir"`
 	HpPathMknod         *ebpf.Program `ebpf:"hp_path_mknod"`
@@ -265,15 +390,22 @@ type hallpassPrograms struct {
 	HpSbAlloc           *ebpf.Program `ebpf:"hp_sb_alloc"`
 	HpSbFree            *ebpf.Program `ebpf:"hp_sb_free"`
 	HpSbKernMount       *ebpf.Program `ebpf:"hp_sb_kern_mount"`
+	HpSkFree            *ebpf.Program `ebpf:"hp_sk_free"`
+	HpSocketConnect     *ebpf.Program `ebpf:"hp_socket_connect"`
+	HpSocketPostCreate  *ebpf.Program `ebpf:"hp_socket_post_create"`
+	HpSocketSendmsg     *ebpf.Program `ebpf:"hp_socket_sendmsg"`
 	HpSysExit           *ebpf.Program `ebpf:"hp_sys_exit"`
 	HpTaskAlloc         *ebpf.Program `ebpf:"hp_task_alloc"`
 	HpTaskKill          *ebpf.Program `ebpf:"hp_task_kill"`
+	HpUnixMaySend       *ebpf.Program `ebpf:"hp_unix_may_send"`
+	HpUnixStreamConnect *ebpf.Program `ebpf:"hp_unix_stream_connect"`
 }
 
 func (p *hallpassPrograms) Close() error {
 	return _HallpassClose(
 		p.HpFileOpen,
 		p.HpFileSendSigiotask,
+		p.HpListen,
 		p.HpPathLink,
 		p.HpPathMkdir,
 		p.HpPathMknod,
@@ -285,9 +417,15 @@ func (p *hallpassPrograms) Close() error {
 		p.HpSbAlloc,
 		p.HpSbFree,
 		p.HpSbKernMount,
+		p.HpSkFree,
+		p.HpSocketConnect,
+		p.HpSocketPostCreate,
+		p.HpSocketSendmsg,
 		p.HpSysExit,
 		p.HpTaskAlloc,
 		p.HpTaskKill,
+		p.HpUnixMaySend,
+		p.HpUnixStreamConnect,
 	)
 }
 

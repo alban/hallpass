@@ -415,6 +415,7 @@ func (m *Monitor) allow(l *listener, n seccomp.Notif, sc seccomp.Rule, op rules.
 		if len(once) > 0 {
 			var paths []string
 			var proc lsm.ProcRule
+			var net lsm.NetGrant
 			for _, i := range once {
 				o := items[i].obj
 				switch {
@@ -422,9 +423,16 @@ func (m *Monitor) allow(l *listener, n seccomp.Notif, sc seccomp.Rule, op rules.
 					proc = lsm.ProcRule{Name: o.Proc.Name, Comm: o.Proc.Target.Chain[0].Comm}
 				case o.Path != nil:
 					paths = append(paths, o.Path.Path)
+				case o.Inet != nil:
+					net.Inet = append(net.Inet, lsm.InetDest{Addr: o.Inet.Addr, Proto: o.Inet.Proto})
+				case o.Unix != nil && o.Unix.Abstract:
+					name := o.Unix.Name
+					net.Abstract = &name
+				case o.Unix != nil:
+					paths = append(paths, o.Unix.Path)
 				}
 			}
-			if err := m.kernel.GrantOnce(int(n.PID), paths, proc); err != nil {
+			if err := m.kernel.GrantOnce(int(n.PID), paths, proc, net); err != nil {
 				m.warn("strict mode: allow once: " + err.Error())
 			}
 		}

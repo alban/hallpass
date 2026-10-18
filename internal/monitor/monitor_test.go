@@ -168,13 +168,15 @@ func (f *fakeNotifier) expectNone(t *testing.T) {
 
 // fakeKernel records the rules it is given.
 type fakeKernel struct {
-	mu      sync.Mutex
-	paths   []lsm.Rule
-	procs   []lsm.ProcRule
-	syncs   int
-	fail    error // next Sync fails with it
-	grants  [][]string
-	members []int
+	mu        sync.Mutex
+	paths     []lsm.Rule
+	procs     []lsm.ProcRule
+	syncs     int
+	fail      error // next Sync fails with it
+	grants    [][]string
+	members   []int
+	net       lsm.NetRules
+	netGrants []lsm.NetGrant
 }
 
 func (k *fakeKernel) AddMember(pid int) error {
@@ -196,9 +198,17 @@ func (k *fakeKernel) Sync(paths []lsm.Rule, procs []lsm.ProcRule) error {
 	return nil
 }
 
-func (k *fakeKernel) GrantOnce(tid int, paths []string, proc lsm.ProcRule) error {
+func (k *fakeKernel) GrantOnce(tid int, paths []string, proc lsm.ProcRule, net lsm.NetGrant) error {
 	k.mu.Lock()
 	k.grants = append(k.grants, paths)
+	k.netGrants = append(k.netGrants, net)
+	k.mu.Unlock()
+	return nil
+}
+
+func (k *fakeKernel) SyncNet(net lsm.NetRules) error {
+	k.mu.Lock()
+	k.net = net
 	k.mu.Unlock()
 	return nil
 }

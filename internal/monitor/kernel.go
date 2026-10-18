@@ -13,16 +13,36 @@ import (
 
 // toLSM translates r for the kernel. The BPF programs have no operations,
 // no "ask" and see no unreadable paths: a file rule must cover every file
-// op.
-func toLSM(r rules.Rule) (*lsm.Rule, *lsm.ProcRule, error) {
-	if r.Object.IsNet() {
-		// Not enforced by BPF yet: decided at seccomp time only.
+// op, a network rule every network op. Network rules go to net, but for
+// unix socket paths (a Rule with Net).
+func toLSM(r rules.Rule, net *lsm.NetRules) (*lsm.Rule, *lsm.ProcRule, error) {
+	deny := r.Verdict == rules.Deny
+	if o := r.Object; o.IsNet() {
+		if r.Verdict == rules.Ask || r.Ops&rules.OpNet != rules.OpNet {
+			return nil, nil, fmt.Errorf("%w: %+v", ErrUnsupported, r)
+		}
+		switch {
+		case o.AnyNet:
+			net.Inet = append(net.Inet, lsm.InetRule{Deny: deny, Expires: r.Expires})
+			net.AnyUnix = append(net.AnyUnix, lsm.UnixAnyRule{Deny: deny, Expires: r.Expires})
+		case o.OwnListener:
+			if deny {
+				return nil, nil, fmt.Errorf("%w: %+v", ErrUnsupported, r)
+			}
+			// Unlike other rules, it does not expire.
+			net.OwnListeners = true
+		case o.Inet != nil:
+			net.Inet = append(net.Inet, lsm.InetRule{Prefix: o.Inet.Prefix, Proto: o.Inet.Proto, PortLo: o.Inet.PortLo, PortHi: o.Inet.PortHi, Deny: deny, Expires: r.Expires})
+		case o.Unix.Abstract:
+			net.Abstract = append(net.Abstract, lsm.AbstractRule{Name: o.Unix.Name, Prefix: o.Unix.Prefix, Deny: deny, Expires: r.Expires})
+		default:
+			return &lsm.Rule{Path: o.Unix.Path, Tree: o.Unix.Prefix, Deny: deny, Net: true, Expires: r.Expires}, nil, nil
+		}
 		return nil, nil, nil
 	}
 	if r.Verdict == rules.Ask || r.Object.Unknown || r.Ops&rules.OpFiles != rules.OpFiles {
 		return nil, nil, fmt.Errorf("%w: %+v", ErrUnsupported, r)
 	}
-	deny := r.Verdict == rules.Deny
 	if p := r.Object.Proc; p != nil {
 		return nil, &lsm.ProcRule{Name: p.Name, Comm: p.Comm, Deny: deny, Expires: r.Expires}, nil
 	}
@@ -34,8 +54,9 @@ func toLSM(r rules.Rule) (*lsm.Rule, *lsm.ProcRule, error) {
 func (m *Monitor) syncLocked(rs []rules.Rule) error {
 	var paths []lsm.Rule
 	var procs []lsm.ProcRule
+	var net lsm.NetRules
 	for _, r := range rs {
-		p, pr, err := toLSM(r)
+		p, pr, err := toLSM(r, &net)
 		if err != nil {
 			return err
 		}
@@ -46,7 +67,10 @@ func (m *Monitor) syncLocked(rs []rules.Rule) error {
 			procs = append(procs, *pr)
 		}
 	}
-	return m.kernel.Sync(paths, procs)
+	if err := m.kernel.Sync(paths, procs); err != nil {
+		return err
+	}
+	return m.kernel.SyncNet(net)
 }
 
 // checkMounts resyncs the kernel's rules if the workload's mounts changed:
@@ -76,11 +100,18 @@ func (m *Monitor) kernelEvent(e lsm.Event) {
 	if m.decided == 0 {
 		return
 	}
+	obj := rules.Object{Path: &rules.PathObject{Path: e.Path}}
+	switch {
+	case e.Inet != nil:
+		obj = rules.Object{Inet: &rules.InetObject{Proto: e.Inet.Proto, Addr: e.Inet.Addr}}
+	case e.Unix != nil:
+		obj = rules.Object{Unix: &rules.UnixObject{Abstract: e.Unix.Abstract, Name: e.Unix.Name, Path: e.Unix.Path}}
+	}
 	m.emitLocked(Event{Decided: &Decided{
 		Time:    m.now(),
 		Syscall: e.Op,
 		Op:      lsmOp(e.Op),
-		Objects: []rules.Object{{Path: &rules.PathObject{Path: e.Path}}},
+		Objects: []rules.Object{obj},
 		Subject: rules.Subject{Chain: []rules.Task{{PID: int(e.PID), TID: int(e.PID), Comm: e.Comm}}},
 		Allowed: e.Allowed,
 		Why:     []Reason{{}},
@@ -106,6 +137,10 @@ func lsmOp(name string) rules.Op {
 		return rules.OpRename
 	case "truncate":
 		return rules.OpTruncate
+	case "connect":
+		return rules.OpConnect
+	case "send":
+		return rules.OpSend
 	}
 	return rules.OpAll
 }

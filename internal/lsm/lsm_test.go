@@ -112,7 +112,9 @@ func TestFromFDs(t *testing.T) {
 		t.Error(err)
 	}
 	l2.Close()
-	for _, swap := range []int{5, 7, len(l.FDs()) - 2} { // a map as a link; two links swapped; sys_exit as LSM
+	nmaps := len(l.FDs()) - len(attachOrder) - len(tracingOrder)
+	// a map as a link; two links swapped; sys_exit as LSM; fexit as sys_exit
+	for _, swap := range []int{nmaps - 1, nmaps, len(l.FDs()) - 3, len(l.FDs()) - 2} {
 		if l3, err := FromFDs(dup(swap)); err == nil {
 			l3.Close()
 			t.Errorf("swap at %d accepted", swap)
@@ -158,7 +160,7 @@ func TestGrantOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	time.Sleep(200 * time.Millisecond) // blocked in read
-	if err := s.GrantOnce(sh.Process.Pid, []string{dir + "/f"}, ProcRule{}); err != nil {
+	if err := s.GrantOnce(sh.Process.Pid, []string{dir + "/f"}, ProcRule{}, NetGrant{}); err != nil {
 		t.Fatal(err)
 	}
 	s.mu.Lock()
