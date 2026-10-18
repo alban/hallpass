@@ -15,7 +15,11 @@ import (
 // no "ask" and see no unreadable paths: a file rule must cover every file
 // op.
 func toLSM(r rules.Rule) (*lsm.Rule, *lsm.ProcRule, error) {
-	if r.Verdict == rules.Ask || r.Object.Unknown || r.Object.IsNet() || r.Ops&rules.OpFiles != rules.OpFiles {
+	if r.Object.IsNet() {
+		// Not enforced by BPF yet: decided at seccomp time only.
+		return nil, nil, nil
+	}
+	if r.Verdict == rules.Ask || r.Object.Unknown || r.Ops&rules.OpFiles != rules.OpFiles {
 		return nil, nil, fmt.Errorf("%w: %+v", ErrUnsupported, r)
 	}
 	deny := r.Verdict == rules.Deny

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/alban/hallpass/internal/netdiag"
 	"github.com/alban/hallpass/internal/procfs"
 	"github.com/alban/hallpass/internal/rules"
 	"github.com/alban/hallpass/internal/seccomp"
@@ -186,7 +187,98 @@ func (m *Monitor) handleNet(l *listener, n seccomp.Notif, sc seccomp.Rule) (ask 
 		cont()
 		return
 	}
+	m.markOwnListeners(n, root, op, items)
 	return m.decide(l, n, sc, op, items)
+}
+
+// markOwnListeners sets the OwnListener fact of the items whose listener
+// (loopback TCP, or bound unix socket) a workload process holds. Lite
+// detection, racy: the fd tables are read after the sock_diag dump.
+// Without access to the target's network namespace, no fact.
+func (m *Monitor) markOwnListeners(n seccomp.Notif, root string, op rules.Op, items []item) {
+	var d *netdiag.Diag
+	defer func() {
+		if d != nil {
+			d.Close()
+		}
+	}()
+	diag := func() *netdiag.Diag {
+		if d == nil {
+			var err error
+			if d, err = netdiag.Open(int(n.PID)); err != nil {
+				d = nil
+			}
+		}
+		return d
+	}
+	var unixSocks []netdiag.UnixSocket
+	unixDone := false
+	var members map[int]bool
+	owned := func(cands []uint64) bool {
+		if len(cands) == 0 {
+			return false
+		}
+		if members == nil {
+			members = netdiag.Descendants(m.roots())
+		}
+		want := map[uint64]bool{}
+		for _, c := range cands {
+			want[c] = true
+		}
+		return len(netdiag.Held(want, func(pid int) bool { return members[pid] })) == len(want)
+	}
+	for _, it := range items {
+		switch o := it.obj; {
+		case o.Inet != nil:
+			if op != rules.OpConnect || o.Inet.Proto != unix.IPPROTO_TCP || !o.Inet.Addr.Addr().IsLoopback() || diag() == nil {
+				continue
+			}
+			ls, err := d.TCPListeners(o.Inet.Addr.Port())
+			if err != nil {
+				continue
+			}
+			o.Inet.OwnListener = owned(netdiag.TCPCandidates(ls, o.Inet.Addr))
+		case o.Unix != nil:
+			if !unixDone {
+				unixDone = true
+				if diag() != nil {
+					unixSocks, _ = d.UnixSockets()
+				}
+			}
+			var dev, ino uint64
+			if !o.Unix.Abstract {
+				var err error
+				if dev, ino, err = netdiag.SocketFile(int(n.PID), filepath.Join(root, o.Unix.Path)); err != nil {
+					continue
+				}
+			}
+			var cands []uint64
+			for _, s := range unixSocks {
+				if !s.Listen && s.Type != unix.SOCK_DGRAM {
+					continue
+				}
+				if o.Unix.Abstract {
+					if s.Abstract && s.Name == o.Unix.Name {
+						cands = append(cands, s.Inode)
+					}
+				} else if !s.Abstract && s.VFSIno == ino && s.VFSDev == dev {
+					cands = append(cands, s.Inode)
+				}
+			}
+			o.Unix.OwnListener = owned(cands)
+		}
+	}
+}
+
+// roots returns the root process of each attached workload.
+func (m *Monitor) roots() []int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]int, 0, len(m.listeners))
+	for _, l := range m.listeners {
+		out = append(out, l.root)
+	}
+	return out
 }
 
 // errnoOf returns the errno of err, EFAULT if it has none.

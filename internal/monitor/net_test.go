@@ -5,6 +5,7 @@ package monitor
 
 import (
 	"encoding/binary"
+	"fmt"
 	"net/netip"
 	"path/filepath"
 	"testing"
@@ -203,3 +204,61 @@ func TestNetUnix(t *testing.T) {
 }
 
 func rulesDecision(rs ...rules.Rule) Decision { return Decision{AddRules: rs} }
+
+// TestNetOwnListener: listeners held by the workload (here, the test
+// process) get the OwnListener fact, which an implicit rule allows.
+func TestNetOwnListener(t *testing.T) {
+	fx := setup(t, nil, false)
+	f := fx.f
+	ln := sock(t, unix.AF_INET, unix.SOCK_STREAM)
+	if err := unix.Bind(ln, &unix.SockaddrInet4{Addr: [4]byte{127, 0, 0, 1}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Listen(ln, 1); err != nil {
+		t.Fatal(err)
+	}
+	sa, err := unix.Getsockname(ln)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := sa.(*unix.SockaddrInet4).Port
+	path := filepath.Join(fx.dir, "own.sock")
+	uln := sock(t, unix.AF_UNIX, unix.SOCK_STREAM)
+	if err := unix.Bind(uln, &unix.SockaddrUnix{Name: path}); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Listen(uln, 1); err != nil {
+		t.Fatal(err)
+	}
+	tcp, tcp6 := sock(t, unix.AF_INET, unix.SOCK_STREAM), sock(t, unix.AF_INET6, unix.SOCK_STREAM)
+	stream := sock(t, unix.AF_UNIX, unix.SOCK_STREAM)
+
+	// Without the rule: asked, with the fact.
+	id := f.connect(tcp6, sockaddrInet(fmt.Sprintf("[::ffff:127.0.0.1]:%d", port)))
+	req := fx.next(t, opened).Opened
+	if o := req.Objects[0].Inet; o == nil || !o.OwnListener {
+		t.Fatalf("request %+v %+v", req, req.Objects[0])
+	}
+	if _, err := fx.m.Apply(Decision{Verdicts: []Verdict{{req.ID, false}}}); err != nil {
+		t.Fatal(err)
+	}
+	f.expect(t, id, int32(unix.EACCES))
+
+	if _, err := fx.m.Apply(rulesDecision(
+		rules.Rule{Ops: rules.OpNet, Verdict: rules.Allow, Object: rules.ObjectMatch{OwnListener: true}},
+		netRule(t, "tcp:127.0.0.1:1", rules.Deny),
+	)); err != nil {
+		t.Fatal(err)
+	}
+	f.expect(t, f.connect(tcp, sockaddrInet(fmt.Sprintf("127.0.0.1:%d", port))), 0)
+	f.expect(t, f.connect(stream, sockaddrUnix(path)), 0)
+	// No listener there.
+	f.expect(t, f.connect(tcp, sockaddrInet("127.0.0.1:1")), int32(unix.EACCES))
+	id = f.connect(tcp, sockaddrInet(fmt.Sprintf("127.0.0.2:%d", port)))
+	if req := fx.next(t, opened).Opened; req.Objects[0].Inet.OwnListener {
+		t.Errorf("127.0.0.2: own listener")
+	} else if _, err := fx.m.Apply(Decision{Verdicts: []Verdict{{req.ID, false}}}); err != nil {
+		t.Fatal(err)
+	}
+	f.expect(t, id, int32(unix.EACCES))
+}

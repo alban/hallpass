@@ -271,7 +271,11 @@ func (o *options) buildPolicy(home string) *defaults.Defaults {
 	if o.noImplicit {
 		granted, allows = "", nil
 	}
-	return defaults.New(home, granted, append(allows, o.allow...), o.deny)
+	d := defaults.New(home, granted, append(allows, o.allow...), o.deny)
+	if !o.noImplicit && o.mediate&seccomp.Network != 0 {
+		d.AllowOwnListeners()
+	}
+	return d
 }
 
 // printRules prints engine's rules, with placeholders for the $TMPDIR and

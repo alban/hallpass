@@ -31,6 +31,9 @@ type Defaults struct {
 	allow   []string
 	deny    []string
 	warn    []warnLoc
+	// ownListeners allows connections to listeners started inside the
+	// sandbox.
+	ownListeners bool
 }
 
 // warnLoc is a sensitive location: a write under path is still asked about,
@@ -91,6 +94,10 @@ func (d *Defaults) AllowDevice(path string) {
 		d.allow = append(d.allow, d.canon(path))
 	}
 }
+
+// AllowOwnListeners allows connections and sends to the loopback or unix
+// listeners started inside the sandbox, when network is mediated.
+func (d *Defaults) AllowOwnListeners() { d.ownListeners = true }
 
 // sensitiveLabels maps a location under home to a human name for its secrets.
 // Writes there are asked about like anywhere else, but the prompt is flagged
@@ -177,6 +184,14 @@ func (d *Defaults) Rules() []rules.Rule {
 	for _, p := range d.allow {
 		add(p, rules.Allow)
 	}
+	if d.ownListeners {
+		rs = append(rs, rules.Rule{
+			Ops:     rules.OpNet,
+			Object:  rules.ObjectMatch{OwnListener: true},
+			Verdict: rules.Allow,
+			Set:     Set,
+		})
+	}
 	return rs
 }
 
@@ -224,6 +239,10 @@ func (d *Defaults) Summary(rs []rules.Rule) (deny, allow []string) {
 			s = "/proc/<pid>/" + o.Proc.Name + " of " + o.Proc.Comm + " processes"
 		case o.Unknown:
 			s = "unknown paths"
+		case o.OwnListener:
+			s = "network: listeners started inside the sandbox"
+		case o.IsNet():
+			s = "network: " + o.NetString()
 		}
 		if !r.Expires.IsZero() {
 			s += " (until " + r.Expires.Format("15:04:05") + ")"

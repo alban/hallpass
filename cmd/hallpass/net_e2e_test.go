@@ -62,7 +62,12 @@ func netHelper(args []string) int {
 		fmt.Println("net: want label kind addr")
 		return 1
 	}
-	err := netTry(args[1], args[2])
+	var err error
+	if k, ok := strings.CutPrefix(args[1], "inside-"); ok {
+		err = netInside(k, args[2])
+	} else {
+		err = netTry(args[1], args[2])
+	}
 	switch {
 	case err == nil:
 		fmt.Printf("%s=ok\n", args[0])
@@ -72,6 +77,38 @@ func netHelper(args []string) int {
 		fmt.Printf("%s=%v\n", args[0], err)
 	}
 	return 0
+}
+
+// netInside listens on addr (a listener started inside the sandbox), then
+// tries kind on it: connect for tcp ("127.0.0.1:0", "[::]:0": a wildcard
+// reached through 127.0.0.1) and unix paths or abstract names, sendto for
+// unixgram.
+func netInside(kind, addr string) error {
+	switch kind {
+	case "tcp":
+		l, err := net.Listen("tcp", addr)
+		if err != nil {
+			return err
+		}
+		defer l.Close()
+		port := l.Addr().(*net.TCPAddr).Port
+		return netTry("connect", fmt.Sprintf("127.0.0.1:%d", port))
+	case "unix":
+		l, err := net.Listen("unix", addr)
+		if err != nil {
+			return err
+		}
+		defer l.Close()
+		return netTry("connect", addr)
+	case "unixgram":
+		l, err := net.ListenPacket("unixgram", addr)
+		if err != nil {
+			return err
+		}
+		defer l.Close()
+		return netTry("sendto", addr)
+	}
+	return fmt.Errorf("unknown kind %s", kind)
 }
 
 func netTry(kind, addr string) error {
@@ -247,6 +284,50 @@ func TestNetLite(t *testing.T) {
 				}
 				if n := nt.accepted.Load(); n != want {
 					t.Errorf("%d connections accepted, want %d", n, want)
+				}
+			})
+		}
+	}
+}
+
+// TestNetInside: listeners started inside the sandbox are reached without
+// asking, but for --no-implicit.
+func TestNetInside(t *testing.T) {
+	for _, mode := range modes(t) {
+		for _, tc := range []struct {
+			name  string
+			flags []string
+			want  string
+		}{
+			{"implicit", []string{"--ask=deny", "--mediate=files,exec,network"}, "ok"},
+			{"no-implicit", []string{"--ask=deny", "--mediate=files,exec,network", "--no-implicit", "--allow=" + "/"}, "denied"},
+		} {
+			t.Run(mode+"/"+tc.name, func(t *testing.T) {
+				e := newEnv(t)
+				self, err := os.Executable()
+				if err != nil {
+					t.Fatal(err)
+				}
+				abstract := fmt.Sprintf("@hallpass-e2e-in-%d-%s", os.Getpid(), t.Name())
+				script := fmt.Sprintf(`
+H() { HALLPASS_E2E_HELPER=net "$HP_SELF" "$@"; }
+H tcp inside-tcp 127.0.0.1:0
+H wildcard inside-tcp '[::]:0'
+H unix inside-unix %s/in.sock
+H unixgram inside-unixgram %s/in-d.sock
+H abstract inside-unix %s
+`, e.root, e.root, abstract)
+				c := e.cmd(script, append(tc.flags, "--mode="+mode)...)
+				c.Env = append(c.Env, "HP_SELF="+self)
+				out, err := c.CombinedOutput()
+				if err != nil {
+					t.Fatalf("%v\n%s", err, out)
+				}
+				t.Logf("output:\n%s", out)
+				for _, l := range []string{"tcp", "wildcard", "unix", "unixgram", "abstract"} {
+					if !strings.Contains(string(out), l+"="+tc.want+"\n") {
+						t.Errorf("%s: want %s", l, tc.want)
+					}
 				}
 			})
 		}
