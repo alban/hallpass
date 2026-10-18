@@ -21,6 +21,7 @@ import (
 
 	"github.com/alban/hallpass/internal/fdstore"
 	"github.com/alban/hallpass/internal/launch"
+	"github.com/alban/hallpass/internal/lsm"
 	"github.com/alban/hallpass/internal/sessionapi"
 )
 
@@ -28,6 +29,7 @@ const (
 	envHelper = "HALLPASS_TEST_AGENT" // the fd-store socket
 	envA      = "HALLPASS_TEST_A"
 	envB      = "HALLPASS_TEST_B"
+	envStrict = "HALLPASS_TEST_STRICT"
 )
 
 func TestMain(m *testing.M) {
@@ -59,6 +61,11 @@ func helperAgent() {
 	if err := a.connectStore(os.Getenv(envHelper)); err != nil {
 		fail(err)
 	}
+	if os.Getenv(envStrict) == "1" {
+		if err := a.setupStrict("strict", "/"); err != nil {
+			fail(err)
+		}
+	}
 	A, B := os.Getenv(envA), os.Getenv(envB)
 	home := filepath.Dir(filepath.Dir(A))
 	null, err := os.Open(os.DevNull)
@@ -66,7 +73,9 @@ func helperAgent() {
 		fail(err)
 	}
 	proc, fd, release, err := launch.Start(launch.ProcSpec{
-		Args:  []string{"/bin/sh", "-c", `echo 1 > "$0" && echo 2 > "$1" && echo 3 > "$0"`, A, B},
+		// A subshell writes: a child forked before the restart, which the
+		// next agent does not mark again, unlike the container's root.
+		Args:  []string{"/bin/sh", "-c", `(echo 1 > "$0" && echo 2 > "$1" && echo 3 > "$0"); true`, A, B},
 		Env:   []string{"PATH=/usr/bin:/bin"},
 		Files: []*os.File{null, os.Stderr, os.Stderr},
 	})
@@ -109,7 +118,26 @@ func helperAgent() {
 
 // TestRestart kills an agent while a request is pending, and checks that
 // the next one answers it, with the rules granted before.
-func TestRestart(t *testing.T) {
+func TestRestart(t *testing.T) { testRestart(t, false) }
+
+// TestRestartStrict is TestRestart in strict mode: the kernel enforces the
+// restored rule for A and the "once" for B only if the next agent adopted
+// the programs and resumed the session.
+func TestRestartStrict(t *testing.T) {
+	skip := t.Skip
+	if os.Getenv("HALLPASS_REQUIRE_LSM") == "1" {
+		skip = t.Fatal
+	}
+	if os.Geteuid() != 0 {
+		skip("needs root (go test -exec sudo)")
+	}
+	if err := lsm.Active(); err != nil {
+		skip(err)
+	}
+	testRestart(t, true)
+}
+
+func testRestart(t *testing.T, strict bool) {
 	dir := t.TempDir()
 	sock := filepath.Join(dir, "run", "fd-store.sock")
 	ln, err := fdstore.Listen(sock)
@@ -137,6 +165,9 @@ func TestRestart(t *testing.T) {
 	defer unix.Prctl(unix.PR_SET_CHILD_SUBREAPER, 0, 0, 0, 0)
 	helper := exec.Command(os.Args[0], "-test.run=^$")
 	helper.Env = append(os.Environ(), envHelper+"="+sock, envA+"="+A, envB+"="+B)
+	if strict {
+		helper.Env = append(helper.Env, envStrict+"=1")
+	}
 	helper.Stderr = os.Stderr
 	out, err := helper.StdoutPipe()
 	if err != nil {
@@ -162,7 +193,12 @@ func TestRestart(t *testing.T) {
 	}
 	helper.Process.Kill()
 	helper.Wait()
-	if srv.Len() != 1 {
+	// The session's, and the programs' in strict mode.
+	entries := 1
+	if strict {
+		entries = 2
+	}
+	if srv.Len() != entries {
 		t.Fatalf("%d fd-store entries", srv.Len())
 	}
 
@@ -170,11 +206,23 @@ func TestRestart(t *testing.T) {
 	if err := a.connectStore(sock); err != nil {
 		t.Fatal(err)
 	}
+	if strict {
+		if err := a.setupStrict("strict", "/"); err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			a.store.Delete(lsmKey)
+			a.lsm.Close()
+		}()
+	}
 	a.mu.Lock()
 	s := a.sessions["c1"]
 	a.mu.Unlock()
 	if s == nil {
 		t.Fatal("session not restored")
+	}
+	if strict && s.ks == nil {
+		t.Fatal("strict session restored without its kernel session")
 	}
 	if !s.policy.Ask || s.policy.AskTimeout != time.Hour {
 		t.Fatalf("restored policy %+v", s.policy)
@@ -216,7 +264,7 @@ func TestRestart(t *testing.T) {
 		unix.Wait4(pid, &ws, 0, nil)
 	}
 	// The container is gone: so is its entry.
-	for srv.Len() != 0 {
+	for srv.Len() != entries-1 {
 		if time.Now().After(deadline) {
 			t.Fatal("fd-store entry left")
 		}

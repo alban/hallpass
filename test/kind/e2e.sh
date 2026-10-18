@@ -27,6 +27,13 @@
 #   HALLPASS_E2E_WORK  parent of the scratch directory (default: the repository)
 #   E2E_ANSWER       command that answers the two requests instead of the
 #                    CLI, with KUBECONTEXT and WORK set (test/kind/headlamp)
+#   E2E_STRICT=1     require strict mode: the node must have BPF-LSM
+#   KIND_EXPERIMENTAL_PROVIDER=podman  run kind with podman instead of docker
+#   HALLPASS_NODE_ARCHIVE  hallpass-node:e2e image archive to load instead of
+#                    building it (docker save), and
+#   HALLPASS_NODE_CLIENT   hallpass-node binary to use instead of building
+#                    it: neither docker nor go is needed then (e.g. on a test
+#                    VM, see docs/devel/kubernetes.md)
 
 set -euo pipefail
 
@@ -38,7 +45,9 @@ IMAGE=hallpass-node:e2e
 PORT=${HALLPASS_E2E_PORT:-17323}
 KUBECTL=(kubectl --context "kind-$CLUSTER")
 WORK=$(mktemp -d "${HALLPASS_E2E_WORK:-$PWD}/.e2e-work.XXXXXX")
-CLIENT=$WORK/hallpass-node
+CLIENT=${HALLPASS_NODE_CLIENT:-$WORK/hallpass-node}
+RUNTIME=docker
+[ "${KIND_EXPERIMENTAL_PROVIDER:-}" = podman ] && RUNTIME=podman
 ADDR=127.0.0.1:$PORT
 created=0
 pf=
@@ -80,8 +89,8 @@ fi
 NODE=$CLUSTER-control-plane
 
 log "checking containerd and NRI on $NODE"
-docker exec "$NODE" containerd --version
-docker exec "$NODE" containerd config dump >"$WORK/containerd.toml"
+"$RUNTIME" exec "$NODE" containerd --version
+"$RUNTIME" exec "$NODE" containerd config dump >"$WORK/containerd.toml"
 nri=$(sed -n "/^  \[plugins.'io.containerd.nri.v1.nri'\]/,/^  \[plugins.'io.containerd.runtime/p" "$WORK/containerd.toml")
 [ -n "$nri" ] || fail "containerd has no NRI plugin (need containerd >= 2.2)"
 grep -q '^    disable = false' <<<"$nri" || fail "NRI is disabled in containerd"
@@ -90,10 +99,15 @@ if grep -q '^      enable = true' <<<"$nri" &&
 	fail "the NRI default validator rejects seccomp adjustments"
 fi
 
-log "building and loading $IMAGE"
-docker build -q -f deploy/kubernetes/Dockerfile -t "$IMAGE" .
-kind load docker-image --name "$CLUSTER" "$IMAGE"
-CGO_ENABLED=0 go build -o "$CLIENT" ./cmd/hallpass-node
+if [ -n "${HALLPASS_NODE_ARCHIVE:-}" ]; then
+	log "loading $IMAGE from $HALLPASS_NODE_ARCHIVE"
+	kind load image-archive --name "$CLUSTER" "$HALLPASS_NODE_ARCHIVE"
+else
+	log "building and loading $IMAGE"
+	docker build -q -f deploy/kubernetes/Dockerfile -t "$IMAGE" .
+	kind load docker-image --name "$CLUSTER" "$IMAGE"
+fi
+[ -n "${HALLPASS_NODE_CLIENT:-}" ] || CGO_ENABLED=0 go build -o "$CLIENT" ./cmd/hallpass-node
 
 log "deploying hallpass-node"
 "${KUBECTL[@]}" apply -k test/kind
@@ -106,6 +120,11 @@ agent_ready() {
 		--for=condition=Ready --timeout=5s >/dev/null 2>&1
 }
 wait_for 120 agent_ready || fail "hallpass-node is not ready"
+# agent_log <regexp>: whether the agent logged a line matching it.
+agent_log() { "${KUBECTL[@]}" -n hallpass-system logs ds/hallpass-node | grep -Eq "$1"; }
+if [ "${E2E_STRICT:-}" = 1 ]; then
+	agent_log 'msg="strict mode"' || fail "the agent is not in strict mode"
+fi
 
 log "starting the test pods"
 sed "s|BUSYBOX|$BUSYBOX|" test/kind/e2e.yaml >"$WORK/e2e.yaml"
@@ -174,6 +193,10 @@ done
 "${KUBECTL[@]}" -n hallpass-system logs ds/hallpass-node >"$WORK/agent.log"
 grep -q 'msg="session started".*namespace=hallpass-e2e pod=mediated' "$WORK/agent.log" ||
 	fail "no session for the mediated pod"
+if [ "${E2E_STRICT:-}" = 1 ]; then
+	grep -q 'msg="session started".*pod=mediated .*strict=true' "$WORK/agent.log" ||
+		fail "the mediated pod's session is not strict"
+fi
 if grep -Eq 'msg="(session started|mediating container)".*pod=(plain|unselected)' "$WORK/agent.log"; then
 	fail "an unmediated pod got a session"
 fi
@@ -200,6 +223,12 @@ if [ -z "${E2E_ANSWER:-}" ]; then
 	"${KUBECTL[@]}" -n hallpass-system logs ds/hallpass-node >"$WORK/agent.log"
 	grep -q 'msg="session restored".*namespace=hallpass-e2e pod=restart' "$WORK/agent.log" ||
 		fail "the restart pod's session was not restored"
+	if [ "${E2E_STRICT:-}" = 1 ]; then
+		grep -q 'msg="strict mode: BPF programs adopted from the fd-store"' "$WORK/agent.log" ||
+			fail "the new agent did not adopt the BPF programs"
+		grep -q 'msg="session restored".*pod=restart .*strict=true' "$WORK/agent.log" ||
+			fail "the restart pod's session is not strict after the restart"
+	fi
 fi
 
 log "PASS"

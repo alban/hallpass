@@ -253,7 +253,7 @@ func (a *agent) adopt(c *fdstore.Client, e fdstore.Entry) {
 	}
 	a.startLocked(s)
 	a.mu.Unlock()
-	log.Info("session restored", "namespace", sv.Metadata.Namespace, "pod", sv.Metadata.Pod, "name", sv.Metadata.Container, "policy", pol.Name, "listeners", len(s.listeners))
+	log.Info("session restored", "namespace", sv.Metadata.Namespace, "pod", sv.Metadata.Pod, "name", sv.Metadata.Container, "policy", pol.Name, "strict", ks != nil, "listeners", len(s.listeners))
 }
 
 // persist stores s in the fd-store, if connected.
