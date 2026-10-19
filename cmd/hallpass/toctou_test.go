@@ -63,7 +63,7 @@ func toctou(t *testing.T, e env, mode, path string, swap func(p prompter, pid ui
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := e.cmd(`HALLPASS_E2E_HELPER=openat "$HP_SELF"`, "--mode="+mode, "--ask=answer", "--timeout=20s")
+	c := e.cmd(`HALLPASS_E2E_HELPER=openat "$HP_SELF"`, "--mode="+mode, "--prompt=answer", "--timeout=20s")
 	c.Env = append(c.Env, "HP_SELF="+self, "HP_PATH="+path)
 	var out strings.Builder
 	c.Stdout, c.Stderr = &out, &out

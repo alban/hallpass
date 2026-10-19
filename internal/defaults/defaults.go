@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package defaults is hallpass's policy, as monitor rules: the project
-// directory, $TMPDIR, harmless devices and --allow are writable, --deny
-// is denied, and anything else is asked. It also has what prompts need to
-// offer good answers (FolderFor, Warn) and to describe the rules.
+// directory, $TMPDIR, harmless devices and --allow-path are writable,
+// --deny-path is denied, --ask-path is asked even inside them, and
+// anything else is asked. It also has what prompts need to offer good
+// answers (FolderFor, Warn) and to describe the rules.
 //
 // Known secret stores (~/.ssh, ~/.aws, ...) are not denied outright: they are
 // asked about like anything else, but the prompt is flagged (see Warn) so an
@@ -32,6 +33,8 @@ type Defaults struct {
 	allow   []string
 	deny    []string
 	warn    []warnLoc
+	// ask are trees asked about even inside an allowed one (--ask-path).
+	ask []string
 	// ownListeners allows connections to listeners started inside the
 	// sandbox.
 	ownListeners bool
@@ -108,6 +111,15 @@ func (d *Defaults) AllowDevice(path string) {
 // AllowOwnListeners allows connections and sends to the loopback or unix
 // listeners started inside the sandbox, when network is mediated.
 func (d *Defaults) AllowOwnListeners() { d.ownListeners = true }
+
+// AskPath asks about the tree under path, absolute, even when a less
+// specific allow covers it (~/.config/gh inside an allowed ~/.config); a
+// more specific allow still allows.
+func (d *Defaults) AskPath(path string) {
+	if path != "" {
+		d.ask = append(d.ask, d.canon(path))
+	}
+}
 
 // AllowNet allows connections and sends to m, a network match
 // (rules.ParseNet).
@@ -274,6 +286,9 @@ func (d *Defaults) Rules() []rules.Rule {
 	}
 	for _, p := range d.allow {
 		add(p, rules.Allow)
+	}
+	for _, p := range d.ask {
+		add(p, rules.Ask)
 	}
 	if d.ownListeners {
 		rs = append(rs, rules.Rule{

@@ -202,6 +202,30 @@ func TestNet(t *testing.T) {
 	}
 }
 
+func TestAskPath(t *testing.T) {
+	d := NewLexical("/home/u", "/home/u/src/proj", []string{"/home/u/.config", "/home/u/.config/gh/hosts.d"}, nil)
+	d.AskPath("/home/u/.config/gh")
+	rs := d.Rules()
+	for path, want := range map[string]string{
+		"/home/u/.config/x":            "allow",
+		"/home/u/.config/gh/hosts.yml": "ask",
+		"/home/u/.config/gh/hosts.d/x": "allow",
+		"/home/u/src/proj/f":           "allow",
+	} {
+		if got := eval(rs, path); got != want {
+			t.Errorf("%s: %s, want %s", path, got, want)
+		}
+	}
+	for _, r := range rs {
+		if r.Verdict == rules.Ask && r.Set != Set {
+			t.Errorf("ask rule in set %q", r.Set)
+		}
+	}
+	if s := strings.Join(d.Describe(rs), "\n"); !strings.Contains(s, "Asked, even inside what is allowed:\n  ~/.config/gh\n") {
+		t.Errorf("Describe:\n%s", s)
+	}
+}
+
 func TestExecRules(t *testing.T) {
 	d := NewLexical("/home/u", "/home/u/proj", nil, nil)
 	d.AllowExec("/usr/bin/ls", false)

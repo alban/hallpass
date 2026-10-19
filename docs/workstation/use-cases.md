@@ -8,19 +8,19 @@ The same flags combine into quite different setups. A few common ones:
 $ hallpass -- copilot
 ```
 
-The project, a private `$TMPDIR`, the usual devices and the terminal are writable; every other write pauses the agent and asks you. Add `--allow` for the agent's own state, so it is not asked about at each start:
+The project, a private `$TMPDIR`, the usual devices and the terminal are writable; every other write pauses the agent and asks you. Add `--allow-path` for the agent's own state, so it is not asked about at each start:
 
 ```console
-$ hallpass --allow ~/.copilot --allow ~/.cache/copilot -- copilot
+$ hallpass --allow-path ~/.copilot --allow-path ~/.cache/copilot -- copilot
 ```
 
 ## Just audit: allow everything, log it
 
 ```console
-$ hallpass --ask=allow --log=writes.jsonl -- make install
+$ hallpass --prompt=allow --log=writes.jsonl -- make install
 ```
 
-Nothing is ever asked or denied, except the always-denied paths (`--deny`, `~/.config/hallpass` and the hallpass binary). Each write is logged with the reason `audit` when it would have been asked, `policy` when the rules allow it anyway:
+Nothing is ever asked or denied, except the always-denied paths (`--deny-path`, `~/.config/hallpass` and the hallpass binary). Each write is logged with the reason `audit` when it would have been asked, `policy` when the rules allow it anyway:
 
 ```json
 {"time":"...","pid":60083,"exe":"/usr/bin/dash","syscall":"openat","path":"/home/me/elsewhere","decision":"allow","reason":"audit"}
@@ -33,17 +33,17 @@ List what would have been asked: `jq -r 'select(.reason=="audit") | .path' write
 A tool, for example an MCP tool provider, declares where it writes. Check that it writes nowhere else:
 
 ```console
-$ hallpass --no-implicit --allow ~/.cache/mytool --allow /dev/null --log=writes.jsonl -- mytool
+$ hallpass --no-implicit --allow-path ~/.cache/mytool --allow-path /dev/null --log=writes.jsonl -- mytool
 ```
 
-With `--no-implicit`, only the `--allow` paths are writable: not the working directory, not a `$TMPDIR`, not `/dev/null`. Any other write is an undeclared one: asked about, or, combined with `--ask=deny` or `--ask=allow`, denied or allowed, and logged.
+With `--no-implicit`, only the `--allow-path` paths are writable: not the working directory, not a `$TMPDIR`, not `/dev/null`. Any other write is an undeclared one: asked about, or, combined with `--prompt=deny` or `--prompt=allow`, denied or allowed, and logged.
 
 The terminal is off too. Pass `--allow-tty` to keep the session's own terminal writable, since its `/dev/pts/N` cannot be known in advance.
 
 ## Unattended: deny what is not allowed
 
 ```console
-$ hallpass --ask=deny --log=writes.jsonl -- ./ci-step.sh
+$ hallpass --prompt=deny --log=writes.jsonl -- ./ci-step.sh
 ```
 
 Nobody is there to answer: writes outside the policy fail with `EACCES`, and the log says which.
@@ -63,11 +63,11 @@ Press Ctrl-] then `s`, or send SIGTERM, to stop early. Needs Linux 5.9.
 When the agent owns the whole screen, or runs without a terminal:
 
 ```console
-$ hallpass --ask=answer -- copilot     # in one terminal
+$ hallpass --prompt=answer -- copilot     # in one terminal
 $ hallpass answer                      # in another
 ```
 
-Or `--ask=desktop` for desktop notifications. See [over ssh](usage.md#over-ssh).
+Or `--prompt=desktop` for desktop notifications. See [over ssh](usage.md#over-ssh).
 
 ## Code you don't trust
 

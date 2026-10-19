@@ -28,7 +28,7 @@ const (
 	OpConnect // connect, and sendmsg/sendto with MSG_FASTOPEN
 	OpSend    // sendto, sendmsg, sendmmsg with a destination address
 	// OpExec runs the program at a path (execve, execveat). It is not in
-	// OpAll: a file rule (the project dir, --allow) does not let programs
+	// OpAll: a file rule (the project dir, --allow-path) does not let programs
 	// there run, and a file deny does not stop one from running.
 	OpExec
 

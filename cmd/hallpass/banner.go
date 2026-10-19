@@ -22,9 +22,9 @@ func banner(strict bool, pid int, asker ui.Asker, menu bool) string {
 	const all = "'hallpass web' in another terminal for all sessions."
 	switch asker.(type) {
 	case ui.AutoDeny:
-		return s + " Requests are denied without asking (--ask=deny)."
+		return s + " Requests are denied without asking (--prompt=deny)."
 	case ui.AutoAllow:
-		return s + " Requests are allowed without asking (--ask=allow)."
+		return s + " Requests are allowed without asking (--prompt=allow)."
 	case ui.Remote:
 		return s + fmt.Sprintf(" Answer from another terminal: 'hallpass answer %d', or 'hallpass web' for the full UI.", pid)
 	case *ui.Desktop:

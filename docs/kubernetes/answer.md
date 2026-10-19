@@ -27,7 +27,7 @@ duration and its reason, the program's own words. The program gets the
 answer as an errno, as on a workstation (see the
 [list](../workstation/usage.md#asking-in-advance), with the shells' exit
 codes): `EALREADY` granted, `EPERM` denied, `ETIMEDOUT` not
-answered within the policy's `askTimeout`, and `ENOSYS` when the policy's
+answered within the policy's `promptTimeout`, and `ENOSYS` when the policy's
 `mediate` leaves out `files`, without a prompt; a shell exits 126 for
 each of them.
 
@@ -136,4 +136,4 @@ Headlamp sandbox action also needs to list `hallpasspolicies` and to
 patch the workload.
 
 If the API server is unreachable, answering through `port-forward`
-fails: requests wait until their `askTimeout`.
+fails: requests wait until their `promptTimeout`.

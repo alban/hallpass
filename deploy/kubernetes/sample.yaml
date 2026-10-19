@@ -10,11 +10,11 @@ kind: HallpassPolicy
 metadata:
   name: agent
 spec:
-  allow: [/workspace/**, /tmp/**]
-  deny: [/var/run/secrets/**]
+  allowPaths: [/workspace/**, /tmp/**]
+  denyPaths: [/var/run/secrets/**]
   allowExec: ["@busybox"]
-  ask: true
-  askTimeout: 5m
+  prompt: true
+  promptTimeout: 5m
 ---
 apiVersion: v1
 kind: Namespace

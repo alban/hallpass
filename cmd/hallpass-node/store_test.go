@@ -44,7 +44,7 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-var testPolicy = &Policy{Name: "p", Policy: policy.Policy{Ask: true, AskTimeout: time.Hour}}
+var testPolicy = &Policy{Name: "p", Policy: policy.Policy{Prompt: true, PromptTimeout: time.Hour}}
 
 func testAgent(log *slog.Logger) *agent {
 	return newAgent(fakeCluster{policies: map[string]*Policy{"p": testPolicy}}, sessionapi.NewNode(), log, noRecorder{}, 8)
@@ -225,7 +225,7 @@ func testRestart(t *testing.T, strict bool) {
 	if strict && s.ks == nil {
 		t.Fatal("strict session restored without its kernel session")
 	}
-	if !s.policy.Ask || s.policy.AskTimeout != time.Hour {
+	if !s.policy.Prompt || s.policy.PromptTimeout != time.Hour {
 		t.Fatalf("restored policy %+v", s.policy)
 	}
 	var id uint64

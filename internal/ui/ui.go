@@ -285,7 +285,7 @@ type Asker interface {
 }
 
 // AutoDeny answers every prompt with "dismissed" (deny, not remembered). Used
-// for --ask=deny.
+// for --prompt=deny.
 type AutoDeny struct{}
 
 // Ask always denies.
@@ -295,7 +295,7 @@ func (AutoDeny) Ask(context.Context, Request) Answer { return AnswerDismissed }
 func (AutoDeny) Close() error { return nil }
 
 // AutoAllow answers every prompt with "allow once", and grants requests
-// made in advance, for --ask=allow: an audit run that lets the program
+// made in advance, for --prompt=allow: an audit run that lets the program
 // write and logs what it would have asked.
 type AutoAllow struct{}
 
@@ -312,7 +312,7 @@ func (AutoAllow) Close() error { return nil }
 
 // Remote shows nothing: it waits for another client (`hallpass answer`,
 // `hallpass web`) to answer, and dismisses the request after Timeout (0:
-// never). For --ask=answer.
+// never). For --prompt=answer.
 type Remote struct {
 	Timeout time.Duration
 }

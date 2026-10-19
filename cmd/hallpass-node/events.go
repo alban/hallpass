@@ -25,7 +25,7 @@ const (
 	// reasonAllowed and reasonDenied: a human answered a request.
 	reasonAllowed = "HallpassAllowed"
 	reasonDenied  = "HallpassDenied"
-	// reasonNotAnswered: a request was denied after the policy's askTimeout.
+	// reasonNotAnswered: a request was denied after the policy's promptTimeout.
 	reasonNotAnswered = "HallpassNotAnswered"
 	// reasonPolicyDenied: accesses denied without asking (a deny rule, a
 	// policy that does not ask), summarized at most once per
@@ -42,7 +42,7 @@ func startedMessage(pol *Policy, strict bool) string {
 		mode = "strict"
 	}
 	s := fmt.Sprintf("sandboxed by hallpass (%s mode, policy %q); ", mode, pol.Name)
-	if !pol.Ask {
+	if !pol.Prompt {
 		return s + "requests are denied without asking"
 	}
 	return s + "answer its requests with Headlamp or `hallpass web --node`"

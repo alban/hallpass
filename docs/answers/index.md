@@ -14,7 +14,7 @@ When a write needs a human, the session holds it as a **pending request**: what 
 | `n` | never | deny this path for the rest of the session, without asking |
 | `Esc` | dismiss | deny this access, remember nothing |
 
-A request with no answer before the timeout (`--timeout`, or the policy's `askTimeout` in Kubernetes) is dismissed: denied, and asked again on a retry. A request made in advance offers only `grant`, `deny` and `dismiss`; its timeout is reported to the program as `ETIMEDOUT`.
+A request with no answer before the timeout (`--timeout`, or the policy's `promptTimeout` in Kubernetes) is dismissed: denied, and asked again on a retry. A request made in advance offers only `grant`, `deny` and `dismiss`; its timeout is reported to the program as `ETIMEDOUT`.
 
 ## The folder of temp and always
 

@@ -32,7 +32,7 @@ Hide
 Sleep 800ms
 Show
 
-Type "hallpass --mediate=files -allow ~/.copilot -allow ~/.cache/copilot -- copilot --model claude-haiku-4.5 --yolo"
+Type "hallpass --mediate=files --allow-path ~/.copilot --allow-path ~/.cache/copilot -- copilot --model claude-haiku-4.5 --yolo"
 Sleep 3s
 Enter
 Wait+Screen@60s /Check for mistakes/

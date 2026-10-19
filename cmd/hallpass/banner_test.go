@@ -21,8 +21,8 @@ func TestBanner(t *testing.T) {
 		{true, &ui.Terminal{}, true, "hallpass: sandbox started (strict, session 42). Ctrl-] for the menu, then w for the web UI; 'hallpass web' in another terminal for all sessions."},
 		{false, &ui.Desktop{}, false, "hallpass: sandbox started (lite, session 42). Requests show as desktop notifications, click one for the web UI; 'hallpass web' in another terminal for all sessions."},
 		{false, ui.Remote{}, false, "hallpass: sandbox started (lite, session 42). Answer from another terminal: 'hallpass answer 42', or 'hallpass web' for the full UI."},
-		{false, ui.AutoDeny{}, false, "hallpass: sandbox started (lite, session 42). Requests are denied without asking (--ask=deny)."},
-		{false, ui.AutoAllow{}, false, "hallpass: sandbox started (lite, session 42). Requests are allowed without asking (--ask=allow)."},
+		{false, ui.AutoDeny{}, false, "hallpass: sandbox started (lite, session 42). Requests are denied without asking (--prompt=deny)."},
+		{false, ui.AutoAllow{}, false, "hallpass: sandbox started (lite, session 42). Requests are allowed without asking (--prompt=allow)."},
 		{false, &ui.Terminal{}, false, "hallpass: sandbox started (lite, session 42). Run 'hallpass web' in another terminal for the full UI."},
 	} {
 		got := banner(tc.strict, 42, tc.asker, tc.menu)
@@ -38,7 +38,7 @@ func TestBanner(t *testing.T) {
 // TestBannerE2E: the line is on stderr, before the command's output.
 func TestBannerE2E(t *testing.T) {
 	e := newEnv(t)
-	c := e.cmd("echo out", "--ask=deny", "--mode=lite")
+	c := e.cmd("echo out", "--prompt=deny", "--mode=lite")
 	var stdout, stderr strings.Builder
 	c.Stdout, c.Stderr = &stdout, &stderr
 	if err := c.Run(); err != nil {

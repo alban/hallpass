@@ -7,9 +7,9 @@ kind: HallpassPolicy
 metadata:
   name: e2e
 spec:
-  allow: [/workspace/**]
-  ask: true
-  askTimeout: 3m
+  allowPaths: [/workspace/**]
+  prompt: true
+  promptTimeout: 3m
 ---
 apiVersion: v1
 kind: Namespace

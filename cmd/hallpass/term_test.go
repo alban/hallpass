@@ -77,7 +77,7 @@ func waitFor(t *testing.T, cond func() bool, what string) {
 	t.Fatalf("timed out waiting for %s", what)
 }
 
-// runTerm starts hallpass --ask=term running script on a pty and mirrors its
+// runTerm starts hallpass --prompt=term running script on a pty and mirrors its
 // output into a screen. done is closed when the output ends.
 func runTerm(t *testing.T, e env, script string) (m *os.File, scr *screen, c *exec.Cmd, done chan struct{}) {
 	t.Helper()
@@ -106,7 +106,7 @@ func runTermAfter(t *testing.T, e env, pre, script string, flags ...string) (m *
 		}
 	}()
 
-	c = e.cmd(script, append([]string{"--ask=term", "--timeout=20s"}, flags...)...)
+	c = e.cmd(script, append([]string{"--prompt=term", "--timeout=20s"}, flags...)...)
 	c.Stdin, c.Stdout, c.Stderr = s, s, s
 	c.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
 	if err := c.Start(); err != nil {

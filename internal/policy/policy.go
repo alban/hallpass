@@ -22,33 +22,37 @@ import (
 	"github.com/alban/hallpass/internal/seccomp"
 )
 
-// DefaultAskTimeout is a policy's askTimeout when it sets none.
-const DefaultAskTimeout = 5 * time.Minute
+// DefaultPromptTimeout is a policy's promptTimeout when it sets none.
+const DefaultPromptTimeout = 5 * time.Minute
 
 // Spec is a policy as written. Its JSON field names are those of the spec
 // of a HallpassPolicy (deploy/kubernetes/crd.yaml).
 type Spec struct {
-	// Allow and Deny are absolute paths: "/workspace/**" or "/workspace"
-	// is the tree under /workspace.
-	Allow []string `json:"allow,omitempty"`
-	Deny  []string `json:"deny,omitempty"`
-	// Ask: false denies what no rule allows without asking. Default true.
-	Ask *bool `json:"ask,omitempty"`
-	// AskTimeout is how long a request waits for an answer before it is
-	// denied, a Go duration such as "5m"; "0" waits forever. Default
-	// DefaultAskTimeout.
-	AskTimeout string `json:"askTimeout,omitempty"`
+	// AllowPaths and DenyPaths are absolute paths: "/workspace/**" or
+	// "/workspace" is the tree under /workspace. AskPaths are trees
+	// asked about even when a less specific allow covers them
+	// (/workspace/.git inside an allowed /workspace).
+	AllowPaths []string `json:"allowPaths,omitempty"`
+	DenyPaths  []string `json:"denyPaths,omitempty"`
+	AskPaths   []string `json:"askPaths,omitempty"`
+	// Prompt: false denies what no rule allows without asking. Default
+	// true.
+	Prompt *bool `json:"prompt,omitempty"`
+	// PromptTimeout is how long a request waits for an answer before it
+	// is denied, a Go duration such as "5m"; "0" waits forever. Default
+	// DefaultPromptTimeout.
+	PromptTimeout string `json:"promptTimeout,omitempty"`
 	// Mediate lists the mediated syscall categories: files, exec,
 	// network. Default: seccomp.DefaultCategories.
 	Mediate []string `json:"mediate,omitempty"`
-	// AllowNetwork and DenyNetwork are network destinations
-	// (rules.ParseNet syntax: "all", "tcp:10.0.0.0/8:443",
-	// "unix:@name"...). They need network in Mediate. AskNetwork are
-	// destinations asked about even when a less specific allow covers
-	// them (10.0.0.1:22 inside an allowed 10.0.0.0/8).
-	AllowNetwork []string `json:"allowNetwork,omitempty"`
-	DenyNetwork  []string `json:"denyNetwork,omitempty"`
-	AskNetwork   []string `json:"askNetwork,omitempty"`
+	// AllowNet and DenyNet are network destinations (rules.ParseNet
+	// syntax: "all", "tcp:10.0.0.0/8:443", "unix:@name"...). They need
+	// network in Mediate. AskNet are destinations asked about even when
+	// a less specific allow covers them (10.0.0.1:22 inside an allowed
+	// 10.0.0.0/8).
+	AllowNet []string `json:"allowNet,omitempty"`
+	DenyNet  []string `json:"denyNet,omitempty"`
+	AskNet   []string `json:"askNet,omitempty"`
 	// AllowExec and DenyExec are programs, by absolute path: "/usr/bin/make"
 	// is that program only, "/opt/tools/**" every program below
 	// /opt/tools. AllowExec also takes groups: "@shells", "@coreutils"
@@ -63,14 +67,15 @@ type Spec struct {
 
 // Policy is a validated Spec.
 type Policy struct {
-	Allow      []string // tree roots, absolute and clean
-	Deny       []string
-	Ask        bool
-	AskTimeout time.Duration // 0: wait forever
+	AllowPaths    []string // tree roots, absolute and clean
+	DenyPaths     []string
+	AskPaths      []string
+	Prompt        bool
+	PromptTimeout time.Duration // 0: wait forever
 	// Mediate is the mediated syscall categories.
-	Mediate                               seccomp.Category
-	AllowNetwork, DenyNetwork, AskNetwork []rules.ObjectMatch
-	AllowExec, DenyExec                   []rules.PathMatch
+	Mediate                   seccomp.Category
+	AllowNet, DenyNet, AskNet []rules.ObjectMatch
+	AllowExec, DenyExec       []rules.PathMatch
 	// AllowGroups are the program groups of AllowExec, e.g. "@shells".
 	AllowGroups []string
 	// Groups are the policy's own groups, sorted by name (GroupDefs).
@@ -90,23 +95,26 @@ func (e *FieldError) Unwrap() error { return e.Err }
 // Validate checks s and returns it parsed, with the defaults of the
 // fields it leaves unset.
 func (s Spec) Validate() (Policy, error) {
-	p := Policy{Ask: true, AskTimeout: DefaultAskTimeout, Mediate: seccomp.DefaultCategories}
-	if s.Ask != nil {
-		p.Ask = *s.Ask
+	p := Policy{Prompt: true, PromptTimeout: DefaultPromptTimeout, Mediate: seccomp.DefaultCategories}
+	if s.Prompt != nil {
+		p.Prompt = *s.Prompt
 	}
-	if s.AskTimeout != "" {
-		d, err := time.ParseDuration(s.AskTimeout)
+	if s.PromptTimeout != "" {
+		d, err := time.ParseDuration(s.PromptTimeout)
 		if err != nil || d < 0 {
-			return Policy{}, &FieldError{"askTimeout", fmt.Errorf("%q: not a duration", s.AskTimeout)}
+			return Policy{}, &FieldError{"promptTimeout", fmt.Errorf("%q: not a duration", s.PromptTimeout)}
 		}
-		p.AskTimeout = d
+		p.PromptTimeout = d
 	}
 	var err error
-	if p.Allow, err = treeRoots(s.Allow); err != nil {
-		return Policy{}, &FieldError{"allow", err}
+	if p.AllowPaths, err = treeRoots(s.AllowPaths); err != nil {
+		return Policy{}, &FieldError{"allowPaths", err}
 	}
-	if p.Deny, err = treeRoots(s.Deny); err != nil {
-		return Policy{}, &FieldError{"deny", err}
+	if p.DenyPaths, err = treeRoots(s.DenyPaths); err != nil {
+		return Policy{}, &FieldError{"denyPaths", err}
+	}
+	if p.AskPaths, err = treeRoots(s.AskPaths); err != nil {
+		return Policy{}, &FieldError{"askPaths", err}
 	}
 	if s.Mediate != nil {
 		if p.Mediate, err = seccomp.ParseCategories(strings.Join(s.Mediate, ",")); err != nil {
@@ -120,7 +128,7 @@ func (s Spec) Validate() (Policy, error) {
 		name string
 		in   []string
 		out  *[]rules.ObjectMatch
-	}{{"allowNetwork", s.AllowNetwork, &p.AllowNetwork}, {"denyNetwork", s.DenyNetwork, &p.DenyNetwork}, {"askNetwork", s.AskNetwork, &p.AskNetwork}} {
+	}{{"allowNet", s.AllowNet, &p.AllowNet}, {"denyNet", s.DenyNet, &p.DenyNet}, {"askNet", s.AskNet, &p.AskNet}} {
 		if len(f.in) > 0 && p.Mediate&seccomp.Network == 0 {
 			// A deny that does nothing must not look like it works.
 			return Policy{}, &FieldError{f.name, errors.New("needs network in mediate")}
@@ -219,7 +227,7 @@ func programPaths(in []string, groups *[]string, known []programs.Def) ([]rules.
 
 // treeRoots turns policy paths into the roots of the trees they cover.
 func treeRoots(in []string) ([]string, error) {
-	out := make([]string, 0, len(in))
+	var out []string
 	for _, p := range in {
 		root := strings.TrimSuffix(p, "/**")
 		if root == "" {
@@ -267,23 +275,26 @@ type Context struct {
 
 // Defaults builds the rules of p in c.
 func (p Policy) Defaults(c Context) *defaults.Defaults {
-	allow := append(append([]string(nil), c.Allow...), p.Allow...)
-	deny := append(append([]string(nil), p.Deny...), c.Deny...)
+	allow := append(append([]string(nil), c.Allow...), p.AllowPaths...)
+	deny := append(append([]string(nil), p.DenyPaths...), c.Deny...)
 	build := defaults.New
 	if c.Lexical {
 		build = defaults.NewLexical
 	}
 	d := build(c.Home, c.Workdir, allow, deny)
+	for _, a := range p.AskPaths {
+		d.AskPath(a)
+	}
 	if c.OwnListeners {
 		d.AllowOwnListeners()
 	}
-	for _, m := range p.AllowNetwork {
+	for _, m := range p.AllowNet {
 		d.AllowNet(m)
 	}
-	for _, m := range p.DenyNetwork {
+	for _, m := range p.DenyNet {
 		d.DenyNet(m)
 	}
-	for _, m := range p.AskNetwork {
+	for _, m := range p.AskNet {
 		d.AskNet(m)
 	}
 	for _, e := range c.Execs {

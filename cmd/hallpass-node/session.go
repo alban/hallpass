@@ -124,8 +124,8 @@ func (s *session) close() {
 	}
 }
 
-// run handles the requests until the container is gone: without ask, they
-// are denied at once; with it, after the policy's askTimeout.
+// run handles the requests until the container is gone: without prompt,
+// they are denied at once; with it, after the policy's promptTimeout.
 func (s *session) run() {
 	for batch := range s.evs {
 		for _, ev := range batch {
@@ -165,7 +165,7 @@ func (s *session) decided(d *monitor.Decided) {
 		if why == (monitor.Reason{}) {
 			continue
 		}
-		if automatic(why, s.policy.Ask) && i < len(d.Objects) {
+		if automatic(why, s.policy.Prompt) && i < len(d.Objects) {
 			s.denied.add(d.Op.String() + " " + objectName(d.Objects[i]))
 		}
 		return
@@ -190,17 +190,17 @@ func objectName(o rules.Object) string {
 func (s *session) opened(req *monitor.Request) {
 	r := answer.Request(s.d, req, 0)
 	s.log.Info("request", "id", req.ID, "op", r.Op, "path", r.Path, "exe", r.Exe, "pid", r.PID)
-	if !s.policy.Ask {
+	if !s.policy.Prompt {
 		s.dismiss(req.ID)
 		return
 	}
-	if s.policy.AskTimeout == 0 {
+	if s.policy.PromptTimeout == 0 {
 		// Waits for an answer, however long.
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.timers[req.ID] = time.AfterFunc(s.policy.AskTimeout, func() { s.dismiss(req.ID) })
+	s.timers[req.ID] = time.AfterFunc(s.policy.PromptTimeout, func() { s.dismiss(req.ID) })
 }
 
 func (s *session) closed(c *monitor.Closed) {
@@ -228,7 +228,7 @@ func (s *session) dismiss(id uint64) {
 		return
 	}
 	a := ui.AnswerDismissed
-	if s.policy.Ask {
+	if s.policy.Prompt {
 		a = ui.AnswerTimeout
 	}
 	if err := answer.Apply(s.m, s.d, req, a, rs, client); err != nil {
@@ -237,8 +237,8 @@ func (s *session) dismiss(id uint64) {
 		}
 		return
 	}
-	if s.policy.Ask {
-		s.event(true, reasonNotAnswered, fmt.Sprintf("%s: not answered within %v, denied", describe(answer.Request(s.d, req, 0)), s.policy.AskTimeout))
+	if s.policy.Prompt {
+		s.event(true, reasonNotAnswered, fmt.Sprintf("%s: not answered within %v, denied", describe(answer.Request(s.d, req, 0)), s.policy.PromptTimeout))
 	}
 }
 
@@ -253,8 +253,8 @@ func describe(r ui.Request) string {
 // Info implements sessionapi.Session.
 func (s *session) Info() *pb.SessionInfo {
 	var timeout time.Duration
-	if s.policy.Ask {
-		timeout = s.policy.AskTimeout
+	if s.policy.Prompt {
+		timeout = s.policy.PromptTimeout
 	}
 	return &pb.SessionInfo{
 		Pid:           int32(s.pid),
@@ -268,7 +268,7 @@ func (s *session) Info() *pb.SessionInfo {
 			"container":   s.md.Container,
 			"containerID": s.id,
 			"policy":      s.policy.Name,
-			"ask":         strconv.FormatBool(s.policy.Ask),
+			"prompt":      strconv.FormatBool(s.policy.Prompt),
 		},
 	}
 }

@@ -141,7 +141,7 @@ check mktemp   sh -c 'rm "$(mktemp)"'
 echo "TMPDIR=$TMPDIR"
 exit 7
 `
-	c := e.cmd(script, "--ask=deny")
+	c := e.cmd(script, "--prompt=deny")
 	out, err := c.CombinedOutput()
 	if ee, ok := err.(*exec.ExitError); !ok || ee.ExitCode() != 7 {
 		t.Fatalf("exit: %v (want 7)\n%s", err, out)
@@ -187,7 +187,7 @@ exit 7
 func TestOrphan(t *testing.T) {
 	e := newEnv(t)
 	script := `(sh -c 'sleep 0.3; echo x > inside' &); sleep 1; test -f inside && echo orphan=allowed`
-	out, err := e.cmd(script, "--ask=deny").CombinedOutput()
+	out, err := e.cmd(script, "--prompt=deny").CombinedOutput()
 	if err != nil || !strings.Contains(string(out), "orphan=allowed") {
 		t.Errorf("orphan write in the project: %v\n%s", err, out)
 	}
@@ -211,7 +211,7 @@ v=$(cat /proc/$PPID/oom_score_adj)
 check out1 sh -c "echo $v > /proc/$PPID/oom_score_adj"
 check out2 sh -c "echo $v > /proc/$PPID/oom_score_adj"
 `
-	c := e.cmd(script, "--ask=answer", "--timeout=20s")
+	c := e.cmd(script, "--prompt=answer", "--timeout=20s")
 	var out strings.Builder
 	c.Stdout, c.Stderr = &out, &out
 	if err := c.Start(); err != nil {
@@ -276,7 +276,7 @@ for i in range(3):
     libc.openat(-100, ctypes.c_void_p(1), 0o101, 0o644)
     print("errno=%d" % ctypes.get_errno(), flush=True)
 '`
-	c := e.cmd(script, "--ask=answer", "--timeout=20s")
+	c := e.cmd(script, "--prompt=answer", "--timeout=20s")
 	var out strings.Builder
 	c.Stdout, c.Stderr = &out, &out
 	if err := c.Start(); err != nil {
@@ -314,7 +314,7 @@ check() { name=$1; shift; if "$@" 2>/dev/null; then echo "$name=ok"; else echo "
 check a sh -c 'echo a > "$HOME/a"'
 check b sh -c 'echo b > "$HOME/b"'
 `
-	c := e.cmd(script, "--ask=answer", "--timeout=20s")
+	c := e.cmd(script, "--prompt=answer", "--timeout=20s")
 	var out strings.Builder
 	c.Stdout, c.Stderr = &out, &out
 	if err := c.Start(); err != nil {
@@ -350,7 +350,7 @@ check b sh -c 'echo b > "$HOME/b"'
 	}
 }
 
-// prompter answers the prompts of a hallpass run with --ask=answer, over
+// prompter answers the prompts of a hallpass run with --prompt=answer, over
 // the session's gRPC socket.
 type prompter struct {
 	t *testing.T
@@ -425,7 +425,7 @@ func (p prompter) answer(id uint64, reply string) {
 func TestSignalWhilePrompting(t *testing.T) {
 	e := newEnv(t)
 	script := `trap 'echo sig' USR1; (sleep 0.3; kill -USR1 $$) & if echo x > "$HOME/sig"; then echo write=ok; else echo write=failed; fi; wait`
-	c := e.cmd(script, "--ask=answer", "--timeout=20s")
+	c := e.cmd(script, "--prompt=answer", "--timeout=20s")
 	var out strings.Builder
 	c.Stdout, c.Stderr = &out, &out
 	if err := c.Start(); err != nil {
@@ -462,7 +462,7 @@ w() { if echo x > "$HOME/.m2/$1"; then echo "$2=ok"; else echo "$2=denied"; fi; 
 w a a1 & w a a2 & w b b1 & w c c1 &
 wait
 `
-	c := e.cmd(script, "--ask=answer", "--timeout=20s")
+	c := e.cmd(script, "--prompt=answer", "--timeout=20s")
 	var out strings.Builder
 	c.Stdout, c.Stderr = &out, &out
 	if err := c.Start(); err != nil {
@@ -499,7 +499,7 @@ func TestRenamePerPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := `if mv "$HOME/src" "` + e.root + `/other/dst" 2>/dev/null; then echo mv=ok; else echo mv=denied; fi`
-	c := e.cmd(script, "--ask=answer", "--timeout=20s")
+	c := e.cmd(script, "--prompt=answer", "--timeout=20s")
 	var out strings.Builder
 	c.Stdout, c.Stderr = &out, &out
 	if err := c.Start(); err != nil {
@@ -539,7 +539,7 @@ check() { name=$1; shift; if "$@" 2>/dev/null; then echo "$name=ok"; else echo "
 check once  sh -c 'echo x > "$HOME/once"'
 check again sh -c 'echo x > "$HOME/once"'
 `
-	c := e.cmd(script, "--mode=strict", "--ask=answer", "--timeout=20s")
+	c := e.cmd(script, "--mode=strict", "--prompt=answer", "--timeout=20s")
 	var out strings.Builder
 	c.Stdout, c.Stderr = &out, &out
 	if err := c.Start(); err != nil {
@@ -596,7 +596,7 @@ check() { name=$1; shift; if "$@"; then echo "$name=allowed"; else echo "$name=d
 check proj tar xf "` + tarball + `"
 check home tar xf "` + tarball + `" -C "$HOME"
 `
-			c := e.cmd(script, "--mode="+mode, "--ask=deny")
+			c := e.cmd(script, "--mode="+mode, "--prompt=deny")
 			out, err := c.CombinedOutput()
 			if err != nil {
 				t.Fatalf("%v\n%s", err, out)
@@ -665,7 +665,7 @@ check workdir sh -c 'echo x > inside'
 check out     sh -c 'echo x > out/f'
 echo "TMPDIR=$TMPDIR"
 `
-	c := e.cmd(script, "--no-implicit", "--ask=deny", "--allow="+e.proj+"/out", "--allow=/dev/null")
+	c := e.cmd(script, "--no-implicit", "--prompt=deny", "--allow-path="+e.proj+"/out", "--allow-path=/dev/null")
 	c.Env = append(c.Env, "TMPDIR=")
 	out, err := c.CombinedOutput()
 	if err != nil {
@@ -684,7 +684,7 @@ echo "TMPDIR=$TMPDIR"
 func TestAuditMode(t *testing.T) {
 	e := newEnv(t)
 	logf := e.root + "/log.jsonl"
-	c := e.cmd(`echo x > inside && echo x > "$HOME/outside"`, "--no-implicit", "--ask=allow", "--log="+logf)
+	c := e.cmd(`echo x > inside && echo x > "$HOME/outside"`, "--no-implicit", "--prompt=allow", "--log="+logf)
 	if out, err := c.CombinedOutput(); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
@@ -707,7 +707,7 @@ func TestWait(t *testing.T) {
 			e := newEnv(t)
 			logf := e.root + "/log.jsonl"
 			script := `(sleep 3; echo x > "$HOME/late") </dev/null >/dev/null 2>&1 & exit 3`
-			c := e.cmd(script, "--ask=deny", "--wait="+wait, "--log="+logf)
+			c := e.cmd(script, "--prompt=deny", "--wait="+wait, "--log="+logf)
 			start := time.Now()
 			out, err := c.CombinedOutput()
 			if ee, ok := err.(*exec.ExitError); !ok || ee.ExitCode() != 3 {

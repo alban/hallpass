@@ -43,7 +43,7 @@ func listenTCP(t *testing.T) uint16 {
 }
 
 // TestProtected checks the denials no rule lifts, not even
-// --allow-net=all and --allow=/: connections to the ports registered by
+// --allow-net=all and --allow-path=/: connections to the ports registered by
 // `hallpass web`, before the session starts (web) and while it runs
 // (live), and to the session sockets; writes to the socket directory.
 // Clients cannot remove them. Without network mediation, connections are
@@ -86,7 +86,7 @@ if echo x > "$D/x" 2>/dev/null; then echo write=ok; else echo write=denied; fi
 while [ ! -e go ]; do sleep 0.05; done
 H live connect 127.0.0.1:%[3]d
 `, web, other, live)
-				flags := []string{"--mode=" + mode, "--ask=deny", "--mediate=" + tc.mediate, "--allow=/"}
+				flags := []string{"--mode=" + mode, "--prompt=deny", "--mediate=" + tc.mediate, "--allow-path=/"}
 				if strings.Contains(tc.mediate, "network") {
 					flags = append(flags, "--allow-net=all")
 				}

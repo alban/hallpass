@@ -152,10 +152,10 @@ kind: HallpassPolicy
 metadata:
   name: agent
 spec:
-  allow: [/workspace/**, /tmp/**, /home/agent/.cache/**]
-  deny: [/var/run/secrets/**]
-  ask: true            # false: deny without asking (audit-only pods)
-  askTimeout: 5m       # no answer in time: deny
+  allowPaths: [/workspace/**, /tmp/**, /home/agent/.cache/**]
+  denyPaths: [/var/run/secrets/**]
+  prompt: true         # false: deny without asking (audit-only pods)
+  promptTimeout: 5m    # no answer in time: deny
 ```
 
 ## Cluster API
@@ -493,8 +493,8 @@ design above:
   the agent does not resolve them in the container at start, since the
   container's root is not populated yet when the policy is built.
   Policy path syntax: `/x/**` or `/x` (the tree under `/x`); other globs
-  and relative paths are rejected. `ask` defaults to true, `askTimeout`
-  to 5m (must be positive).
+  and relative paths are rejected. `prompt` defaults to true,
+  `promptTimeout` to 5m (must be positive).
 - **Implicit allows** in a container: `defaults.DefaultAllows`
   (`/dev/null`, ...), `/dev/tty`, `/dev/pts` (the container's own
   devpts) and `/dev/termination-log`. No home or cache defaults.

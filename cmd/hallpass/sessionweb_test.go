@@ -135,7 +135,7 @@ func TestSessionWebProtected(t *testing.T) {
 			e := newEnv(t)
 			t.Setenv("XDG_RUNTIME_DIR", e.runtime)
 			opened := fakeXDGOpen(t, e)
-			flags := []string{"--mode=" + mode, "--mediate=files,exec,network", "--allow-net=all", "--allow=/"}
+			flags := []string{"--mode=" + mode, "--mediate=files,exec,network", "--allow-net=all", "--allow-path=/"}
 			script := fmt.Sprintf(`
 echo ready
 while [ ! -e go ]; do sleep 0.05; done
@@ -158,7 +158,7 @@ exec sleep 60
 			}
 
 			// Another session, started after.
-			o := e.cmd(fmt.Sprintf(`HALLPASS_E2E_HELPER=net %q other connect 127.0.0.1:%s`, self, port), append(flags, "--ask=deny")...)
+			o := e.cmd(fmt.Sprintf(`HALLPASS_E2E_HELPER=net %q other connect 127.0.0.1:%s`, self, port), append(flags, "--prompt=deny")...)
 			out, err := o.CombinedOutput()
 			if err != nil || !strings.Contains(string(out), "other=denied\n") {
 				t.Errorf("other session: %v\n%s", err, out)

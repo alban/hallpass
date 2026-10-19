@@ -8,11 +8,11 @@ kind: HallpassPolicy
 metadata:
   name: kube-web
 spec:
-  allow: [/workspace/**]
+  allowPaths: [/workspace/**]
   # busybox's shell and tools (kubectl exec sh, cat): not asked about.
   allowExec: ["@busybox"]
-  ask: true
-  askTimeout: 5m
+  prompt: true
+  promptTimeout: 5m
 ---
 apiVersion: v1
 kind: Namespace

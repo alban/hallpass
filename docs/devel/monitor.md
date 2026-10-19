@@ -307,7 +307,7 @@ rule must cover both network ops, as a file rule covers every file op.
 The monitor has one rule set and no persistence. `Set` lets a client
 replace a group of rules atomically (remove the set and add its new rules
 in one `Apply`). Precedence ignores sets. hallpass uses `implicit`
-(defaults and `--allow`/`--deny`) and `session` (answers).
+(defaults and `--allow-path`/`--deny-path`/`--ask-path`) and `session` (answers).
 
 ### Evaluation
 

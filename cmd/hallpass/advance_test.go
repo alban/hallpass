@@ -63,7 +63,7 @@ adv bad 'request?op=read&path=/x'
 adv relative 'request?op=write&path=x'
 adv long "request?op=write&path=/$(printf %5000s | tr ' ' a)"
 `
-		c := e.cmd(script, "--mode="+mode, "--ask=answer", "--timeout=20s")
+		c := e.cmd(script, "--mode="+mode, "--prompt=answer", "--timeout=20s")
 		var out strings.Builder
 		c.Stdout, c.Stderr = &out, &out
 		if err := c.Start(); err != nil {
@@ -118,7 +118,7 @@ adv long "request?op=write&path=/$(printf %5000s | tr ' ' a)"
 	})
 }
 
-// TestAdvanceNoAnswer: --ask=deny denies requests made in advance at once,
+// TestAdvanceNoAnswer: --prompt=deny denies requests made in advance at once,
 // a prompt nobody answers times out, and without hallpass the path does
 // not exist.
 func TestAdvanceNoAnswer(t *testing.T) {
@@ -130,13 +130,13 @@ func TestAdvanceNoAnswer(t *testing.T) {
 			flags []string
 			want  string
 		}{
-			{[]string{"--ask=deny"}, advanceWant("req", unix.EPERM)},
-			{[]string{"--ask=answer", "--timeout=1s"}, advanceWant("req", unix.ETIMEDOUT)},
-			{[]string{"--ask=allow"}, advanceWant("req", unix.EALREADY)},
+			{[]string{"--prompt=deny"}, advanceWant("req", unix.EPERM)},
+			{[]string{"--prompt=answer", "--timeout=1s"}, advanceWant("req", unix.ETIMEDOUT)},
+			{[]string{"--prompt=allow"}, advanceWant("req", unix.EALREADY)},
 			// execve is notified whatever the categories mediated, but
 			// without files nothing would enforce a grant: ENOSYS at once,
 			// not ETIMEDOUT after a prompt.
-			{[]string{"--ask=answer", "--timeout=1s", "--mediate=exec"}, advanceWant("req", unix.ENOSYS) + "\n" + advanceWant("bad", unix.EINVAL) + "\n" + advanceWant("chk", unix.ENOSYS)},
+			{[]string{"--prompt=answer", "--timeout=1s", "--mediate=exec"}, advanceWant("req", unix.ENOSYS) + "\n" + advanceWant("bad", unix.EINVAL) + "\n" + advanceWant("chk", unix.ENOSYS)},
 		} {
 			c := e.cmd(script, append([]string{"--mode=" + mode}, tc.flags...)...)
 			out, err := c.CombinedOutput()

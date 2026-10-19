@@ -31,7 +31,7 @@ const PROFILE = path.resolve(
   process.env.PROFILE || path.join(os.homedir(), "snap/chromium/common/hallpass-headlamp-e2e"));
 
 // The mediated pod waits for each request until it is answered (the
-// policy's askTimeout is 3 minutes).
+// policy's promptTimeout is 3 minutes).
 const TIMEOUT = 180_000;
 
 function need(name) {

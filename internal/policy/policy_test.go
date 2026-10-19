@@ -17,34 +17,36 @@ import (
 func TestValidate(t *testing.T) {
 	no := false
 	p, err := Spec{
-		Allow:      []string{"/workspace/**", "/tmp", "/home/agent/.cache/", "/**"},
-		Deny:       []string{"/var/run/secrets/**"},
-		Ask:        &no,
-		AskTimeout: "30s",
+		AllowPaths:    []string{"/workspace/**", "/tmp", "/home/agent/.cache/", "/**"},
+		DenyPaths:     []string{"/var/run/secrets/**"},
+		AskPaths:      []string{"/workspace/.git/**"},
+		Prompt:        &no,
+		PromptTimeout: "30s",
 	}.Validate()
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := Policy{
-		Allow:      []string{"/workspace", "/tmp", "/home/agent/.cache", "/"},
-		Deny:       []string{"/var/run/secrets"},
-		AskTimeout: 30 * time.Second,
-		Mediate:    seccomp.DefaultCategories,
+		AllowPaths:    []string{"/workspace", "/tmp", "/home/agent/.cache", "/"},
+		DenyPaths:     []string{"/var/run/secrets"},
+		AskPaths:      []string{"/workspace/.git"},
+		PromptTimeout: 30 * time.Second,
+		Mediate:       seccomp.DefaultCategories,
 	}
 	if !reflect.DeepEqual(p, want) {
 		t.Errorf("got %+v, want %+v", p, want)
 	}
 
 	p, err = Spec{}.Validate()
-	if err != nil || !p.Ask || p.AskTimeout != DefaultAskTimeout || p.Mediate != seccomp.DefaultCategories {
+	if err != nil || !p.Prompt || p.PromptTimeout != DefaultPromptTimeout || p.Mediate != seccomp.DefaultCategories {
 		t.Errorf("defaults: %+v, %v", p, err)
 	}
-	if p, err = (Spec{AskTimeout: "0"}).Validate(); err != nil || p.AskTimeout != 0 {
-		t.Errorf("askTimeout 0: %+v, %v", p, err)
+	if p, err = (Spec{PromptTimeout: "0"}).Validate(); err != nil || p.PromptTimeout != 0 {
+		t.Errorf("promptTimeout 0: %+v, %v", p, err)
 	}
 
-	p, err = Spec{Mediate: []string{"files", "exec", "network"}, AllowNetwork: []string{"all"}, DenyNetwork: []string{"tcp:169.254.169.254"}}.Validate()
-	if err != nil || p.Mediate != seccomp.AllCategories || len(p.AllowNetwork) != 1 || !p.AllowNetwork[0].AnyNet || p.DenyNetwork[0].NetString() != "tcp:169.254.169.254" {
+	p, err = Spec{Mediate: []string{"files", "exec", "network"}, AllowNet: []string{"all"}, DenyNet: []string{"tcp:169.254.169.254"}}.Validate()
+	if err != nil || p.Mediate != seccomp.AllCategories || len(p.AllowNet) != 1 || !p.AllowNet[0].AnyNet || p.DenyNet[0].NetString() != "tcp:169.254.169.254" {
 		t.Errorf("network: %+v, %v", p, err)
 	}
 
@@ -52,18 +54,19 @@ func TestValidate(t *testing.T) {
 		spec  Spec
 		field string
 	}{
-		{Spec{Allow: []string{"workspace/**"}}, "allow"},
-		{Spec{Allow: []string{"/work*/x"}}, "allow"},
-		{Spec{Deny: []string{"/a/**/b"}}, "deny"},
-		{Spec{AskTimeout: "soon"}, "askTimeout"},
-		{Spec{AskTimeout: "-1s"}, "askTimeout"},
+		{Spec{AllowPaths: []string{"workspace/**"}}, "allowPaths"},
+		{Spec{AllowPaths: []string{"/work*/x"}}, "allowPaths"},
+		{Spec{DenyPaths: []string{"/a/**/b"}}, "denyPaths"},
+		{Spec{AskPaths: []string{"relative"}}, "askPaths"},
+		{Spec{PromptTimeout: "soon"}, "promptTimeout"},
+		{Spec{PromptTimeout: "-1s"}, "promptTimeout"},
 		{Spec{Mediate: []string{"dns"}}, "mediate"},
 		{Spec{Mediate: []string{}}, "mediate"},
 		{Spec{Mediate: []string{""}}, "mediate"},
-		{Spec{AllowNetwork: []string{"all"}}, "allowNetwork"},
-		{Spec{Mediate: []string{"network"}, DenyNetwork: []string{"tcp:nowhere"}}, "denyNetwork"},
-		{Spec{AskNetwork: []string{"tcp:*:22"}}, "askNetwork"},
-		{Spec{Mediate: []string{"network"}, AskNetwork: []string{"tcp:nowhere"}}, "askNetwork"},
+		{Spec{AllowNet: []string{"all"}}, "allowNet"},
+		{Spec{Mediate: []string{"network"}, DenyNet: []string{"tcp:nowhere"}}, "denyNet"},
+		{Spec{AskNet: []string{"tcp:*:22"}}, "askNet"},
+		{Spec{Mediate: []string{"network"}, AskNet: []string{"tcp:nowhere"}}, "askNet"},
 		{Spec{AllowExec: []string{"ls"}}, "allowExec"},
 		{Spec{AllowExec: []string{"/usr/*/ls"}}, "allowExec"},
 		{Spec{Mediate: []string{"files"}, DenyExec: []string{"/usr/bin/curl"}}, "denyExec"},
@@ -88,12 +91,13 @@ func TestValidate(t *testing.T) {
 
 func TestDefaults(t *testing.T) {
 	p, err := Spec{
-		Allow:        []string{"/workspace"},
-		Deny:         []string{"/workspace/.git"},
-		Mediate:      []string{"files", "network"},
-		AllowNetwork: []string{"unix:@x"},
-		DenyNetwork:  []string{"tcp:*:22"},
-		AskNetwork:   []string{"tcp:10.0.0.1"},
+		AllowPaths: []string{"/workspace"},
+		DenyPaths:  []string{"/workspace/.git"},
+		AskPaths:   []string{"/workspace/secret"},
+		Mediate:    []string{"files", "network"},
+		AllowNet:   []string{"unix:@x"},
+		DenyNet:    []string{"tcp:*:22"},
+		AskNet:     []string{"tcp:10.0.0.1"},
 	}.Validate()
 	if err != nil {
 		t.Fatal(err)
@@ -101,10 +105,11 @@ func TestDefaults(t *testing.T) {
 	d := p.Defaults(Context{Home: "/root", Allow: []string{"/dev/null"}, Deny: []string{"/etc/hallpass"}, OwnListeners: true, Lexical: true})
 	rs := d.Rules()
 	for path, want := range map[string]rules.Verdict{
-		"/workspace/a":      rules.Allow,
-		"/workspace/.git/x": rules.Deny,
-		"/dev/null":         rules.Allow,
-		"/etc/hallpass/x":   rules.Deny,
+		"/workspace/a":        rules.Allow,
+		"/workspace/.git/x":   rules.Deny,
+		"/workspace/secret/x": rules.Ask,
+		"/dev/null":           rules.Allow,
+		"/etc/hallpass/x":     rules.Deny,
 	} {
 		if got, _, ok := rules.Eval(rs, rules.OpWrite, rules.Object{Path: &rules.PathObject{Path: path}}, time.Now()); !ok || got != want {
 			t.Errorf("write %s: %v %v, want %v", path, got, ok, want)

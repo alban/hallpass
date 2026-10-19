@@ -26,7 +26,7 @@ type logEntry struct {
 }
 
 // logEvents writes the decided accesses to w until evs is closed, then
-// closes done. audit: the asker allows everything (--ask=allow).
+// closes done. audit: the asker allows everything (--prompt=allow).
 func logEvents(evs <-chan []monitor.Event, w io.Writer, audit bool, done chan<- struct{}) {
 	defer close(done)
 	enc := json.NewEncoder(w)

@@ -49,7 +49,7 @@ H tagain connect %[1]s
 H udp sendto %[2]s
 H aonce connect %[3]s
 `, nt.tcp, nt.udp, nt.abstract)
-			c := e.cmd(script, "--mode="+mode, "--ask=answer", "--timeout=20s", "--mediate=files,exec,network",
+			c := e.cmd(script, "--mode="+mode, "--prompt=answer", "--timeout=20s", "--mediate=files,exec,network",
 				"--allow-net=127.0.0.0/8", "--ask-net=127.0.0.1", "--allow-net=udp:"+nt.udp,
 				"--allow-net=unix:@hallpass-e2e-*", "--ask-net=unix:"+nt.abstract)
 			c.Env = append(c.Env, "HP_SELF="+self)
@@ -88,6 +88,57 @@ H aonce connect %[3]s
 				t.Fatalf("hallpass: %v\n%s", err, out.String())
 			}
 			for _, want := range []string{"once=ok", "again=denied", "deeper=ok", "outside=ok", "tonce=ok", "tagain=denied", "udp=ok", "aonce=ok"} {
+				if !strings.Contains(out.String(), want+"\n") {
+					t.Errorf("output lacks %q", want)
+				}
+			}
+			if t.Failed() {
+				t.Logf("output:\n%s", out.String())
+			}
+		})
+	}
+}
+
+// TestAskPath checks --ask-path in both modes: a write in the allowed
+// tree is not asked about, one in the asked sub-tree is ("once" allows
+// it), and a more specific --allow-path under it is not.
+func TestAskPath(t *testing.T) {
+	for _, mode := range modes(t) {
+		t.Run(mode, func(t *testing.T) {
+			e := newEnv(t)
+			dir := e.home + "/data"
+			if err := os.MkdirAll(dir+"/sub/ok", 0o700); err != nil {
+				t.Fatal(err)
+			}
+			script := fmt.Sprintf(`
+check() { name=$1; shift; if "$@" 2>/dev/null; then echo "$name=ok"; else echo "$name=denied"; fi; }
+cd %q
+check allowed sh -c 'echo x > a'
+check once    sh -c 'echo x > sub/b'
+check again   sh -c 'echo x > sub/b'
+check deeper  sh -c 'echo x > sub/ok/c'
+`, dir)
+			c := e.cmd(script, "--mode="+mode, "--prompt=answer", "--timeout=20s",
+				"--allow-path="+dir, "--ask-path="+dir+"/sub", "--allow-path="+dir+"/sub/ok")
+			var out strings.Builder
+			c.Stdout, c.Stderr = &out, &out
+			if err := c.Start(); err != nil {
+				t.Fatal(err)
+			}
+			p := dialPrompts(t, e, c)
+			for _, reply := range []string{"once", "deny"} {
+				id, path, err := p.next(10 * time.Second)
+				if err != nil || path != dir+"/sub/b" {
+					c.Process.Kill()
+					c.Wait()
+					t.Fatalf("prompt %q, want %q: %v\n%s", path, dir+"/sub/b", err, out.String())
+				}
+				p.answer(id, reply)
+			}
+			if err := c.Wait(); err != nil {
+				t.Fatalf("hallpass: %v\n%s", err, out.String())
+			}
+			for _, want := range []string{"allowed=ok", "once=ok", "again=denied", "deeper=ok"} {
 				if !strings.Contains(out.String(), want+"\n") {
 					t.Errorf("output lacks %q", want)
 				}

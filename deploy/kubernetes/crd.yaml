@@ -20,12 +20,12 @@ spec:
       served: true
       storage: true
       additionalPrinterColumns:
-        - name: Ask
+        - name: Prompt
           type: boolean
-          jsonPath: .spec.ask
+          jsonPath: .spec.prompt
         - name: Timeout
           type: string
-          jsonPath: .spec.askTimeout
+          jsonPath: .spec.promptTimeout
       schema:
         openAPIV3Schema:
           type: object
@@ -33,7 +33,7 @@ spec:
             spec:
               type: object
               properties:
-                allow:
+                allowPaths:
                   description: >-
                     Container paths writable without asking. "/workspace/**"
                     (or "/workspace") is the tree under /workspace.
@@ -41,20 +41,30 @@ spec:
                   items:
                     type: string
                     pattern: '^/[^*?\[]*(/\*\*)?$'
-                deny:
+                denyPaths:
                   description: >-
                     Container paths denied without asking, even under an
-                    allowed tree. Same syntax as allow.
+                    allowed tree. Same syntax as allowPaths.
                   type: array
                   items:
                     type: string
                     pattern: '^/[^*?\[]*(/\*\*)?$'
-                ask:
+                askPaths:
+                  description: >-
+                    Container paths asked about even inside a less specific
+                    allowPaths entry (e.g. /workspace/.git in an allowed
+                    /workspace); a more specific allowPaths entry still
+                    allows. Same syntax as allowPaths.
+                  type: array
+                  items:
+                    type: string
+                    pattern: '^/[^*?\[]*(/\*\*)?$'
+                prompt:
                   description: >-
                     Ask about writes and programs no rule decides (default
                     true). false denies them at once.
                   type: boolean
-                askTimeout:
+                promptTimeout:
                   description: >-
                     How long a request waits for an answer before it is
                     denied (Go duration, default 5m; 0 waits forever).
@@ -69,7 +79,7 @@ spec:
                   items:
                     type: string
                     enum: [files, exec, network]
-                allowNetwork:
+                allowNet:
                   description: >-
                     Network destinations reached without asking: "all"
                     (every destination, unix sockets included),
@@ -79,19 +89,19 @@ spec:
                   type: array
                   items:
                     type: string
-                denyNetwork:
+                denyNet:
                   description: >-
                     Network destinations denied without asking, even if
-                    allowed. Same syntax as allowNetwork.
+                    allowed. Same syntax as allowNet.
                   type: array
                   items:
                     type: string
-                askNetwork:
+                askNet:
                   description: >-
                     Network destinations asked about even inside a less
-                    specific allowNetwork entry (e.g. 10.0.0.1:22 in an
-                    allowed 10.0.0.0/8); a more specific allowNetwork
-                    entry still allows. Same syntax as allowNetwork.
+                    specific allowNet entry (e.g. 10.0.0.1:22 in an
+                    allowed 10.0.0.0/8); a more specific allowNet
+                    entry still allows. Same syntax as allowNet.
                   type: array
                   items:
                     type: string
@@ -137,10 +147,10 @@ spec:
                         lowercase letters, digits or -
               x-kubernetes-validations:
                 - rule: >-
-                    (!has(self.allowNetwork) && !has(self.denyNetwork) &&
-                    !has(self.askNetwork)) ||
+                    (!has(self.allowNet) && !has(self.denyNet) &&
+                    !has(self.askNet)) ||
                     (has(self.mediate) && 'network' in self.mediate)
-                  message: allowNetwork, denyNetwork and askNetwork need network in mediate
+                  message: allowNet, denyNet and askNet need network in mediate
                 - rule: >-
                     (!has(self.allowExec) && !has(self.denyExec) && !has(self.groups)) ||
                     !has(self.mediate) || 'exec' in self.mediate

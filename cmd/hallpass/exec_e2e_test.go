@@ -79,7 +79,7 @@ check script2 ./script2
 check missing ./missing
 ./other 2>/dev/null; echo "rc=$?"
 `, bin)
-			c := e.cmd(script, "--mode="+mode, "--ask=deny",
+			c := e.cmd(script, "--mode="+mode, "--prompt=deny",
 				"--allow-exec="+bin+"/allowed", "--allow-exec="+bin+"/tree/**", "--allow-exec="+bin+"/script", "--allow-exec="+bin+"/script2",
 				"--deny-exec="+bin+"/denied", "--deny-exec="+bin+"/tree/b")
 			out, err := c.CombinedOutput()
@@ -107,7 +107,7 @@ func TestExecGroups(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			e := newEnv(t)
 			script := checkExec + "check ls ls /\ncheck cat cat /dev/null\necho end=$?"
-			bare := []string{"--no-implicit", "--allow=/dev/null"}
+			bare := []string{"--no-implicit", "--allow-path=/dev/null"}
 			for _, tc := range []struct {
 				flags   []string
 				ls, cat string
@@ -122,7 +122,7 @@ func TestExecGroups(t *testing.T) {
 				// Replacing an implicit group changes what is implicit.
 				{[]string{"--group=@coreutils=cat"}, "denied", "allowed"},
 			} {
-				c := e.rawCmd(script, append([]string{"--mode=" + mode, "--ask=deny"}, tc.flags...)...)
+				c := e.rawCmd(script, append([]string{"--mode=" + mode, "--prompt=deny"}, tc.flags...)...)
 				out, err := c.CombinedOutput()
 				if err != nil {
 					t.Fatalf("%v: hallpass: %v\n%s", tc.flags, err, out)
@@ -185,7 +185,7 @@ func TestExecNotMediated(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			e := newEnv(t)
 			bin := progs(t, e.root+"/bin", "other")
-			c := e.cmd(checkExec+"check other "+bin+"/other", "--mode="+mode, "--ask=deny", "--mediate=files")
+			c := e.cmd(checkExec+"check other "+bin+"/other", "--mode="+mode, "--prompt=deny", "--mediate=files")
 			out, err := c.CombinedOutput()
 			if err != nil || !strings.Contains(string(out), "other=allowed\n") {
 				t.Errorf("%v\n%s", err, out)
@@ -214,7 +214,7 @@ check always2 ./always
 check no      ./no
 check once2   ./once
 `, bin)
-			c := e.cmd(script, "--mode="+mode, "--ask=answer", "--timeout=20s")
+			c := e.cmd(script, "--mode="+mode, "--prompt=answer", "--timeout=20s")
 			var out strings.Builder
 			c.Stdout, c.Stderr = &out, &out
 			if err := c.Start(); err != nil {
@@ -261,7 +261,7 @@ func TestExecPromptGroup(t *testing.T) {
 			e := newEnv(t)
 			bin := progs(t, e.root+"/bin", "other")
 			script := checkExec + "check ls ls /\ncheck cat cat /dev/null\ncheck other " + bin + "/other\n"
-			c := e.rawCmd(script, "--mode="+mode, "--ask=answer", "--timeout=20s", "--no-implicit", "--allow=/dev/null", "--allow-tty")
+			c := e.rawCmd(script, "--mode="+mode, "--prompt=answer", "--timeout=20s", "--no-implicit", "--allow-path=/dev/null", "--allow-tty")
 			var out strings.Builder
 			c.Stdout, c.Stderr = &out, &out
 			if err := c.Start(); err != nil {

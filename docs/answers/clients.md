@@ -5,7 +5,7 @@ All clients answer the same requests with the same [answers](index.md); they dif
 | Client | Where | Answers | Also |
 |---|---|---|---|
 | Terminal prompt | the session's terminal | all | Ctrl-] shows the rules; Ctrl-] or a prompt's `w` opens the web UI |
-| Desktop notification | without a terminal (`--ask=desktop`) | three buttons | Open web UI button |
+| Desktop notification | without a terminal (`--prompt=desktop`) | three buttons | Open web UI button |
 | `hallpass answer` | another terminal | all | |
 | [Web UI](web.md) | a browser, every session of the user | all | activity, remove rules |
 | `hallpass-node` client | [Kubernetes](../kubernetes/answer.md), one node | all | |

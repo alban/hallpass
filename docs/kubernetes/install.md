@@ -66,7 +66,7 @@ copy of the listener is closed. So, on a node:
 
 | You delete | Running mediated containers |
 |---|---|
-| the `hallpass-node` pod | keep running. The new agent takes their sessions over: rules kept, waiting requests asked again (new ids, new `askTimeout`). Containers starting meanwhile are not mediated (see [Fail open](#fail-open)). |
+| the `hallpass-node` pod | keep running. The new agent takes their sessions over: rules kept, waiting requests asked again (new ids, new `promptTimeout`). Containers starting meanwhile are not mediated (see [Fail open](#fail-open)). |
 | the `hallpass-fd-store` pod | are not affected. The agent gives the new fd-store its copies again. |
 | both pods | their mediated syscalls fail with `ENOSYS`, until the containers restart. In strict mode, the BPF programs are detached too. |
 

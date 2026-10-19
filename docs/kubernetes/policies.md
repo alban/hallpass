@@ -25,28 +25,32 @@ kind: HallpassPolicy
 metadata:
   name: agent
 spec:
-  allow: [/workspace/**, /tmp/**]
-  deny: [/var/run/secrets/**]
-  ask: true            # false: deny without asking
-  askTimeout: 5m       # no answer in time: deny
+  allowPaths: [/workspace/**, /tmp/**]
+  denyPaths: [/var/run/secrets/**]
+  askPaths: [/workspace/.git/hooks/**]
+  prompt: true         # false: deny without asking
+  promptTimeout: 5m    # no answer in time: deny
   mediate: [files, exec, network]  # default: files, exec
-  allowNetwork: ["tcp:*:443", "unix:@my-service"]
-  denyNetwork: ["169.254.169.254"]
-  askNetwork: ["tcp:10.0.0.1:22"]
+  allowNet: ["tcp:*:443", "unix:@my-service"]
+  denyNet: ["169.254.169.254"]
+  askNet: ["tcp:10.0.0.1:22"]
   allowExec: [/usr/bin/make, /usr/local/go/bin/**, "@shells", "@git", "@build"]
   denyExec: [/usr/bin/curl]
   groups:
     "@build": [/usr/bin/make, /usr/bin/cc, /usr/local/go/bin/**]
 ```
 
-- `allow` and `deny` are paths in the container: `/workspace/**` and
-  `/workspace` both mean `/workspace` and everything under it. Other
+- `allowPaths` and `denyPaths` are paths in the container: `/workspace/**`
+  and `/workspace` both mean `/workspace` and everything under it. Other
   globs and relative paths are rejected. Deny wins.
+- `askPaths`: paths asked about even inside what `allowPaths` allows
+  (`--ask-path`), same syntax. The most specific rule decides, an ask
+  wins over an allow as specific, and a deny wins over both.
 - Also allowed: `/dev/null` and the other harmless devices, the
   terminal (`/dev/tty`, `/dev/pts`) and `/dev/termination-log`.
-- `ask` (default `true`): ask about the other writes and programs. With
+- `prompt` (default `true`): ask about the other writes and programs. With
   `false`, they are denied at once, and so are requests made in advance.
-- `askTimeout` (default `5m`): a request with no answer by then is
+- `promptTimeout` (default `5m`): a request with no answer by then is
   denied (`ETIMEDOUT` for a request made in advance). `0` waits forever,
   like `hallpass --timeout=0`.
 - `mediate` (default `[files, exec]`): the syscall categories mediated.
@@ -54,15 +58,15 @@ spec:
   (experimental) asks about connections and sends, like
   `hallpass --mediate` ([Network](../workstation/usage.md#network-experimental)).
   Without `files`, a request made in advance fails at once with `ENOSYS`.
-- `allowNetwork` and `denyNetwork`: destinations in the `--allow-net`
+- `allowNet` and `denyNet`: destinations in the `--allow-net`
   syntax; `all` is every destination, unix sockets included. They need
   `network` in `mediate`. Deny wins. Loopback and unix listeners
   started in the container are allowed without asking.
-- `askNetwork`: destinations asked about even inside what `allowNetwork`
+- `askNet`: destinations asked about even inside what `allowNet`
   allows (`--ask-net`). The most specific rule decides, an ask wins over
   an allow as specific, and a deny wins over both. Needs `network` in
   `mediate`.
-- `allowExec` and `denyExec`: programs in the container, like `allow`:
+- `allowExec` and `denyExec`: programs in the container, like `allowPaths`:
   `/usr/bin/make` is that program, `/opt/tools/**` every program below
   `/opt/tools`. `allowExec` also takes groups of programs, resolved in
   the container: `@shells`, `@coreutils`, `@search`, `@git`, `@busybox`

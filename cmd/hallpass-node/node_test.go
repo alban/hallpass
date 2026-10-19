@@ -29,44 +29,45 @@ import (
 func TestParsePolicy(t *testing.T) {
 	no := false
 	p, err := parsePolicy("agent", policy.Spec{
-		Allow:      []string{"/workspace/**", "/tmp", "/home/agent/.cache/"},
-		Deny:       []string{"/var/run/secrets/**"},
-		Ask:        &no,
-		AskTimeout: "30s",
+		AllowPaths:    []string{"/workspace/**", "/tmp", "/home/agent/.cache/"},
+		DenyPaths:     []string{"/var/run/secrets/**"},
+		Prompt:        &no,
+		PromptTimeout: "30s",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := &Policy{Name: "agent", Policy: policy.Policy{
-		Allow:      []string{"/workspace", "/tmp", "/home/agent/.cache"},
-		Deny:       []string{"/var/run/secrets"},
-		AskTimeout: 30 * time.Second,
-		Mediate:    seccomp.DefaultCategories,
+		AllowPaths:    []string{"/workspace", "/tmp", "/home/agent/.cache"},
+		DenyPaths:     []string{"/var/run/secrets"},
+		PromptTimeout: 30 * time.Second,
+		Mediate:       seccomp.DefaultCategories,
 	}}
 	if !reflect.DeepEqual(p, want) {
 		t.Errorf("got %+v, want %+v", p, want)
 	}
 
 	p, err = parsePolicy("default", policy.Spec{})
-	if err != nil || !p.Ask || p.AskTimeout != policy.DefaultAskTimeout {
+	if err != nil || !p.Prompt || p.PromptTimeout != policy.DefaultPromptTimeout {
 		t.Errorf("defaults: %+v, %v", p, err)
 	}
 
-	p, err = parsePolicy("net", policy.Spec{Mediate: []string{"files", "exec", "network"}, AllowNetwork: []string{"all"}, DenyNetwork: []string{"tcp:169.254.169.254"}})
-	if err != nil || p.Mediate != seccomp.AllCategories || len(p.AllowNetwork) != 1 || !p.AllowNetwork[0].AnyNet || p.DenyNetwork[0].NetString() != "tcp:169.254.169.254" {
+	p, err = parsePolicy("net", policy.Spec{Mediate: []string{"files", "exec", "network"}, AllowNet: []string{"all"}, DenyNet: []string{"tcp:169.254.169.254"}})
+	if err != nil || p.Mediate != seccomp.AllCategories || len(p.AllowNet) != 1 || !p.AllowNet[0].AnyNet || p.DenyNet[0].NetString() != "tcp:169.254.169.254" {
 		t.Errorf("network: %+v, %v", p, err)
 	}
 
 	for _, bad := range []policy.Spec{
-		{Allow: []string{"workspace/**"}},
-		{Allow: []string{"/work*/x"}},
-		{Deny: []string{"/a/**/b"}},
-		{AskTimeout: "soon"},
-		{AskTimeout: "-1s"},
+		{AllowPaths: []string{"workspace/**"}},
+		{AllowPaths: []string{"/work*/x"}},
+		{DenyPaths: []string{"/a/**/b"}},
+		{AskPaths: []string{"workspace/.git"}},
+		{PromptTimeout: "soon"},
+		{PromptTimeout: "-1s"},
 		{Mediate: []string{"dns"}},
 		{Mediate: []string{}},
-		{AllowNetwork: []string{"all"}},
-		{Mediate: []string{"network"}, DenyNetwork: []string{"tcp:nowhere"}},
+		{AllowNet: []string{"all"}},
+		{Mediate: []string{"network"}, DenyNet: []string{"tcp:nowhere"}},
 	} {
 		if _, err := parsePolicy("bad", bad); err == nil {
 			t.Errorf("%+v: no error", bad)
@@ -75,17 +76,20 @@ func TestParsePolicy(t *testing.T) {
 }
 
 func TestDefaultsFor(t *testing.T) {
-	p, _ := parsePolicy("agent", policy.Spec{Allow: []string{"/workspace/**"}, Deny: []string{"/workspace/.git/**"}})
+	p, _ := parsePolicy("agent", policy.Spec{AllowPaths: []string{"/workspace/**"}, DenyPaths: []string{"/workspace/.git/**"}, AskPaths: []string{"/workspace/secret"}})
 	rs := defaultsFor(p, metadata{Home: "/home/agent"}, seccomp.DefaultCategories, 0).Rules()
-	var allow, deny []string
+	var allow, deny, ask []string
 	for _, r := range rs {
 		if r.Object.Path == nil {
 			t.Errorf("network rule without network mediated: %+v", r)
 			continue
 		}
-		if r.Verdict == rules.Allow {
+		switch r.Verdict {
+		case rules.Allow:
 			allow = append(allow, r.Object.Path.Path)
-		} else {
+		case rules.Ask:
+			ask = append(ask, r.Object.Path.Path)
+		default:
 			deny = append(deny, r.Object.Path.Path)
 		}
 	}
@@ -97,8 +101,11 @@ func TestDefaultsFor(t *testing.T) {
 	if !slices.Equal(deny, []string{"/workspace/.git"}) {
 		t.Errorf("deny: %v", deny)
 	}
+	if !slices.Equal(ask, []string{"/workspace/secret"}) {
+		t.Errorf("ask: %v", ask)
+	}
 
-	p, _ = parsePolicy("net", policy.Spec{Mediate: []string{"files", "network"}, AllowNetwork: []string{"unix:@x"}, DenyNetwork: []string{"tcp:*:22"}, AskNetwork: []string{"unix:@xy"}})
+	p, _ = parsePolicy("net", policy.Spec{Mediate: []string{"files", "network"}, AllowNet: []string{"unix:@x"}, DenyNet: []string{"tcp:*:22"}, AskNet: []string{"unix:@xy"}})
 	var nets []string
 	for _, r := range defaultsFor(p, metadata{}, p.Mediate, 0).Rules() {
 		if r.Object.Path == nil {
@@ -170,7 +177,7 @@ func TestAdjust(t *testing.T) {
 	p := &plugin{
 		cluster: fakeCluster{
 			selected: map[string]bool{"agents": true, "other": false},
-			policies: map[string]*Policy{"agent": {Name: "agent", Policy: policy.Policy{Ask: true}}},
+			policies: map[string]*Policy{"agent": {Name: "agent", Policy: policy.Policy{Prompt: true}}},
 		},
 		listenerPath: "/run/hallpass/agent.sock",
 		log:          slog.New(slog.NewTextHandler(io.Discard, nil)),

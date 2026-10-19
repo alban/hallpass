@@ -38,7 +38,7 @@ Show
 
 Type "# lite: hallpass checks the path, the kernel reads it again"
 Enter
-Type "hallpass --ask=deny -- race"
+Type "hallpass --prompt=deny -- race"
 Sleep 300ms
 Enter
 Wait+Screen@20s /escaped|no escape/
@@ -49,7 +49,7 @@ Enter
 Sleep 3s
 Type "# strict: the kernel checks the file it opens"
 Enter
-Type "hallpass --mode=strict --ask=deny -- race"
+Type "hallpass --mode=strict --prompt=deny -- race"
 Sleep 300ms
 Enter
 Wait+Screen@30s /no escape/

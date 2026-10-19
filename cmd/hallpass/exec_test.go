@@ -28,7 +28,7 @@ func TestGoExec(t *testing.T) {
 HALLPASS_E2E_HELPER=spawn "$HP_SELF"
 HALLPASS_E2E_HELPER=syscallexec "$HP_SELF"
 `
-	c := e.cmd(script, "--ask=deny")
+	c := e.cmd(script, "--prompt=deny")
 	c.Env = append(c.Env, "HP_SELF="+self)
 	out, err := c.CombinedOutput()
 	if err != nil {

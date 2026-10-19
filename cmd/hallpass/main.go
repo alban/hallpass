@@ -70,7 +70,7 @@ func main() {
 // options are the flags of a run.
 type options struct {
 	workdir     string
-	ask         string
+	prompt      string
 	timeout     time.Duration
 	allowUserns bool
 	logPath     string
@@ -79,8 +79,8 @@ type options struct {
 	noImplicit  bool
 	allowTTY    bool
 	wait        string
-	// policy is the policy the flags give (--allow, --deny, --mediate,
-	// --allow-net...).
+	// policy is the policy the flags give (--allow-path, --deny-path,
+	// --mediate, --allow-net...).
 	policy policy.Policy
 	// deny is denied on top of policy: hallpass's own config and binary.
 	deny []string
@@ -89,16 +89,17 @@ type options struct {
 
 // flagNames are the flags filling the fields of a policy.Spec.
 var flagNames = map[string]string{
-	"allow":        "--allow",
-	"deny":         "--deny",
-	"askTimeout":   "--timeout",
-	"mediate":      "--mediate",
-	"allowNetwork": "--allow-net",
-	"denyNetwork":  "--deny-net",
-	"askNetwork":   "--ask-net",
-	"allowExec":    "--allow-exec",
-	"denyExec":     "--deny-exec",
-	"groups":       "--group",
+	"allowPaths":    "--allow-path",
+	"denyPaths":     "--deny-path",
+	"askPaths":      "--ask-path",
+	"promptTimeout": "--timeout",
+	"mediate":       "--mediate",
+	"allowNet":      "--allow-net",
+	"denyNet":       "--deny-net",
+	"askNet":        "--ask-net",
+	"allowExec":     "--allow-exec",
+	"denyExec":      "--deny-exec",
+	"groups":        "--group",
 }
 
 // parseFlags parses and checks argv. When it returns ok == false, the run
@@ -109,14 +110,15 @@ func parseFlags(argv []string, printPolicy bool) (o options, code int, ok bool) 
 		fmt.Fprint(fs.Output(), usageText)
 		fs.PrintDefaults()
 	}
-	var allow, deny listFlag
+	var allow, deny, ask listFlag
 	fs.StringVar(&o.workdir, "C", "", "project `dir`, writable without asking (default: current directory)")
 	fs.StringVar(&o.workdir, "workdir", "", "same as -C")
-	fs.Var(&allow, "allow", "`path` also writable without asking (repeatable)")
-	fs.Var(&deny, "deny", "`path` always denied (repeatable, wins over --allow)")
-	fs.BoolVar(&o.noImplicit, "no-implicit", false, "allowed without asking: only the --allow paths and --allow-exec programs (no project dir, $TMPDIR, devices, terminal or implicit program groups; the command still runs)")
+	fs.Var(&allow, "allow-path", "`path` also writable without asking (repeatable)")
+	fs.Var(&deny, "deny-path", "`path` always denied (repeatable, wins over --allow-path)")
+	fs.Var(&ask, "ask-path", "`path` asked about even inside a less specific --allow-path (repeatable; a more specific --allow-path still allows)")
+	fs.BoolVar(&o.noImplicit, "no-implicit", false, "allowed without asking: only the --allow-path paths and --allow-exec programs (no project dir, $TMPDIR, devices, terminal or implicit program groups; the command still runs)")
 	fs.BoolVar(&o.allowTTY, "allow-tty", true, "the session's own terminal (/dev/tty, its /dev/pts/N) is writable without asking; --no-implicit turns it off unless given explicitly")
-	fs.StringVar(&o.ask, "ask", "auto", "how to ask: auto | term | desktop | answer | deny | allow (allow and log: audit)")
+	fs.StringVar(&o.prompt, "prompt", "auto", "how to ask: auto | term | desktop | answer | deny | allow (allow and log: audit)")
 	fs.DurationVar(&o.timeout, "timeout", 30*time.Second, "deny unanswered prompts after `duration` (0: wait forever)")
 	fs.BoolVar(&o.allowUserns, "allow-userns", false, "let the sandbox create user/mount namespaces (weakens lite mode; always on in strict mode)")
 	fs.StringVar(&o.logPath, "log", "", "append one JSON line per mediated syscall to `file`")
@@ -140,7 +142,7 @@ func parseFlags(argv []string, printPolicy bool) (o options, code int, ok bool) 
 		return o, 2, false
 	}
 	var err error
-	spec := o.spec(allow, deny, *mediate, allowNet, denyNet, askNet)
+	spec := o.spec(allow, deny, ask, *mediate, allowNet, denyNet, askNet)
 	spec.AllowExec, spec.DenyExec = programPaths(allowExec), programPaths(denyExec)
 	if spec.Groups, err = groupSpecs(groupFlags); err != nil {
 		return o, fail(err), false
@@ -176,9 +178,9 @@ func parseFlags(argv []string, printPolicy bool) (o options, code int, ok bool) 
 	return o, 0, true
 }
 
-// spec is the policy.Spec of the flags. Relative --allow and --deny paths
-// are relative to the current directory.
-func (o *options) spec(allow, deny []string, mediate string, allowNet, denyNet, askNet []string) policy.Spec {
+// spec is the policy.Spec of the flags. Relative --allow-path,
+// --deny-path and --ask-path paths are relative to the current directory.
+func (o *options) spec(allow, deny, ask []string, mediate string, allowNet, denyNet, askNet []string) policy.Spec {
 	abs := func(l []string) []string {
 		out := make([]string, 0, len(l))
 		for _, p := range l {
@@ -189,16 +191,17 @@ func (o *options) spec(allow, deny []string, mediate string, allowNet, denyNet, 
 		}
 		return out
 	}
-	ask := o.ask != "deny"
+	prompt := o.prompt != "deny"
 	return policy.Spec{
-		Allow:        abs(allow),
-		Deny:         abs(deny),
-		Ask:          &ask,
-		AskTimeout:   o.timeout.String(),
-		Mediate:      strings.Split(mediate, ","),
-		AllowNetwork: allowNet,
-		DenyNetwork:  denyNet,
-		AskNetwork:   askNet,
+		AllowPaths:    abs(allow),
+		DenyPaths:     abs(deny),
+		AskPaths:      abs(ask),
+		Prompt:        &prompt,
+		PromptTimeout: o.timeout.String(),
+		Mediate:       strings.Split(mediate, ","),
+		AllowNet:      allowNet,
+		DenyNet:       denyNet,
+		AskNet:        askNet,
 	}
 }
 
@@ -292,7 +295,7 @@ func runMain(argv []string, printPolicy bool) int {
 		defer strict.Close()
 	}
 
-	asker, pty, err := newAsker(o.ask, o.timeout)
+	asker, pty, err := newAsker(o.prompt, o.timeout)
 	if err != nil {
 		return fail(err)
 	}
@@ -542,12 +545,12 @@ func newAsker(mode string, timeout time.Duration) (ui.Asker, *tty.Term, error) {
 		}
 		return newRemoteAsker(timeout), nil, nil
 	}
-	return nil, nil, fmt.Errorf("unknown --ask mode %q", mode)
+	return nil, nil, fmt.Errorf("unknown --prompt mode %q", mode)
 }
 
 func newTermAsker(timeout time.Duration) (ui.Asker, *tty.Term, error) {
 	if !tty.Available() {
-		return nil, nil, errors.New("--ask=term needs stdin and stdout to be a terminal")
+		return nil, nil, errors.New("--prompt=term needs stdin and stdout to be a terminal")
 	}
 	t, err := tty.Open()
 	if err != nil {

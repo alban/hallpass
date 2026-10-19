@@ -37,7 +37,7 @@ func TestStartedMessage(t *testing.T) {
 		strict bool
 		want   string
 	}{
-		{Policy{Name: "p", Policy: policy.Policy{Ask: true}}, true, `sandboxed by hallpass (strict mode, policy "p"); answer its requests with Headlamp or ` + "`hallpass web --node`"},
+		{Policy{Name: "p", Policy: policy.Policy{Prompt: true}}, true, `sandboxed by hallpass (strict mode, policy "p"); answer its requests with Headlamp or ` + "`hallpass web --node`"},
 		{Policy{Name: "p"}, false, `sandboxed by hallpass (lite mode, policy "p"); requests are denied without asking`},
 	} {
 		if got := startedMessage(&tc.pol, tc.strict); got != tc.want {
