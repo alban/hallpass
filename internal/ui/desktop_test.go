@@ -205,6 +205,35 @@ func TestDesktopBodyClick(t *testing.T) {
 	}
 }
 
+// TestDesktopQuiet: no notification while the user follows requests in a
+// web page; shown again when it goes.
+func TestDesktopQuiet(t *testing.T) {
+	d, f := newFakeDesktop(t)
+	answer := make(chan Answer, 1)
+	d.SetQuiet(true)
+	go func() {
+		answer <- d.Ask(context.Background(), Request{Exe: "/bin/sh", PID: 42, Path: "/home/u/.bashrc"})
+	}()
+	select {
+	case n := <-f.shown:
+		t.Fatalf("shown while quiet: %+v", n)
+	case <-time.After(100 * time.Millisecond):
+	}
+	d.SetQuiet(false)
+	n := recv(t, f.shown, "notification after quiet")
+	d.SetQuiet(true)
+	if id := recv(t, f.closed, "close when quiet"); id != n.id {
+		t.Errorf("closed %d, want %d", id, n.id)
+	}
+	f.emit(t, "NotificationClosed", n.id, uint32(3)) // not a dismissal
+	d.SetQuiet(false)
+	n = recv(t, f.shown, "notification again")
+	f.emit(t, "ActionInvoked", n.id, "deny")
+	if a := recv(t, answer, "answer"); a != AnswerDenyOnce {
+		t.Errorf("answer %v", a)
+	}
+}
+
 func TestDesktopConfirm(t *testing.T) {
 	d, f := newFakeDesktop(t)
 	ctx, cancel := context.WithCancel(context.Background())

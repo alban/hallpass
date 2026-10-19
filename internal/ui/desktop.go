@@ -48,9 +48,12 @@ type Desktop struct {
 	replace uint32
 
 	// yield, while Ask shows a request, asks it to hide the request until
-	// the channel sent is closed (see Confirm).
-	ymu   sync.Mutex
-	yield chan chan struct{}
+	// the channel sent is closed (see Confirm). quiet hides requests (see
+	// SetQuiet); quietCh is closed when it changes.
+	ymu     sync.Mutex
+	yield   chan chan struct{}
+	quiet   bool
+	quietCh chan struct{}
 }
 
 // reopenAfterClick is how long after a body click a request's notification
@@ -98,7 +101,7 @@ func NewDesktop(timeout time.Duration) (*Desktop, error) {
 		return nil, fmt.Errorf("notification service does not support actions")
 	}
 
-	d := &Desktop{conn: conn, timeout: timeout, icon: logoIcon(), listeners: map[chan *dbus.Signal]struct{}{}}
+	d := &Desktop{conn: conn, timeout: timeout, icon: logoIcon(), listeners: map[chan *dbus.Signal]struct{}{}, quietCh: make(chan struct{})}
 	// Only from the name's owner: on GNOME, it forwards to gnome-shell,
 	// which broadcasts the same signals itself, with the same ids.
 	if err := conn.AddMatchSignal(
@@ -222,11 +225,44 @@ func (d *Desktop) Ask(ctx context.Context, r Request) Answer {
 	// Listen before showing it, so a fast click cannot be missed.
 	sigs, stop := d.listen()
 	defer stop()
-	id, err := d.notify(d.replace, "hallpass", body, actions, hints)
-	if err != nil {
+
+	yield := make(chan chan struct{}, 1)
+	d.ymu.Lock()
+	d.yield = yield
+	quiet, quietCh := d.quiet, d.quietCh
+	d.ymu.Unlock()
+	defer func() {
+		d.ymu.Lock()
+		d.yield = nil
+		d.ymu.Unlock()
+	}()
+	// hidden, while a confirmation shows, is closed once it is answered.
+	var hidden <-chan struct{}
+	// id is the notification shown, 0 while hidden or quiet.
+	var id uint32
+	replace := d.replace
+	refresh := func() error {
+		switch want := hidden == nil && !quiet; {
+		case want && id == 0:
+			n, err := d.notify(replace, "hallpass", body, actions, hints)
+			if err != nil {
+				return err
+			}
+			id, d.replace, replace = n, n, 0
+		case !want && id != 0:
+			d.closeNotification(id)
+			id = 0
+		}
+		return nil
+	}
+	if refresh() != nil {
 		return AnswerDismissed
 	}
-	d.replace = id
+	closeShown := func() {
+		if id != 0 {
+			d.closeNotification(id)
+		}
+	}
 
 	var deadline <-chan time.Time
 	if d.timeout > 0 {
@@ -234,35 +270,35 @@ func (d *Desktop) Ask(ctx context.Context, r Request) Answer {
 		defer t.Stop()
 		deadline = t.C
 	}
-	yield := make(chan chan struct{}, 1)
-	d.ymu.Lock()
-	d.yield = yield
-	d.ymu.Unlock()
-	defer func() {
-		d.ymu.Lock()
-		d.yield = nil
-		d.ymu.Unlock()
-	}()
 	var reopenUntil time.Time
-	var hidden <-chan struct{}
 	// The service sends it right before the action it is for.
 	var token string
 	for {
 		select {
+		case <-quietCh:
+			d.ymu.Lock()
+			quiet, quietCh = d.quiet, d.quietCh
+			d.ymu.Unlock()
+			if refresh() != nil {
+				return AnswerDismissed
+			}
 		case h := <-yield:
 			if hidden == nil {
 				hidden = h
-				d.closeNotification(id)
+				_ = refresh()
 			}
 		case <-hidden:
 			hidden = nil
-			if id, err = d.notify(0, "hallpass", body, actions, hints); err != nil {
+			if refresh() != nil {
 				return AnswerDismissed
 			}
-			d.replace = id
 		case sig, ok := <-sigs:
 			if !ok {
 				return AnswerDismissed
+			}
+			if id == 0 {
+				// Signals about the notifications closed by refresh.
+				continue
 			}
 			if t, ok := activationToken(sig, id); ok {
 				token = t
@@ -271,8 +307,6 @@ func (d *Desktop) Ask(ctx context.Context, r Request) Answer {
 			key, ok := forNotification(sig, id)
 			switch {
 			case !ok:
-			case hidden != nil:
-				// Closed by us.
 			case key == "default":
 				if onDefault != nil {
 					go onDefault(token)
@@ -286,21 +320,35 @@ func (d *Desktop) Ask(ctx context.Context, r Request) Answer {
 			case time.Now().Before(reopenUntil):
 				// Closed by the body click, despite "resident".
 				reopenUntil = time.Time{}
-				if id, err = d.notify(0, "hallpass", body, actions, hints); err != nil {
+				id = 0
+				if refresh() != nil {
 					return AnswerDismissed
 				}
-				d.replace = id
 			default:
 				return AnswerDismissed
 			}
 		case <-deadline:
-			d.closeNotification(id)
+			closeShown()
 			return AnswerTimeout
 		case <-ctx.Done():
-			d.closeNotification(id)
+			closeShown()
 			return AnswerDismissed
 		}
 	}
+}
+
+// SetQuiet sets whether requests are shown: not while the user follows them
+// elsewhere, in a web page. A request asked meanwhile waits for an answer
+// from there, or for SetQuiet(false) to show it.
+func (d *Desktop) SetQuiet(quiet bool) {
+	d.ymu.Lock()
+	defer d.ymu.Unlock()
+	if d.quiet == quiet {
+		return
+	}
+	d.quiet = quiet
+	close(d.quietCh)
+	d.quietCh = make(chan struct{})
 }
 
 // Confirm shows a notification of its own with yes and no buttons, and

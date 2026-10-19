@@ -52,7 +52,11 @@ either. The server is restricted to the session:
   user's browser still cancels both and warns (the contention check
   comes first).
 - The pairing code is confirmed in the Ctrl-] overlay, or in a second
-  desktop notification with [Pair] [Cancel] beside the request's.
+  desktop notification with [Pair] [Cancel]. Notification services show
+  one critical notification at a time (GNOME queues the others), so the
+  request's notification is hidden while the confirmation shows.
+- Nothing is printed in the terminal, where a line would stay after the
+  pairing; only an `xdg-open` failure prints the URL.
 
 The server dials the session's own socket, like any client; the peer
 check passes since the session is not under a seccomp filter. Pairing,
@@ -63,7 +67,23 @@ place. Its port is protected like `hallpass web`'s (see
 A body click must not dismiss the request: the request's notification
 gets a `default` action and the `resident` hint, and hallpass closes it
 itself once answered. Services that close it on click anyway get it shown
-again (closed within 2 seconds of the click).
+again (closed within 2 seconds of the click). The click's activation
+token (the service's `ActivationToken` signal) goes to `xdg-open` as
+`XDG_ACTIVATION_TOKEN` and `DESKTOP_STARTUP_ID`, so that the browser's
+window comes to the front. Signals are taken only from the owner of
+`org.freedesktop.Notifications`: on GNOME it is a proxy, and gnome-shell
+broadcasts the same signals behind it.
+
+While a paired page shows the session, its requests get no desktop
+notification: one place to answer, not two. Each page names itself with
+a random tab id on its event streams (`?tab=…&visible=1`) and reports
+its `visibilitychange` events (`POST /api/visibility`); the server tells
+the session (`Server.Watching`, then `Desktop.SetQuiet`) whether some
+page has a stream open and is visible. When the last one closes, or is
+minimised or put in a background tab, the pending request's notification
+comes back. A window merely covered by others still counts as visible:
+browsers do not report it. `hallpass web` serves all sessions and does
+not quiet their notifications.
 
 ## Session API (gRPC)
 
@@ -124,10 +144,13 @@ Shaped for the UI, not for the monitor, and free to change with it:
 - `GET /api/sessions/{pid}/events`: server-sent events; first the
   snapshot, then the events (Opened, Closed, Rules, Decided). The page
   reads them with `fetch`, not `EventSource`, which cannot send the
-  `Authorization` header.
+  `Authorization` header. `?tab=…&visible=0|1` names the page and says
+  whether it is visible (see [One server, two scopes](#one-server-two-scopes)).
 - `POST /api/sessions/{pid}/answer`: `{request, answer}` with the same
   answers as the terminal (once, temp, always, never, deny).
 - `POST /api/sessions/{pid}/rules`: remove a rule, or a set.
+- `POST /api/visibility`: `{tab, visible}`, on the page's
+  `visibilitychange` events.
 
 Request ids are JSON strings (protojson writes 64-bit integers as
 strings).

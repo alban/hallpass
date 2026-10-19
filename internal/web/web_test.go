@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -326,6 +327,71 @@ func TestAPI(t *testing.T) {
 	}
 	if c.session != "" {
 		t.Errorf("hallpass web follows session %q only", c.session)
+	}
+}
+
+// TestWatching: a page tells whether it shows the sessions, connected and
+// visible, so that a session's desktop notifications can give way to it.
+func TestWatching(t *testing.T) {
+	s, c, _ := setup(t)
+	c = pair(t, s, c)
+	pid := strconv.Itoa(os.Getpid())
+	watching := make(chan bool, 8)
+	s.mu.Lock()
+	s.Watching = func(w bool) { watching <- w }
+	s.mu.Unlock()
+	expect := func(want bool) {
+		t.Helper()
+		select {
+		case got := <-watching:
+			if got != want {
+				t.Errorf("watching %v, want %v", got, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("watching: no change to %v", want)
+		}
+	}
+	none := func() {
+		t.Helper()
+		select {
+		case got := <-watching:
+			t.Errorf("watching %v, want no change", got)
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	follow := func(tab, visible string) *http.Response {
+		t.Helper()
+		resp := c.do("GET", "/api/sessions/"+pid+"/events?tab="+tab+"&visible="+visible, "")
+		if _, err := bufio.NewReader(resp.Body).ReadString('\n'); err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+	visibility := func(tab string, visible bool) {
+		t.Helper()
+		body := fmt.Sprintf(`{"tab":%q,"visible":%v}`, tab, visible)
+		if resp := c.do("POST", "/api/visibility", body); resp.StatusCode != http.StatusNoContent {
+			t.Fatalf("visibility: %s", resp.Status)
+		}
+	}
+
+	hiddenTab := follow("a", "0")
+	none()
+	visibility("a", true)
+	expect(true)
+	other := follow("b", "1")
+	visibility("a", false)
+	none() // b shows them still
+	other.Body.Close()
+	expect(false)
+	visibility("b", true) // gone: no effect
+	none()
+	visibility("a", true)
+	expect(true)
+	hiddenTab.Body.Close()
+	expect(false)
+	if resp := (client{t: t, url: c.url}).do("POST", "/api/visibility", `{"tab":"a","visible":true}`); resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("visibility without credential: %s", resp.Status)
 	}
 }
 

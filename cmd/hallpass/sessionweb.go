@@ -40,11 +40,6 @@ func (s *session) openWeb(token string) {
 		return
 	}
 	s.web.srv.AllowPairing()
-	where := "here"
-	if _, ok := s.cfg.Asker.(*ui.Desktop); ok {
-		where = "in the notification"
-	}
-	msg := fmt.Sprintf("hallpass: web UI at %s: confirm its pairing code %s", u, where)
 	c := exec.Command("xdg-open", u)
 	if token != "" {
 		// Wayland, then X11: without it, GNOME opens the page in a
@@ -55,12 +50,16 @@ func (s *session) openWeb(token string) {
 	// program's terminal nor its hangup. Not waited for: reap reaps it.
 	c.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := c.Start(); err != nil {
-		msg += fmt.Sprintf(" (xdg-open: %v)", err)
-	} else {
-		_ = c.Process.Release()
+		// Only then: a line printed in the terminal stays there, while
+		// the pairing confirmation shows and goes away by itself.
+		where := "here"
+		if _, ok := s.cfg.Asker.(*ui.Desktop); ok {
+			where = "in the notification"
+		}
+		go s.notice(fmt.Sprintf("hallpass: xdg-open: %v: open %s and confirm its pairing code %s", err, u, where))
+		return
 	}
-	// Not while promptMu is held, by a desktop request clicked on.
-	go s.notice(msg)
+	_ = c.Process.Release()
 }
 
 // startWeb starts the session's web UI if needed, and returns its URL.
@@ -96,6 +95,10 @@ func (s *session) startWeb() (string, error) {
 	w.srv = web.NewSession(os.Getpid())
 	w.srv.Confirm = s.confirmPair
 	w.srv.Warn = func(msg string) { go s.notice("hallpass: " + msg) }
+	if d, ok := s.cfg.Asker.(*ui.Desktop); ok {
+		// No notification for requests a visible page shows already.
+		w.srv.Watching = d.SetQuiet
+	}
 	w.hs = &http.Server{Handler: w.srv.Handler(), ReadHeaderTimeout: 10 * time.Second}
 	w.url = "http://" + ln.Addr().String() + "/"
 	go func() { _ = w.hs.Serve(ln) }()

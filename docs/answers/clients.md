@@ -30,7 +30,7 @@ The program runs on a pseudo-terminal that hallpass relays, so it cannot see or 
 
 ## Desktop notification
 
-Without a terminal, hallpass asks with a desktop notification. It has room for three buttons only: Allow once, Allow 5 min and Deny (or Allow once, Deny and Never when there is no folder to offer). A request made [in advance](../workstation/usage.md#asking-in-advance) shows the folder, the duration and the program's reason, with Grant and Deny. Click the notification's text to open the session's [web UI](web.md#from-a-session), which offers all answers; the notification stays.
+Without a terminal, hallpass asks with a desktop notification. It has room for three buttons only: Allow once, Allow 5 min and Deny (or Allow once, Deny and Never when there is no folder to offer). A request made [in advance](../workstation/usage.md#asking-in-advance) shows the folder, the duration and the program's reason, with Grant and Deny. Click the notification's text to open the session's [web UI](web.md#from-a-session), which offers all answers; the notification stays. While that page is visible, requests show there only; they get their notification again when you close the tab, minimise its window or switch to another tab.
 
 ## Another terminal
 

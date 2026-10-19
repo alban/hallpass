@@ -30,7 +30,11 @@ func TestTerminalMenuOpenWeb(t *testing.T) {
 	t.Cleanup(func() { _ = c.Process.Kill() })
 	waitFor(t, func() bool { return strings.Contains(scr.text(), "ready") }, "the command")
 	u := openWebFromMenu(t, m, scr, opened)
-	waitFor(t, func() bool { return strings.Contains(scr.text(), "web UI at "+u) }, "notice")
+	// Nothing printed: the confirmation shows in the overlay, and goes.
+	time.Sleep(200 * time.Millisecond)
+	if strings.Contains(scr.text(), u) {
+		t.Errorf("the URL is printed in the terminal")
+	}
 
 	origin := strings.TrimSuffix(u, "/")
 	do := func(method, path, body, cred string) *http.Response {

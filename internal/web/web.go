@@ -63,6 +63,11 @@ type Server struct {
 	// Warn, when set, tells the user something they should know, such as a
 	// pairing cancelled because another one started meanwhile.
 	Warn func(msg string)
+	// Watching, when set, is told whether a paired page shows the sessions
+	// now: its events stream is connected and the page is visible (not a
+	// background tab, nor a minimised window). Called with the server's
+	// lock held, on each change: it must not block.
+	Watching func(bool)
 
 	// A node agent's session API, instead of SocketDir (see NewNode).
 	node     pb.SessionClient
@@ -78,6 +83,14 @@ type Server struct {
 	pairing   *pairing  // the last pairing started, until the browser gets its result
 	pairUntil time.Time // with only: pairing is allowed until then (AllowPairing)
 	sessions  map[int]*session
+	tabs      map[string]*tab // pages following events, by the id they chose
+	watching  bool            // last value given to Watching
+}
+
+// tab is a page following sessions' events.
+type tab struct {
+	streams int // open event streams
+	visible bool
 }
 
 // pairing is a browser's request to pair. id names it to its browser only;
@@ -110,6 +123,7 @@ func New() *Server {
 		credential:  randomHex(32),
 		pairTimeout: PairTimeout,
 		sessions:    map[int]*session{},
+		tabs:        map[string]*tab{},
 	}
 }
 
@@ -198,6 +212,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/sessions/{key}/events", s.auth(s.events))
 	mux.Handle("POST /api/sessions/{key}/answer", s.auth(s.answer))
 	mux.Handle("POST /api/sessions/{key}/rules", s.auth(s.rules))
+	mux.Handle("POST /api/visibility", s.auth(s.visibility))
 	return checkOrigin(mux)
 }
 
@@ -546,6 +561,11 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	}
 	rc := http.NewResponseController(w)
 	w.Header().Set("Content-Type", "text/event-stream")
+	if id := r.URL.Query().Get("tab"); id != "" && len(id) <= 64 {
+		visible := r.URL.Query().Get("visible") == "1"
+		s.updateTab(id, func(t *tab) { t.streams++; t.visible = visible })
+		defer s.updateTab(id, func(t *tab) { t.streams-- })
+	}
 	batches := make(chan *pb.EventBatch)
 	go func() {
 		defer close(batches)
@@ -594,6 +614,51 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 
 // maxBody bounds request bodies: they are a few fields.
 const maxBody = 64 << 10
+
+// updateTab applies f to the page named id, forgets it once it follows no
+// events, and tells Watching if a page shows the sessions now.
+func (s *Server) updateTab(id string, f func(*tab)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t := s.tabs[id]
+	if t == nil {
+		t = &tab{}
+		s.tabs[id] = t
+	}
+	f(t)
+	if t.streams <= 0 {
+		delete(s.tabs, id)
+	}
+	watching := false
+	for _, t := range s.tabs {
+		watching = watching || t.visible
+	}
+	if watching != s.watching {
+		s.watching = watching
+		if s.Watching != nil {
+			s.Watching(watching)
+		}
+	}
+}
+
+// visibility records whether a page is visible, from its visibilitychange
+// events; its event streams carry the first value.
+func (s *Server) visibility(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Tab     string `json:"tab"`
+		Visible bool   `json:"visible"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	s.mu.Lock()
+	_, ok := s.tabs[req.Tab]
+	s.mu.Unlock()
+	if ok {
+		s.updateTab(req.Tab, func(t *tab) { t.visible = req.Visible })
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
 
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBody))

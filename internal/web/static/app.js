@@ -145,6 +145,10 @@ let credential = null;
 // onlySession is the session's key when the page was opened from a session,
 // whose server shows only it; null for hallpass web.
 let onlySession = null;
+// tabID names this page to the server, which tells a session whether a
+// page shows its requests (connected and visible): it then does not show
+// them in desktop notifications too.
+const tabID = Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, "0")).join("");
 
 // api fetches path with the credential. A 401 means the credential is not
 // valid any more (hallpass restarted): pair again.
@@ -230,7 +234,8 @@ function openSession(info) {
   (async () => {
     while (!s.ended) {
       try {
-        await sse(`/api/sessions/${encodeURIComponent(pid)}/events`, s.abort.signal, (type, data) => {
+        const vis = document.visibilityState === "visible" ? "1" : "0";
+        await sse(`/api/sessions/${encodeURIComponent(pid)}/events?tab=${tabID}&visible=${vis}`, s.abort.signal, (type, data) => {
           if (type === "end") endSession(pid);
           else if (!s.ended) onBatch(pid, s, JSON.parse(data));
         });
@@ -551,6 +556,14 @@ for (const b of document.querySelectorAll("nav button")) {
 }
 document.getElementById("filter").addEventListener("input", renderActivity);
 document.getElementById("pair-again").addEventListener("click", pair);
+document.addEventListener("visibilitychange", () => {
+  if (pairState !== "paired") return;
+  api("/api/visibility", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tab: tabID, visible: document.visibilityState === "visible" }),
+  }).catch(() => {});
+});
 
 start();
 setInterval(refreshSessions, 2000);
