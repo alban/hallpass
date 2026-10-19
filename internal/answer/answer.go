@@ -92,7 +92,12 @@ func Apply(m *monitor.Monitor, p Policy, req *monitor.Request, a ui.Answer, rs [
 		return err
 	}
 	if err != nil {
-		// The rules failed (strict mode): give the verdict alone.
+		// The rules failed (strict mode): give the verdict alone. A
+		// grant is its rule: without it, the program would go ahead
+		// and be asked anyway, so it is denied.
+		if a == ui.AnswerGrant {
+			d.Verdicts[0].Allow = false
+		}
 		if _, err2 := m.Apply(monitor.Decision{Verdicts: d.Verdicts, Client: who}); err2 != nil {
 			return errors.Join(err, err2)
 		}
