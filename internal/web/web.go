@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package web serves a browser UI to follow hallpass sessions and answer
-// their requests (`hallpass web`). It is a client of the sessions' sockets
-// (package sessionapi), or of a Kubernetes node agent (package
-// nodeclient), and holds no policy. See docs/devel/web.md.
+// their requests: `hallpass web` for all sessions, or a session for itself
+// (NewSession). It is a client of the sessions' sockets (package
+// sessionapi), or of a Kubernetes node agent (package nodeclient), and
+// holds no policy. See docs/devel/web.md.
 package web
 
 import (
@@ -70,9 +71,13 @@ type Server struct {
 	credential  string // random per process; given to paired browsers
 	pairTimeout time.Duration
 
-	mu       sync.Mutex
-	pairing  *pairing // the last pairing started, until the browser gets its result
-	sessions map[int]*session
+	// only, when set, is the one session served (see NewSession).
+	only int
+
+	mu        sync.Mutex
+	pairing   *pairing  // the last pairing started, until the browser gets its result
+	pairUntil time.Time // with only: pairing is allowed until then (AllowPairing)
+	sessions  map[int]*session
 }
 
 // pairing is a browser's request to pair. id names it to its browser only;
@@ -121,6 +126,25 @@ func NewNode(addr string) (*Server, error) {
 	return s, nil
 }
 
+// NewSession returns a server for session pid only, which a session embeds
+// to open its own web UI: the list shows only it, and other sessions are
+// refused. A browser may pair only right after AllowPairing, that is after
+// the user asked to open the page, so the sandbox cannot start pairings
+// out of the blue.
+func NewSession(pid int) *Server {
+	s := New()
+	s.only = pid
+	return s
+}
+
+// AllowPairing lets one browser pair within PairTimeout. Only for servers
+// from NewSession, which refuse pairing otherwise.
+func (s *Server) AllowPairing() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pairUntil = time.Now().Add(s.pairTimeout)
+}
+
 func randomHex(n int) string {
 	b := make([]byte, n)
 	if _, err := rand.Read(b); err != nil {
@@ -145,7 +169,7 @@ func (s *Server) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.pairing != nil {
-		s.pairing.cancel(errors.New("hallpass web stopped"))
+		s.pairing.cancel(errors.New("the web UI stopped"))
 	}
 	for pid, c := range s.sessions {
 		c.conn.Close()
@@ -234,6 +258,16 @@ func (s *Server) pair(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, errPairContended.Error(), http.StatusConflict)
 		return
 	}
+	// Checked after the contention above, so that a sandbox racing the
+	// user's browser still shows up as a warning.
+	if s.only != 0 {
+		if time.Now().After(s.pairUntil) {
+			s.mu.Unlock()
+			http.Error(w, "Not expecting a browser: open the web UI from the session (Ctrl-] then w, or click its notification) to pair.", http.StatusForbidden)
+			return
+		}
+		s.pairUntil = time.Time{}
+	}
 	ctx, cancel := context.WithCancelCause(context.Background())
 	p := &pairing{id: randomHex(16), code: randomCode(), cancel: cancel, done: make(chan struct{})}
 	s.pairing = p
@@ -312,8 +346,13 @@ func (s *Server) pairWait(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, p.err.Error(), http.StatusForbidden)
 		return
 	}
+	reply := map[string]string{"credential": s.credential}
+	if s.only != 0 {
+		// The page then shows this session only.
+		reply["session"] = strconv.Itoa(s.only)
+	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"credential": s.credential})
+	_ = json.NewEncoder(w).Encode(reply)
 }
 
 // auth checks the credential, which the page keeps in memory only and
@@ -368,6 +407,10 @@ func (s *Server) sessionClient(w http.ResponseWriter, r *http.Request) (pb.Sessi
 	pid, err := strconv.Atoi(key)
 	if err != nil || pid <= 0 {
 		http.Error(w, "bad pid", http.StatusBadRequest)
+		return nil, nil, false
+	}
+	if s.only != 0 && pid != s.only {
+		http.Error(w, "no such session", http.StatusNotFound)
 		return nil, nil, false
 	}
 	c, err := s.client(pid)
@@ -428,7 +471,10 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	var paths []string
-	if s.node == nil {
+	switch {
+	case s.only != 0:
+		paths = []string{filepath.Join(s.SocketDir, strconv.Itoa(s.only)+".sock")}
+	case s.node == nil:
 		paths, _ = filepath.Glob(filepath.Join(s.SocketDir, "*.sock"))
 	}
 	for _, p := range paths {

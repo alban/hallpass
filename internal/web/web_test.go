@@ -36,9 +36,10 @@ func (f fakeSession) Answer(id uint64, answer, client string) error {
 }
 
 type client struct {
-	t    *testing.T
-	url  string
-	cred string
+	t       *testing.T
+	url     string
+	cred    string
+	session string // the one session followed, if the server says so
 }
 
 func (c client) do(method, path, body string, hdr ...string) *http.Response {
@@ -137,14 +138,14 @@ func pair(t *testing.T, s *Server, c client) client {
 	}
 	u.answers <- true
 	resp := c.do("POST", "/api/pair/wait", `{"id":"`+id+`"}`)
-	var paired struct{ Credential string }
+	var paired struct{ Credential, Session string }
 	if err := json.NewDecoder(resp.Body).Decode(&paired); err != nil || resp.StatusCode != http.StatusOK || len(paired.Credential) < 32 {
 		t.Fatalf("pair: %s %v", resp.Status, err)
 	}
 	if len(resp.Cookies()) != 0 {
 		t.Errorf("cookies %v: the credential must stay in the page's memory", resp.Cookies())
 	}
-	c.cred = paired.Credential
+	c.cred, c.session = paired.Credential, paired.Session
 	if resp := c.do("POST", "/api/pair/wait", `{"id":"`+id+`"}`); resp.StatusCode != http.StatusNotFound {
 		t.Errorf("pairing reused: %s", resp.Status)
 	}
@@ -322,6 +323,68 @@ func TestAPI(t *testing.T) {
 	}
 	if resp := c.do("POST", "/api/sessions/"+pid+"/rules", `{}`); resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("empty rules change: %s", resp.Status)
+	}
+	if c.session != "" {
+		t.Errorf("hallpass web follows session %q only", c.session)
+	}
+}
+
+// TestSession checks the server a session embeds: its own session only,
+// and pairing only after the user opened the page.
+func TestSession(t *testing.T) {
+	setup(t)
+	pid := strconv.Itoa(os.Getpid())
+	s := NewSession(os.Getpid())
+	t.Cleanup(s.Close)
+	warned := make(chan string, 4)
+	s.Warn = func(msg string) { warned <- msg }
+	c := serve(t, s)
+	newUser(s)
+
+	if resp := c.do("POST", "/api/pair", ""); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("pairing before AllowPairing: %s", resp.Status)
+	}
+	s.AllowPairing()
+	c = pair(t, s, c)
+	if c.session != pid {
+		t.Errorf("session %q, want %s", c.session, pid)
+	}
+	if resp := c.do("POST", "/api/pair", ""); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("second pairing with one AllowPairing: %s", resp.Status)
+	}
+
+	resp := c.do("GET", "/api/sessions", "")
+	var infos []struct{ Pid int }
+	if err := json.NewDecoder(resp.Body).Decode(&infos); err != nil || len(infos) != 1 || strconv.Itoa(infos[0].Pid) != pid {
+		t.Errorf("sessions: %v %v", infos, err)
+	}
+	for _, path := range []string{"/api/sessions/1/snapshot", "/api/sessions/1/events"} {
+		if resp := c.do("GET", path, ""); resp.StatusCode != http.StatusNotFound {
+			t.Errorf("%s: %s", path, resp.Status)
+		}
+	}
+	if resp := c.do("POST", "/api/sessions/1/answer", `{"request":"7","answer":"once"}`); resp.StatusCode != http.StatusNotFound {
+		t.Errorf("answer another session: %s", resp.Status)
+	}
+	if resp := c.do("GET", "/api/sessions/"+pid+"/snapshot", ""); resp.StatusCode != http.StatusOK {
+		t.Errorf("own snapshot: %s", resp.Status)
+	}
+
+	// Another pairing racing the user's still cancels both, even though
+	// pairing is not allowed any more.
+	s.AllowPairing()
+	newUser(s)
+	id, _ := startPair(t, c)
+	if resp := c.do("POST", "/api/pair", ""); resp.StatusCode != http.StatusConflict {
+		t.Errorf("racing pairing: %s", resp.Status)
+	}
+	if resp := c.do("POST", "/api/pair/wait", `{"id":"`+id+`"}`); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("raced pairing: %s", resp.Status)
+	}
+	select {
+	case <-warned:
+	case <-time.After(5 * time.Second):
+		t.Error("no warning")
 	}
 }
 

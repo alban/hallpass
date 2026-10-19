@@ -15,8 +15,9 @@ browser ──HTTP (127.0.0.1)──> hallpass web ──gRPC (unix socket)─�
 
 - The **session** (`hallpass -- cmd`) runs the monitor and serves its API
   over gRPC on its per-session socket, `$XDG_RUNTIME_DIR/hallpass/<pid>.sock`
-  (today's answer socket). It holds no web code: it is the trusted part,
-  and stays small.
+  (today's answer socket). It also embeds the web server, restricted to
+  itself, started only when the user opens its web UI (see
+  [One server, two scopes](#one-server-two-scopes)).
 - **`hallpass web`** is a client like the terminal overlay. It finds the
   sessions in the socket directory, subscribes to each, and serves the
   browser. It can be stopped and restarted without touching the sessions.
@@ -31,6 +32,37 @@ browser ──HTTP (127.0.0.1)──> hallpass web ──gRPC (unix socket)─�
 Several clients answer at once (terminal overlay, `hallpass answer`,
 browser): the first verdict wins, the others see `Closed` and drop the
 prompt (see [monitor.md](monitor.md#behaviour)).
+
+### One server, two scopes
+
+A session opens its own web UI from the Ctrl-] menu ("[w] open the web
+UI") or when the user clicks the body of a request's desktop
+notification. It embeds the same `internal/web` server as `hallpass web`
+(`web.NewSession(pid)`), started on the first "open" on a random
+loopback port, and opens the page with `xdg-open` (in a new session, so
+that the browser neither gets the program's terminal nor its hangup).
+The page holds no secret, so the browser's command line holds none
+either. The server is restricted to the session:
+
+- `GET /api/sessions` lists it only; other sessions are refused (404).
+  The page then shows no session list, but links to `hallpass web` for
+  all sessions.
+- Pairing is accepted only after an "open", once, within 60 seconds: the
+  sandbox cannot start pairings out of the blue. A request racing the
+  user's browser still cancels both and warns (the contention check
+  comes first).
+- The pairing code is confirmed in the Ctrl-] overlay, or in a second
+  desktop notification with [Pair] [Cancel] beside the request's.
+
+The server dials the session's own socket, like any client; the peer
+check passes since the session is not under a seccomp filter. Pairing,
+the credential, the event stream and the rule editing so stay in one
+place.
+
+A body click must not dismiss the request: the request's notification
+gets a `default` action and the `resident` hint, and hallpass closes it
+itself once answered. Services that close it on click anyway get it shown
+again (closed within 2 seconds of the click).
 
 ## Session API (gRPC)
 

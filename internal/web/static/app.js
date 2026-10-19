@@ -142,6 +142,9 @@ function addActivity(entry) {
 // browser may write to its profile, where the sandbox could read it.
 // Reloading the page means pairing again.
 let credential = null;
+// onlySession is the session's key when the page was opened from a session,
+// whose server shows only it; null for hallpass web.
+let onlySession = null;
 
 // api fetches path with the credential. A 401 means the credential is not
 // valid any more (hallpass restarted): pair again.
@@ -293,7 +296,9 @@ async function pair() {
       body: JSON.stringify({ id }),
     });
     if (!r.ok) throw new Error((await r.text()).trim() || r.statusText);
-    credential = (await r.json()).credential;
+    const paired = await r.json();
+    credential = paired.credential;
+    onlySession = paired.session || null;
   } catch (e) {
     pairState = "unpaired";
     showPairing(e.message);
@@ -343,6 +348,16 @@ async function post(url, body) {
 function renderSessions() {
   const box = document.getElementById("sessions");
   box.replaceChildren();
+  if (onlySession !== null) {
+    // Opened from a session: no list, it shows this one only.
+    const s = sessions.get(onlySession);
+    box.append(el("span", { class: "only" },
+      "This page follows one session: ", sessionLabel(onlySession), s && s.info.mode ? " (" + s.info.mode + ")" : "",
+      s && s.ended ? ", ended" : "", ". For all your sessions, run ",
+      el("a", { href: "https://alban.github.io/hallpass/answers/web/", target: "_blank", rel: "noopener noreferrer" }, "hallpass web"),
+      "."));
+    return;
+  }
   if (sessions.size === 0) {
     box.append(el("span", { class: "empty" }, "No hallpass session."));
     return;

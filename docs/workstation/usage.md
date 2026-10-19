@@ -39,7 +39,7 @@ When the sandbox starts, hallpass prints one line on stderr with the mode, the s
 hallpass: sandbox started (lite, session 1234). Ctrl-] for the menu; run 'hallpass web' in another terminal for the full UI.
 ```
 
-Press Ctrl-] inside a session to see its current rules, including answers given so far; any key closes the overlay.
+Press Ctrl-] inside a session to see its current rules, including answers given so far; `w` opens the session's [web UI](../answers/web.md#from-a-session), any other key closes the overlay.
 
 On a terminal, the window title starts with `[hallpass]` until the session ends: every title the program sets gets the prefix, and the command running in the foreground, if it is not a shell, is appended (`[hallpass] ~/src — vim main.go`), since the terminal itself only sees hallpass. At exit, hallpass restores the previous title in terminals that support the title stack (xterm, VTE-based ones such as GNOME Terminal); elsewhere, the title stays until your shell sets a new one.
 

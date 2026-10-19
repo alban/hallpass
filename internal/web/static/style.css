@@ -6,6 +6,7 @@ nav button { font: inherit; border: 1px solid #ccc; background: #f4f4f4; padding
 nav button.active { background: #333; color: #fff; border-color: #333; }
 .experimental { margin: 0; color: #a15c00; font-size: .9em; }
 #sessions { display: flex; flex-wrap: wrap; gap: .5em; padding: .5em 1em; }
+#sessions .only { font-size: .9em; color: #555; }
 .session { background: #fff; border: 1px solid #ddd; border-radius: 4px; padding: .2em .6em; font-size: .9em; }
 .session.ended { opacity: .5; }
 main { padding: 0 1em 1em; }

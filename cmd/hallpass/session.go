@@ -73,6 +73,9 @@ type session struct {
 	curCancel context.CancelFunc
 	// curMore sends the prompt shown its count of waiting requests.
 	curMore chan int
+
+	// web is the session's own web UI, started on demand.
+	web sessionWeb
 }
 
 // runSession starts the command under the monitor, until it exits, and
@@ -127,6 +130,10 @@ func runSession(cfg sessionConfig) (int, error) {
 		if err := g.protect(sessionapi.ProtectedPorts()); err != nil {
 			return 0, err
 		}
+	}
+	defer s.closeWeb()
+	if d, ok := cfg.Asker.(*ui.Desktop); ok {
+		d.OnDefault = s.openWeb
 	}
 
 	spec := launch.ProcSpec{

@@ -4,8 +4,8 @@ All clients answer the same requests with the same [answers](index.md); they dif
 
 | Client | Where | Answers | Also |
 |---|---|---|---|
-| Terminal prompt | the session's terminal | all | Ctrl-] shows the rules |
-| Desktop notification | without a terminal (`--ask=desktop`) | three buttons | |
+| Terminal prompt | the session's terminal | all | Ctrl-] shows the rules, opens the web UI |
+| Desktop notification | without a terminal (`--ask=desktop`) | three buttons | click opens the web UI |
 | `hallpass answer` | another terminal | all | |
 | [Web UI](web.md) | a browser, every session of the user | all | activity, remove rules |
 | `hallpass-node` client | [Kubernetes](../kubernetes/answer.md), one node | all | |
@@ -30,7 +30,7 @@ The program runs on a pseudo-terminal that hallpass relays, so it cannot see or 
 
 ## Desktop notification
 
-Without a terminal, hallpass asks with a desktop notification. It has room for three buttons only: Allow once, Allow 5 min and Deny (or Allow once, Deny and Never when there is no folder to offer). A request made [in advance](../workstation/usage.md#asking-in-advance) shows the folder, the duration and the program's reason, with Grant and Deny.
+Without a terminal, hallpass asks with a desktop notification. It has room for three buttons only: Allow once, Allow 5 min and Deny (or Allow once, Deny and Never when there is no folder to offer). A request made [in advance](../workstation/usage.md#asking-in-advance) shows the folder, the duration and the program's reason, with Grant and Deny. Click the notification's text to open the session's [web UI](web.md#from-a-session), which offers all answers; the notification stays.
 
 ## Another terminal
 
