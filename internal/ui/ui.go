@@ -41,6 +41,9 @@ const (
 	// AnswerTimeout is AnswerDismissed because nobody answered in time; a
 	// request made in advance learns why it was denied.
 	AnswerTimeout
+	// AnswerAllowGroup allows the programs of Request.Group for the rest
+	// of the session.
+	AnswerAllowGroup
 )
 
 // TempGrant is the duration of AnswerAllowTemp.
@@ -62,6 +65,8 @@ func (a Answer) String() string {
 		return "grant"
 	case AnswerTimeout:
 		return "timeout"
+	case AnswerAllowGroup:
+		return "group"
 	default:
 		return "dismiss"
 	}
@@ -85,6 +90,8 @@ func ParseAnswer(s string) Answer {
 		return AnswerGrant
 	case "timeout":
 		return AnswerTimeout
+	case "group":
+		return AnswerAllowGroup
 	}
 	return AnswerDismissed
 }
@@ -100,6 +107,9 @@ type Request struct {
 	Scope string
 	// Never describes what AnswerNever covers.
 	Never string
+	// Group describes the program group AnswerAllowGroup allows, e.g.
+	// "@coreutils (cat, ls, cp, … 104 programs)"; "" hides that choice.
+	Group string
 	// Warn, when set, is a warning about the request (e.g. "SSH keys —
 	// secret store"); the prompt shows it in red.
 	Warn string
@@ -227,16 +237,21 @@ func shellQuote(s string) string {
 }
 
 // Valid reports whether a is a meaningful answer to r: the scoped grants
-// need a scope, a request made in advance is granted or denied, and only
-// it is granted.
+// need a scope, the group answer a group, a request made in advance is
+// granted or denied, and only it is granted.
 func (r Request) Valid(a Answer) bool {
 	if r.Advance {
 		return a == AnswerGrant || a == AnswerDenyOnce || a == AnswerDismissed || a == AnswerTimeout
 	}
-	if a == AnswerGrant {
+	switch a {
+	case AnswerGrant:
 		return false
+	case AnswerAllowTemp, AnswerAllowAlways:
+		return r.Scope != ""
+	case AnswerAllowGroup:
+		return r.Group != ""
 	}
-	return r.Scope != "" || (a != AnswerAllowTemp && a != AnswerAllowAlways)
+	return true
 }
 
 // Effective is the answer a counts as for r: a if valid, else "deny" for a
@@ -254,7 +269,7 @@ func (r Request) Effective(a Answer) Answer {
 // Allows reports whether a allows the access asked about.
 func (a Answer) Allows() bool {
 	switch a {
-	case AnswerAllowOnce, AnswerAllowTemp, AnswerAllowAlways, AnswerGrant:
+	case AnswerAllowOnce, AnswerAllowTemp, AnswerAllowAlways, AnswerGrant, AnswerAllowGroup:
 		return true
 	}
 	return false
@@ -378,6 +393,10 @@ func (r Request) Text() (string, map[string]Answer) {
 	if r.Scope != "" {
 		fmt.Fprintf(&b, "[t] allow %s for %v  [a] always  ", sanitize(r.Scope), TempGrant)
 		keys["t"], keys["a"] = AnswerAllowTemp, AnswerAllowAlways
+	}
+	if r.Group != "" {
+		fmt.Fprintf(&b, "[g] group %s  ", sanitize(r.Group))
+		keys["g"] = AnswerAllowGroup
 	}
 	b.WriteString("[d] deny  [n] never")
 	if r.Never != "" {

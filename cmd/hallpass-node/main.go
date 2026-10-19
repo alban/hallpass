@@ -36,7 +36,7 @@ commands:
   fd-store  keep the agent's listeners while it restarts (in its own DaemonSet)
   sessions  list the sessions of a node agent
   pending   list the pending requests of a session
-  answer    answer a pending request: once, temp, always, deny or never
+  answer    answer a pending request: once, temp, always, group, deny or never
   ready     exit 0 if the node agent is ready (its readiness probe)
 
 Run "hallpass-node <command> -h" for the flags of a command.

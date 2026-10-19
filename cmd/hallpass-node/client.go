@@ -130,7 +130,7 @@ func cmdAnswer(args []string) error {
 	fs, addr := clientFlags("answer")
 	_ = fs.Parse(args)
 	if fs.NArg() != 3 {
-		return fmt.Errorf("usage: hallpass-node answer [--addr host:port] <session|namespace/pod/container> <request> <once|temp|always|deny|never>")
+		return fmt.Errorf("usage: hallpass-node answer [--addr host:port] <session|namespace/pod/container> <request> <once|temp|always|group|deny|never>")
 	}
 	req, err := strconv.ParseUint(fs.Arg(1), 10, 64)
 	if err != nil {

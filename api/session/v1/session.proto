@@ -137,6 +137,9 @@ message Prompt {
   bool advance = 12;
   string reason = 13; // written by the workload: show it as its claim
   google.protobuf.Duration grant_for = 14; // unset: the rest of the session
+  // The program group the "group" answer allows, e.g. "@coreutils (cat,
+  // ls, cp, … 104 programs)"; empty: no such answer.
+  string group = 15;
 }
 
 message Object {
@@ -308,8 +311,8 @@ message ProcMatch {
 
 message AnswerRequest {
   uint64 request = 1;
-  // once, temp, always, deny, never; temp and always need a scope. A
-  // request made in advance: grant or deny.
+  // once, temp, always, group, deny, never; temp and always need a scope,
+  // group a group. A request made in advance: grant or deny.
   string answer = 2;
   string client = 3; // reported in Reason.client
 }

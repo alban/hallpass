@@ -110,3 +110,17 @@ func TestEffective(t *testing.T) {
 		t.Error("AutoAllow")
 	}
 }
+
+func TestTextGroup(t *testing.T) {
+	r := Request{Exe: "sh", PID: 7, Op: "exec", Path: "/usr/bin/cat", Scope: "/usr/bin/cat", Group: "@coreutils (cat, ls, cp, … 9 programs)"}
+	got, keys := r.Text()
+	if !strings.Contains(got, "[a] always  [g] group @coreutils (cat, ls, cp, … 9 programs)  [d] deny") || keys["g"] != AnswerAllowGroup {
+		t.Errorf("Text() = %q, keys %v", got, keys)
+	}
+	if !r.Valid(AnswerAllowGroup) || (Request{Scope: "/x"}).Valid(AnswerAllowGroup) || ParseAnswer("group") != AnswerAllowGroup || AnswerAllowGroup.String() != "group" {
+		t.Error("group answer")
+	}
+	if (Request{Advance: true, Group: "@x (1 program)"}).Valid(AnswerAllowGroup) || !AnswerAllowGroup.Allows() {
+		t.Error("group answer to a request made in advance")
+	}
+}

@@ -1,8 +1,8 @@
 // Copyright The hallpass Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package answer maps a prompt answer (once, temp, always, deny, never;
-// grant for a request made in advance) to a monitor decision with a
+// Package answer maps a prompt answer (once, temp, always, group, deny,
+// never; grant for a request made in advance) to a monitor decision with a
 // session's policy, and describes a request the way prompts show it. The
 // CLI and the node agent share it, so an answer means the same in both.
 package answer
@@ -13,7 +13,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/alban/hallpass/internal/defaults"
 	"github.com/alban/hallpass/internal/monitor"
+	"github.com/alban/hallpass/internal/programs"
 	"github.com/alban/hallpass/internal/rules"
 	"github.com/alban/hallpass/internal/ui"
 )
@@ -33,6 +35,9 @@ type Policy interface {
 	FolderFor(path string) string
 	// Warn labels a secret store, "" otherwise.
 	Warn(path string) string
+	// Group is the program group the program at path belongs to, offered
+	// by an "allow group" answer.
+	Group(path string) (programs.Group, bool)
 }
 
 // Find returns pending request id and the current rules; it fails with
@@ -78,6 +83,11 @@ func Apply(m *monitor.Monitor, p Policy, req *monitor.Request, a ui.Answer, rs [
 	case ui.AnswerAllowAlways:
 		allow = true
 		grant(p, &d, rs, ops, obj, time.Time{})
+	case ui.AnswerAllowGroup:
+		// Valid: an exec of a program of a group.
+		allow = true
+		g, _ := p.Group(obj.Path.Path)
+		d.AddRules = defaults.GroupRules(g, rs, "")
 	case ui.AnswerNever:
 		d.AddRules = append(d.AddRules, rules.Rule{Ops: ops, Verdict: rules.Deny, Object: exact(obj)})
 	}
@@ -209,6 +219,9 @@ func Request(p Policy, req *monitor.Request, waiting int) ui.Request {
 		// /usr/bin would allow every program there.
 		r.Path = obj.Path.Path
 		r.Scope, r.Never = r.Path, "this program"
+		if g, ok := p.Group(r.Path); ok {
+			r.Group = g.String()
+		}
 	case obj.Path != nil:
 		r.Path = obj.Path.Path
 		r.Scope = p.FolderFor(r.Path)

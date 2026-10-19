@@ -81,6 +81,11 @@ func (a *Terminal) Ask(ctx context.Context, r Request) Answer {
 			keys += fmt.Sprintf("  %s for %v  %s always", bold("[t]"), TempGrant, bold("[a]"))
 			accept += "tTaA"
 		}
+		if r.Group != "" {
+			lines = append(lines, fmt.Sprintf(" [g] allows the group: %s", sanitize(r.Group)))
+			keys += fmt.Sprintf("  %s group", bold("[g]"))
+			accept += "gG"
+		}
 		keys += fmt.Sprintf("  %s deny  %s never", bold("[d]"), bold("[n]"))
 	}
 	if a.OnWeb != nil {
@@ -156,16 +161,19 @@ func (a *Terminal) Ask(ctx context.Context, r Request) Answer {
 			go a.OnWeb()
 		case key == 0 && run != nil && ctx.Err() == nil:
 		default:
-			return a.answer(ctx, key, shown)
+			return a.answer(ctx, r, key, shown)
 		}
 	}
 }
 
-// answer maps the key pressed, 0 for none, to the answer.
-func (a *Terminal) answer(ctx context.Context, key byte, shown time.Duration) Answer {
+// answer maps the key pressed, 0 for none, to the answer to r.
+func (a *Terminal) answer(ctx context.Context, r Request, key byte, shown time.Duration) Answer {
 	switch key {
 	case 'g', 'G':
-		return AnswerGrant
+		if r.Advance {
+			return AnswerGrant
+		}
+		return AnswerAllowGroup
 	case 'o', 'O':
 		return AnswerAllowOnce
 	case 't', 'T':

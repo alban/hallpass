@@ -173,12 +173,16 @@ describe('types', () => {
     expect(answerAllowed('always', { scope: '' })).toBe(false);
     expect(answerAllowed('always', { scope: '/etc' })).toBe(true);
     expect(answerAllowed('grant', { scope: '/etc' })).toBe(false);
+    expect(answerAllowed('group', { scope: '/usr/bin/ls' })).toBe(false);
+    expect(answerAllowed('group', { group: '@coreutils (ls: 1 program)' })).toBe(true);
+    expect(answerAllowed('group', { advance: true, group: '@x (x: 1 program)' })).toBe(false);
   });
 
   it('answers requests made in advance with grant or deny', () => {
     const p = { advance: true, scope: '/etc', grantFor: '600s' };
     expect(answersFor(p)).toEqual(['grant', 'deny']);
     expect(answersFor({})).toContain('once');
+    expect(answersFor({})).toContain('group');
     expect(answerAllowed('grant', p)).toBe(true);
     expect(answerAllowed('once', p)).toBe(false);
     expect(answerAllowed('always', p)).toBe(false);

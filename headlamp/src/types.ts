@@ -31,6 +31,7 @@ export interface Prompt {
   advance?: boolean;
   reason?: string; // written by the workload: show it as its claim
   grantFor?: string; // protojson Duration, e.g. "600s"; unset: the session
+  group?: string; // the program group "group" allows, e.g. "@git (git: 1 program)"
 }
 
 export interface PendingRequest {
@@ -78,9 +79,9 @@ export interface AgentState extends Agent {
   sessions: Session[];
 }
 
-export type Answer = 'once' | 'temp' | 'always' | 'deny' | 'never' | 'grant';
+export type Answer = 'once' | 'temp' | 'always' | 'group' | 'deny' | 'never' | 'grant';
 
-export const answers: Answer[] = ['once', 'temp', 'always', 'deny', 'never'];
+export const answers: Answer[] = ['once', 'temp', 'always', 'group', 'deny', 'never'];
 
 // The answers to a request made in advance.
 export const advanceAnswers: Answer[] = ['grant', 'deny'];
@@ -91,14 +92,18 @@ export function answersFor(prompt?: Prompt): Answer[] {
 }
 
 // Whether an answer applies to a prompt: temp and always cover the
-// prompt's scope, and some requests have none; grant is for requests made
-// in advance, which take only grant and deny.
+// prompt's scope, and some requests have none; group needs the program
+// group of an exec; grant is for requests made in advance, which take only
+// grant and deny.
 export function answerAllowed(answer: Answer, prompt?: Prompt): boolean {
   if (prompt?.advance) {
     return advanceAnswers.includes(answer);
   }
   if (answer === 'grant') {
     return false;
+  }
+  if (answer === 'group') {
+    return !!prompt?.group;
   }
   return (answer !== 'temp' && answer !== 'always') || !!prompt?.scope;
 }

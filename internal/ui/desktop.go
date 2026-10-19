@@ -203,6 +203,16 @@ func (d *Desktop) Ask(ctx context.Context, r Request) Answer {
 		if onWeb != nil {
 			actions = append(actions, "web", "Open web UI")
 		}
+	case r.Group != "":
+		// A program: its group is the likelier lasting answer; "once" is
+		// in the web UI when it is on.
+		body += "\n\nAllow the group: " + html.EscapeString(sanitize(r.Group))
+		actions = []string{"group", "Allow group", "deny", "Deny"}
+		if onWeb != nil {
+			actions = append(actions, "web", "Open web UI")
+		} else {
+			actions = append([]string{"once", "Allow once"}, actions...)
+		}
 	case onWeb != nil:
 		actions = []string{"once", "Allow once", "deny", "Deny", "web", "Open web UI"}
 	case r.Scope != "":

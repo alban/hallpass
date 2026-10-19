@@ -33,6 +33,7 @@ const answerHelp: Record<Answer, string> = {
   once: 'Allow this request only',
   temp: 'Allow the scope until the session ends',
   always: 'Allow the scope, and remember it in the session',
+  group: 'Allow every program of the group, and remember it in the session',
   deny: 'Deny this request only',
   never: 'Deny, and remember it in the session',
   grant: 'Grant what the program asks for in advance, for the time it asks',
@@ -61,20 +62,23 @@ function AnswerButtons(props: {
   };
   return (
     <ButtonGroup size="small" variant="outlined" disabled={busy}>
-      {answersFor(request.prompt).map(a => (
-        <Tooltip key={a} title={answerHelp[a]}>
-          <span>
-            <Button
-              color={a === 'deny' || a === 'never' ? 'error' : 'primary'}
-              disabled={busy || !answerAllowed(a, request.prompt)}
-              onClick={() => answer(a)}
-              aria-label={`${a} ${request.prompt?.path || ''}`}
-            >
-              {a}
-            </Button>
-          </span>
-        </Tooltip>
-      ))}
+      {answersFor(request.prompt)
+        // Only execs have a group: no disabled button on every other prompt.
+        .filter(a => a !== 'group' || answerAllowed(a, request.prompt))
+        .map(a => (
+          <Tooltip key={a} title={a === 'group' ? `Allow ${request.prompt?.group}` : answerHelp[a]}>
+            <span>
+              <Button
+                color={a === 'deny' || a === 'never' ? 'error' : 'primary'}
+                disabled={busy || !answerAllowed(a, request.prompt)}
+                onClick={() => answer(a)}
+                aria-label={`${a} ${request.prompt?.path || ''}`}
+              >
+                {a}
+              </Button>
+            </span>
+          </Tooltip>
+        ))}
     </ButtonGroup>
   );
 }

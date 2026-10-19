@@ -233,3 +233,48 @@ check once2   ./once
 		})
 	}
 }
+
+// TestExecPromptGroup: a prompt for a program of a group offers it, and
+// "group" lets the other programs of the group run without asking.
+func TestExecPromptGroup(t *testing.T) {
+	for _, mode := range modes(t) {
+		t.Run(mode, func(t *testing.T) {
+			e := newEnv(t)
+			bin := progs(t, e.root+"/bin", "other")
+			script := checkExec + "check ls ls /\ncheck cat cat /dev/null\ncheck other " + bin + "/other\n"
+			c := e.rawCmd(script, "--mode="+mode, "--ask=answer", "--timeout=20s")
+			var out strings.Builder
+			c.Stdout, c.Stderr = &out, &out
+			if err := c.Start(); err != nil {
+				t.Fatal(err)
+			}
+			p := dialPrompts(t, e, c)
+			req, err := p.nextRequest(10 * time.Second)
+			if err != nil {
+				t.Fatalf("read prompt: %v\n%s", err, out.String())
+			}
+			if g := req.Prompt.GetGroup(); !strings.HasPrefix(g, "@coreutils (") || !strings.HasSuffix(req.Prompt.GetPath(), "/ls") {
+				t.Errorf("prompt %v, want ls in @coreutils", req.Prompt)
+			}
+			p.answer(req.Id, "group")
+			// cat is in the group: the next prompt is about other, in no group.
+			req, err = p.nextRequest(10 * time.Second)
+			if err != nil {
+				t.Fatalf("read prompt: %v\n%s", err, out.String())
+			}
+			if req.Prompt.GetPath() != bin+"/other" || req.Prompt.GetGroup() != "" {
+				t.Errorf("prompt %v, want %s without a group", req.Prompt, bin+"/other")
+			}
+			p.answer(req.Id, "deny")
+			if err := c.Wait(); err != nil {
+				t.Fatalf("hallpass: %v\n%s", err, out.String())
+			}
+			got := outputMap(out.String())
+			for k, v := range map[string]string{"ls": "allowed", "cat": "allowed", "other": "denied"} {
+				if got[k] != v {
+					t.Errorf("%s: got %q, want %q\n%s", k, got[k], v, out.String())
+				}
+			}
+		})
+	}
+}

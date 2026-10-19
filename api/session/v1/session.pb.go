@@ -930,9 +930,12 @@ type Prompt struct {
 	Detail string `protobuf:"bytes,11,opt,name=detail,proto3" json:"detail,omitempty"` // qualifies path, e.g. "udp" for a network address
 	// A request made in advance: answered with "grant" or "deny"; path ends
 	// with "/**" for a tree.
-	Advance       bool                 `protobuf:"varint,12,opt,name=advance,proto3" json:"advance,omitempty"`
-	Reason        string               `protobuf:"bytes,13,opt,name=reason,proto3" json:"reason,omitempty"`                     // written by the workload: show it as its claim
-	GrantFor      *durationpb.Duration `protobuf:"bytes,14,opt,name=grant_for,json=grantFor,proto3" json:"grant_for,omitempty"` // unset: the rest of the session
+	Advance  bool                 `protobuf:"varint,12,opt,name=advance,proto3" json:"advance,omitempty"`
+	Reason   string               `protobuf:"bytes,13,opt,name=reason,proto3" json:"reason,omitempty"`                     // written by the workload: show it as its claim
+	GrantFor *durationpb.Duration `protobuf:"bytes,14,opt,name=grant_for,json=grantFor,proto3" json:"grant_for,omitempty"` // unset: the rest of the session
+	// The program group the "group" answer allows, e.g. "@coreutils (cat,
+	// ls, cp, … 104 programs)"; empty: no such answer.
+	Group         string `protobuf:"bytes,15,opt,name=group,proto3" json:"group,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1063,6 +1066,13 @@ func (x *Prompt) GetGrantFor() *durationpb.Duration {
 		return x.GrantFor
 	}
 	return nil
+}
+
+func (x *Prompt) GetGroup() string {
+	if x != nil {
+		return x.Group
+	}
+	return ""
 }
 
 type Object struct {
@@ -2572,8 +2582,8 @@ func (x *ProcMatch) GetComm() string {
 type AnswerRequest struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	Request uint64                 `protobuf:"varint,1,opt,name=request,proto3" json:"request,omitempty"`
-	// once, temp, always, deny, never; temp and always need a scope. A
-	// request made in advance: grant or deny.
+	// once, temp, always, group, deny, never; temp and always need a scope,
+	// group a group. A request made in advance: grant or deny.
 	Answer        string `protobuf:"bytes,2,opt,name=answer,proto3" json:"answer,omitempty"`
 	Client        string `protobuf:"bytes,3,opt,name=client,proto3" json:"client,omitempty"` // reported in Reason.client
 	unknownFields protoimpl.UnknownFields
@@ -2723,7 +2733,7 @@ const file_session_proto_rawDesc = "" +
 	"\aAdvance\x12\x12\n" +
 	"\x04tree\x18\x01 \x01(\bR\x04tree\x12+\n" +
 	"\x03for\x18\x02 \x01(\v2\x19.google.protobuf.DurationR\x03for\x12\x16\n" +
-	"\x06reason\x18\x03 \x01(\tR\x06reason\"\xda\x02\n" +
+	"\x06reason\x18\x03 \x01(\tR\x06reason\"\xf0\x02\n" +
 	"\x06Prompt\x12\x0e\n" +
 	"\x02op\x18\x01 \x01(\tR\x02op\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12\x10\n" +
@@ -2739,7 +2749,8 @@ const file_session_proto_rawDesc = "" +
 	"\x06detail\x18\v \x01(\tR\x06detail\x12\x18\n" +
 	"\aadvance\x18\f \x01(\bR\aadvance\x12\x16\n" +
 	"\x06reason\x18\r \x01(\tR\x06reason\x126\n" +
-	"\tgrant_for\x18\x0e \x01(\v2\x19.google.protobuf.DurationR\bgrantFor\"\x88\x02\n" +
+	"\tgrant_for\x18\x0e \x01(\v2\x19.google.protobuf.DurationR\bgrantFor\x12\x14\n" +
+	"\x05group\x18\x0f \x01(\tR\x05group\"\x88\x02\n" +
 	"\x06Object\x125\n" +
 	"\x04path\x18\x01 \x01(\v2\x1f.hallpass.session.v1.PathObjectH\x00R\x04path\x125\n" +
 	"\x04proc\x18\x02 \x01(\v2\x1f.hallpass.session.v1.ProcObjectH\x00R\x04proc\x12\x1a\n" +

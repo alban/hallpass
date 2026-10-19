@@ -6,11 +6,13 @@ package answer
 import (
 	"errors"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/alban/hallpass/internal/defaults"
 	"github.com/alban/hallpass/internal/monitor"
+	"github.com/alban/hallpass/internal/programs"
 	"github.com/alban/hallpass/internal/rules"
 	"github.com/alban/hallpass/internal/ui"
 )
@@ -160,8 +162,40 @@ func TestExecAnswers(t *testing.T) {
 		t.Errorf("write answers: %v", answerOps(rules.OpWrite))
 	}
 	req := Request(p, &monitor.Request{Op: rules.OpExec, Objects: []rules.Object{obj}}, 0)
-	if req.Scope != "/opt/tool/bin/run" || req.Op != "exec" {
+	if req.Scope != "/opt/tool/bin/run" || req.Op != "exec" || req.Group != "" {
 		t.Errorf("request: %+v", req)
+	}
+}
+
+// TestGroupAnswer: "group" allows every program of the group of the one
+// asked about, except those already allowed for good.
+func TestGroupAnswer(t *testing.T) {
+	m, err := monitor.New(monitor.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	p := defaults.NewLexical("/root", "", nil, nil)
+	p.SetGroups([]programs.Group{{Name: "@coreutils", Members: []string{"/opt/cu/cat", "/opt/cu/ls", "/opt/cu/cp"}}})
+	obj := rules.Object{Path: &rules.PathObject{Path: "/opt/cu/ls"}}
+	req := &monitor.Request{ID: 9, Op: rules.OpExec, Objects: []rules.Object{obj}}
+	if got := Request(p, req, 0).Group; got != "@coreutils (cat, ls, cp: 3 programs)" {
+		t.Errorf("group %q", got)
+	}
+	cat := rules.Rule{ID: 1, Ops: rules.OpExec, Verdict: rules.Allow, Object: rules.ObjectMatch{Path: &rules.PathMatch{Path: "/opt/cu/cat"}}}
+	if err := Apply(m, p, req, ui.AnswerAllowGroup, []rules.Rule{cat}, "test"); !errors.Is(err, monitor.ErrClosed) {
+		t.Fatalf("Apply: %v", err)
+	}
+	_, rs, _ := m.Snapshot()
+	var got []string
+	for _, r := range rs {
+		if r.Ops != rules.OpExec || r.Verdict != rules.Allow || r.Label != "@coreutils" || r.Object.Path.Tree {
+			t.Errorf("rule %+v", r)
+		}
+		got = append(got, r.Object.Path.Path)
+	}
+	if strings.Join(got, " ") != "/opt/cu/ls /opt/cu/cp" {
+		t.Errorf("rules for %q", got)
 	}
 }
 
