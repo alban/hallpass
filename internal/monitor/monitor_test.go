@@ -460,6 +460,42 @@ func TestRemoveSet(t *testing.T) {
 	}
 }
 
+func TestProtectedSet(t *testing.T) {
+	fx := setup(t, nil, false)
+	p := tree("/nonexistent", rules.Deny)
+	p.Set = ProtectedSet
+	if _, err := fx.m.Apply(Decision{AddRules: []rules.Rule{p, tree(fx.dir, rules.Allow)}}); err != nil {
+		t.Fatal(err)
+	}
+	_, rs, gen := fx.m.Snapshot()
+	var id uint64
+	for _, r := range rs {
+		if r.Set == ProtectedSet {
+			id = r.ID
+		}
+	}
+	for _, d := range []Decision{
+		{RemoveSets: []string{ProtectedSet}},
+		{RemoveRules: []uint64{id}},
+	} {
+		if _, err := fx.m.Apply(d); !errors.Is(err, ErrProtected) {
+			t.Errorf("Apply(%+v): %v, want ErrProtected", d, err)
+		}
+	}
+	allow := tree("/x", rules.Allow)
+	allow.Set = ProtectedSet
+	expiring := tree("/y", rules.Deny)
+	expiring.Set, expiring.Expires = ProtectedSet, time.Now().Add(time.Hour)
+	for _, r := range []rules.Rule{allow, expiring} {
+		if _, err := fx.m.Apply(Decision{AddRules: []rules.Rule{r}}); err == nil {
+			t.Errorf("Apply(add %+v) succeeded", r)
+		}
+	}
+	if _, rs2, g := fx.m.Snapshot(); g != gen || len(rs2) != len(rs) {
+		t.Fatalf("rules changed: gen %d -> %d, %+v", gen, g, rs2)
+	}
+}
+
 func TestRestartCache(t *testing.T) {
 	fx := setup(t, nil, true)
 	p := filepath.Join(fx.dir, "x")

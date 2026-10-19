@@ -5,13 +5,19 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
+	"strconv"
+	"syscall"
 	"time"
 
+	"github.com/alban/hallpass/internal/sessionapi"
 	"github.com/alban/hallpass/internal/web"
 )
 
@@ -28,8 +34,9 @@ through a port-forward (see docs/kubernetes/answer.md):
   hallpass web --node 127.0.0.1:7323
 
 EXPERIMENTAL: the page is protected by a cookie, which a sandboxed agent
-could read from the browser profile to answer its own requests. See
-docs/devel/web.md.
+could read from the browser profile to answer its own requests. Sessions
+that mediate the network (--mediate=files,exec,network) deny their
+sandbox connections to this port; others do not. See docs/devel/web.md.
 `
 
 func webMain(argv []string) int {
@@ -61,6 +68,15 @@ func webMain(argv []string) int {
 	base := "http://" + ln.Addr().String()
 	pairURL := func() string { return base + "/pair?token=" + s.NewToken() }
 
+	// The sessions that mediate the network deny their sandboxes
+	// connections to these ports.
+	unregister, err := sessionapi.RegisterPorts(protectPorts(ln.Addr(), *node))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "hallpass web: registering the port with the sessions: %v; sandboxes can connect to it\n", err)
+		unregister = func() {}
+	}
+	defer unregister()
+
 	fmt.Fprintln(os.Stderr, "hallpass web: EXPERIMENTAL, see docs/devel/web.md#security.")
 	fmt.Fprintf(os.Stderr, "hallpass web: serving %s\n", base)
 	u := pairURL()
@@ -77,8 +93,32 @@ func webMain(argv []string) int {
 		}
 	}()
 	srv := &http.Server{Handler: s.Handler(), ReadHeaderTimeout: 10 * time.Second}
-	if err := srv.Serve(ln); err != nil {
+	// Stop cleanly, so that the port is unregistered.
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	go func() {
+		<-sig
+		srv.Close()
+	}()
+	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fail(err)
 	}
 	return 0
+}
+
+// protectPorts returns the ports the sandboxes must not connect to: the
+// web UI's, and with --node a loopback port-forward to the node agent's
+// session API, which needs no pairing.
+func protectPorts(web net.Addr, node string) []uint16 {
+	var out []uint16
+	if a, ok := web.(*net.TCPAddr); ok {
+		out = append(out, uint16(a.Port))
+	}
+	if host, port, err := net.SplitHostPort(node); err == nil {
+		ip := net.ParseIP(host)
+		if p, err := strconv.ParseUint(port, 10, 16); err == nil && p != 0 && (host == "localhost" || ip != nil && ip.IsLoopback()) {
+			out = append(out, uint16(p))
+		}
+	}
+	return out
 }

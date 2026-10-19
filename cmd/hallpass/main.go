@@ -22,6 +22,7 @@ import (
 	"github.com/alban/hallpass/internal/policy"
 	"github.com/alban/hallpass/internal/privsep"
 	"github.com/alban/hallpass/internal/seccomp"
+	"github.com/alban/hallpass/internal/sessionapi"
 	"github.com/alban/hallpass/internal/tty"
 	"github.com/alban/hallpass/internal/ui"
 	"golang.org/x/sys/unix"
@@ -327,7 +328,9 @@ func (o *options) printRules(engine *defaults.Defaults) {
 			engine.AllowDevice(p)
 		}
 	}
-	for _, l := range engine.Describe(engine.Rules()) {
+	// What a session would add when it starts.
+	rs := append(engine.Rules(), protectedRules(o.policy.Mediate, sessionapi.SocketDir(), sessionapi.ProtectedPorts())...)
+	for _, l := range engine.Describe(rs) {
 		fmt.Println(l)
 	}
 }

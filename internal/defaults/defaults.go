@@ -263,6 +263,9 @@ func (d *Defaults) Summary(rs []rules.Rule) (deny, allow []string) {
 		if !r.Expires.IsZero() {
 			s += " (until " + r.Expires.Format("15:04:05") + ")"
 		}
+		if r.Label != "" && r.Verdict == rules.Deny {
+			s += " (" + r.Label + ")"
+		}
 		if p := r.Object.Path; p != nil && r.Set == Set {
 			if p.Path == d.workdir {
 				s += " (project)"

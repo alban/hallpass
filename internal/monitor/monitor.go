@@ -57,7 +57,15 @@ var (
 	ErrStale       = errors.New("monitor: rules changed since IfGeneration")
 	ErrClosed      = errors.New("monitor: request already closed")
 	ErrUnsupported = errors.New("monitor: rule not enforceable in strict mode")
+	ErrProtected   = errors.New("monitor: protected rules cannot be removed")
 )
+
+// ProtectedSet is the rules.Rule.Set of denials that no client can lift,
+// e.g. the sandbox's connections to the clients that answer for it. Rules
+// are added to it like to any set, but only Deny rules without expiry,
+// and Apply refuses to remove them. A Deny wins over any Allow, so nothing
+// overrides them.
+const ProtectedSet = "protected"
 
 // Event is one thing that happened. Exactly one field is set.
 type Event struct {
@@ -418,10 +426,16 @@ func (m *Monitor) nextRules(old []rules.Rule, d Decision) ([]rules.Rule, bool, e
 	for _, s := range d.RemoveSets {
 		rmSet[s] = true
 	}
+	if rmSet[ProtectedSet] {
+		return nil, false, ErrProtected
+	}
 	now := m.now()
 	next := make([]rules.Rule, 0, len(old)+len(d.AddRules))
 	changed := len(d.AddRules) > 0
 	for _, r := range old {
+		if rmID[r.ID] && r.Set == ProtectedSet {
+			return nil, false, fmt.Errorf("rule %d: %w", r.ID, ErrProtected)
+		}
 		if rmID[r.ID] || rmSet[r.Set] || r.Expired(now) {
 			changed = true
 			continue
@@ -461,6 +475,9 @@ func (m *Monitor) check(r *rules.Rule) error {
 	}
 	if r.Ops == 0 {
 		return fmt.Errorf("monitor: rule on %+v: no ops", o)
+	}
+	if r.Set == ProtectedSet && (r.Verdict != rules.Deny || !r.Expires.IsZero()) {
+		return fmt.Errorf("monitor: rule on %+v: the protected set takes denials without expiry only: %w", o, ErrProtected)
 	}
 	if o.Path != nil {
 		if !filepath.IsAbs(o.Path.Path) {

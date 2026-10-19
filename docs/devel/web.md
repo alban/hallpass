@@ -139,22 +139,80 @@ Measures:
   default (`/proc/<pid>/cmdline` is readable by the same user); `--open`
   runs `xdg-open` anyway, for convenience. Stops other users and web
   pages.
-- **Blocked at the source, later**: with `connect` mediation (network
-  plan), the sandbox cannot connect to the web port at all. Strict mode
-  first: an LSM `socket_connect` deny for members, cheap and sound. Lite
-  mode needs a seccomp notification on `connect`, whose address the
-  sandbox can change after the check (TOCTOU), so it waits for the
-  TOCTOU work.
+- **Blocked at the source, with network mediation**: a session that
+  mediates the network (`--mediate=files,exec,network`) denies its
+  sandbox every connection to the web UI's ports and to the session
+  sockets, whatever the rules say (below). Without network mediation,
+  `connect` is not looked at (notifying every `connect` in lite mode was
+  rejected for its cost), so the hole below stays open.
 
-**Known hole in the first version**: the token and the cookie do not
+### Protected denials
+
+A few denials are in the `protected` rule set, which the monitor refuses
+to remove or to extend with anything but denials without expiry
+(`monitor.ErrProtected`, `PermissionDenied` on the session API). A deny
+wins over any allow, `--allow-net=all` and the listener-inside rule
+included, in the rule engine and in the BPF walk, so these denials hold
+even after "allow all networking":
+
+- with files mediated: writes under the socket directory
+  (`$XDG_RUNTIME_DIR/hallpass`, or `/tmp/hallpass-UID`): no fake or
+  removed session socket, no forged port file;
+- with the network mediated: `connect`/`sendto` to the unix sockets under
+  that directory (the sessions' answer sockets, which already reject
+  sandboxed peers, now unreachable), and to the TCP/UDP ports registered
+  by `hallpass web`, at any address.
+
+They are shown with their label (`hallpass sessions`, `hallpass web UI`)
+in the Ctrl-] menu and `hallpass policy`.
+
+**How a session learns the ports.** `hallpass web` runs apart from the
+sessions, and sessions start before or after it. It registers its ports
+in the socket directory, in `web-<pid>.port` (one port per line: its
+listening port, and with `--node` the loopback port-forward to the node
+agent, whose session API needs no pairing), written as a temporary file
+and renamed, and removes it when it exits (SIGINT/SIGTERM/SIGHUP
+included; a file whose process is gone is ignored and removed by the
+next registration). Each session that mediates the network:
+
+1. creates its socket (and with it the directory);
+2. watches the directory with inotify (`IN_MOVED_TO`, `IN_CLOSE_WRITE`);
+3. reads the files already there, and fails to start if it cannot deny
+   their ports;
+4. then starts the sandbox.
+
+`hallpass web` registers before it prints the pairing link, so a web UI
+started first is denied before the sandbox runs, and one started later is
+denied a few milliseconds after it registers, before anyone can pair a
+browser with it. Each session only adds denials; it keeps them until it
+exits. A file is trusted only if it is a regular file of this user (read
+with `O_NOFOLLOW`) and its pid is alive; the directory is 0700, and the
+sandbox cannot write to it.
+
+A push over the session API (web calling each session) was considered:
+it needs the file anyway for sessions started later, and `hallpass web`
+only discovers sessions when the page asks.
+
+Limits: in lite mode the address is read from the sandbox's memory, which
+it can change after the check (the TOCTOU gap of lite mode, see
+[design](../design.md)); strict mode checks the kernel's copy. A BPF prefix
+holds 8 entries: many web UIs at once can exceed it; a session then
+fails to start, or prints a warning for a later registration. In
+Kubernetes, the node agent's session API listens on its own pod's
+loopback, which no workload reaches, so no denial is needed there; a
+local `hallpass web --node` through a port-forward registers the
+forwarded port.
+
+**Known hole without network mediation**: the token and the cookie do not
 stop the sandbox. It cannot read the token (printed on the web process's
 terminal), but it can read the cookie from the browser profile (plaintext
 in Firefox's `cookies.sqlite`; Chrome encrypts it with the keyring), then
 connect to 127.0.0.1 and approve its own requests. This is weaker than
 the terminal answer socket, which rejects peers with a seccomp filter.
 It takes a deliberately malicious agent, not an accident, so `hallpass
-web` ships as experimental and says so in `--help` and its banner until
-the `connect` block lands.
+web` ships as experimental and says so in `--help` and its banner: the
+connection is only blocked when the network is mediated, which is not
+the default.
 
 A per-connection peer check (find the client socket with
 `NETLINK_SOCK_DIAG`, scan `/proc/*/fd` for its inode, reject if a holder
@@ -179,8 +237,10 @@ Not covered, as today: the sandbox asking a service outside it
 5. Later: a backlog of `Decided` events in the monitor, replayed after
    `Snapshot`, so the activity view starts with the session; remote
    access (phone) with real authentication.
-6. Later: deny `connect` from members to the web port (strict mode
-   first, lite mode after the TOCTOU work); drop "experimental".
+6. Done with network mediation: protected deny of `connect` to the web
+   UI's ports and the session sockets, lite and strict
+   ([Protected denials](#protected-denials)). Later: without network
+   mediation; drop "experimental".
 
 ## Resolved questions
 

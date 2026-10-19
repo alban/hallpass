@@ -106,6 +106,28 @@ func runSession(cfg sessionConfig) (int, error) {
 		return 0, fmt.Errorf("session socket: %w", err)
 	}
 	defer srv.Close()
+	// The socket directory exists now: the kernel's rules need it.
+	protected := protectedRules(cfg.Mediate, sessionapi.SocketDir(), nil)
+	if _, err := m.Apply(monitor.Decision{AddRules: protected, Client: "hallpass"}); err != nil {
+		return 0, err
+	}
+	if cfg.Mediate&seccomp.Network != 0 {
+		// The web UIs' ports, registered before the sandbox starts, and
+		// while it runs.
+		g := &portGuard{m: m, done: map[uint16]bool{}}
+		stop, err := sessionapi.WatchPorts(func(ports []uint16) {
+			if err := g.protect(ports); err != nil {
+				s.notice("hallpass: " + err.Error())
+			}
+		})
+		if err != nil {
+			return 0, err
+		}
+		defer stop()
+		if err := g.protect(sessionapi.ProtectedPorts()); err != nil {
+			return 0, err
+		}
+	}
 	if _, remote := cfg.Asker.(ui.Remote); remote {
 		fmt.Fprintf(os.Stderr, "hallpass: answer from another terminal with: hallpass answer %d\n", os.Getpid())
 	}
