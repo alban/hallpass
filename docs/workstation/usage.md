@@ -68,7 +68,7 @@ A program that belongs to a group of programs is offered with its group too:
  [o] allow once  [t] for 5m0s  [a] always  [g] group  [d] deny  [n] never  [Esc] dismiss
 ```
 
-<video src="../assets/demos/exec.mp4" poster="../assets/demos/exec.png" controls muted playsinline aria-label="a shell under hallpass --group=@build=make,cc: ls and grep run without a question, make is asked with its group offered and the group allowed, curl is asked and denied, a program built in the project is asked and allowed always, Ctrl-] shows the groups by name and count under Run"></video>
+<video src="../../assets/demos/exec.mp4" poster="../../assets/demos/exec.png" controls muted playsinline aria-label="a shell under hallpass --group=@build=make,cc: ls and grep run without a question, make is asked with its group offered and the group allowed, curl is asked and denied, a program built in the project is asked and allowed always, Ctrl-] shows the groups by name and count under Run"></video>
 
 *The implicit groups let the common tools run without a question. `make` is asked about with its group, `@build` (defined with `--group`), offered; `curl` and a program built in the project are asked about; "always" allows that program only.*
 
@@ -203,7 +203,7 @@ there, tell the user. "No such file or directory": no hallpass.
 Ask only for what the task needs, and say why in the reason.
 ````
 
-<video src="../assets/demos/advance-grant.mp4" poster="../assets/demos/advance-grant.png" controls muted playsinline aria-label="a script checks, then asks in advance to write ~/.cache/build for 30 minutes, with its reason marked unverified; after one grant, its writes there go through without prompts, and Ctrl-] shows the rule with its expiry"></video>
+<video src="../../assets/demos/advance-grant.mp4" poster="../../assets/demos/advance-grant.png" controls muted playsinline aria-label="a script checks, then asks in advance to write ~/.cache/build for 30 minutes, with its reason marked unverified; after one grant, its writes there go through without prompts, and Ctrl-] shows the rule with its expiry"></video>
 
 *One question before the task, none during it: the grant is a rule with an expiry.*
 

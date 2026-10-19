@@ -9,18 +9,26 @@ on:
       - demos/media/**
       - mkdocs.yml
       - .github/workflows/docs.yml
+      - .github/scripts/check-site-media.py
+  pull_request:
+    paths:
+      - docs/**
+      - "!docs/devel/**"
+      - demos/media/**
+      - mkdocs.yml
+      - .github/workflows/docs.yml
+      - .github/scripts/check-site-media.py
   workflow_dispatch:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
-  group: pages
-  cancel-in-progress: false
+  group: docs-${{ github.event_name == 'pull_request' && github.ref || 'pages' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # The same build validates pull requests and makes the pages of main.
   build:
     runs-on: ubuntu-latest
     steps:
@@ -30,13 +38,19 @@ jobs:
           python-version: "3.x"
       - run: pip install mkdocs-material==9.5.39
       - run: mkdocs build --strict
-      - uses: actions/upload-pages-artifact@v3
+      - run: python .github/scripts/check-site-media.py site
+      - if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v3
         with:
           path: site
 
   deploy:
+    if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

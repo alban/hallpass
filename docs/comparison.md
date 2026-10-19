@@ -1,15 +1,15 @@
 # Comparison with other tools
 
-Many tools restrict what a process can do on Linux. hallpass is built for one situation: an AI agent works in a project directory, and from time to time it needs to write somewhere else. Rather than either refusing (and breaking the task) or allowing everything up front, hallpass pauses the write and **asks you**: allow it once, for a few minutes or always, or deny it once or always.
+Many tools restrict what a process can do on Linux. hallpass is built for one situation: an AI agent works in a project directory, and from time to time it needs to write somewhere else or run an unexpected program. Rather than either refusing (and breaking the task) or allowing everything up front, hallpass pauses the write or the program and **asks you**: allow it once, for a few minutes or always, or deny it once or always.
 
-Most tools below are static: the policy is decided before the program runs, and an access outside it fails. Others only detect and alert. Only hallpass, OpenSnitch and Claude Code's sandbox prompt at run time; OpenSnitch and Claude Code prompt about network connections only, hallpass about file writes and, opt-in, connections.
+Most tools below are static: the policy is decided before the program runs, and an access outside it fails. Others only detect and alert. Only hallpass, OpenSnitch and Claude Code's sandbox prompt at run time; OpenSnitch and Claude Code prompt about network connections only, hallpass about file writes, programs run and, opt-in, connections.
 
 ## At a glance
 
 | Tool | Mediates | Asks at run time | Enforced by | Privileges | TOCTOU resistant | Workstation | Kubernetes |
 |---|---|---|---|---|---|---|---|
-| **hallpass lite** | file writes, connections (opt-in) | yes | seccomp user notification + a supervisor | none | no | yes | yes |
-| **hallpass strict** | file writes, connections (opt-in) | yes | BPF-LSM | root to load | yes | yes | yes |
+| **hallpass lite** | file writes, exec, connections (opt-in) | yes | seccomp user notification + a supervisor | none | no | yes | yes |
+| **hallpass strict** | file writes, exec, connections (opt-in) | yes | BPF-LSM | root to load | yes | yes | yes |
 | [OpenSnitch](https://github.com/evilsocket/opensnitch) | outbound network | yes | NFQUEUE + a root daemon | root | yes | yes | no |
 | [Tetragon](https://github.com/cilium/tetragon) | exec, files, network, syscalls | no (`TracingPolicy` CRDs) | eBPF (kprobes, BPF-LSM, ...) | root | [on LSM hooks](https://tetragon.io/docs/concepts/tracing-policy/hooks/) | as a host daemon | yes |
 | [KubeArmor](https://github.com/kubearmor/KubeArmor) | exec, files, network, capabilities | no (CRDs, audit mode) | AppArmor, SELinux or BPF-LSM | capabilities | yes | as a host daemon | yes |
