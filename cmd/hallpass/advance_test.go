@@ -125,7 +125,7 @@ func TestAdvanceNoAnswer(t *testing.T) {
 	advanceModes(t, func(t *testing.T, mode string) {
 		e := newEnv(t)
 		q := "request?op=write&path=" + e.home + "/x"
-		script := advanceScript + "adv req '" + q + "'\nadv bad 'request?op=read&path=/x'\n"
+		script := advanceScript + "adv req '" + q + "'\nadv bad 'request?op=read&path=/x'\nadv chk 'check?op=write&path=" + e.home + "/x'\n"
 		for _, tc := range []struct {
 			flags []string
 			want  string
@@ -133,8 +133,10 @@ func TestAdvanceNoAnswer(t *testing.T) {
 			{[]string{"--ask=deny"}, advanceWant("req", unix.EPERM)},
 			{[]string{"--ask=answer", "--timeout=1s"}, advanceWant("req", unix.ETIMEDOUT)},
 			{[]string{"--ask=allow"}, advanceWant("req", unix.EALREADY)},
-			// execve is notified whatever the categories mediated.
-			{[]string{"--ask=deny", "--mediate=exec"}, advanceWant("req", unix.EPERM)},
+			// execve is notified whatever the categories mediated, but
+			// without files nothing would enforce a grant: ENOSYS at once,
+			// not ETIMEDOUT after a prompt.
+			{[]string{"--ask=answer", "--timeout=1s", "--mediate=exec"}, advanceWant("req", unix.ENOSYS) + "\n" + advanceWant("bad", unix.EINVAL) + "\n" + advanceWant("chk", unix.ENOSYS)},
 		} {
 			c := e.cmd(script, append([]string{"--mode=" + mode}, tc.flags...)...)
 			out, err := c.CombinedOutput()

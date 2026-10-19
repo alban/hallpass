@@ -47,6 +47,7 @@ spec:
 - `mediate` (default `[files, exec]`): the syscall categories mediated.
   `network` (experimental) asks about connections and sends, like
   `hallpass --mediate` ([Network](../workstation/usage.md#network-experimental)).
+  Without `files`, a request made in advance fails at once with `ENOSYS`.
 - `allowNetwork` and `denyNetwork`: destinations in the `--allow-net`
   syntax; `all` is every destination, unix sockets included. They need
   `network` in `mediate`. Deny wins. Loopback and unix listeners

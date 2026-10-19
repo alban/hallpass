@@ -51,6 +51,10 @@ type Config struct {
 	// too, taken as they are: their symlinks are not resolved. False: the
 	// workload shares the monitor's view (the CLI).
 	ProcRoot bool
+	// Mediate is the syscall categories mediated (--mediate, a policy's
+	// mediate); 0: all of them. A request made in advance for another
+	// category fails with ENOSYS: nothing would enforce its grant.
+	Mediate seccomp.Category
 }
 
 var (
@@ -189,6 +193,7 @@ var pollPeriod = time.Second
 type Monitor struct {
 	kernel   Kernel
 	procRoot bool
+	mediate  seccomp.Category
 	table    []seccomp.Rule
 	now      func() time.Time
 
@@ -229,11 +234,15 @@ func New(cfg Config) (*Monitor, error) {
 	m := &Monitor{
 		kernel:   cfg.Kernel,
 		procRoot: cfg.ProcRoot,
+		mediate:  cfg.Mediate,
 		table:    seccomp.Rules(true),
 		now:      time.Now,
 		pending:  map[uint64]*request{},
 		byKey:    map[string]*request{},
 		restart:  map[string]time.Time{},
+	}
+	if m.mediate == 0 {
+		m.mediate = seccomp.AllCategories
 	}
 	m.idle = sync.NewCond(&m.mu)
 	return m, nil

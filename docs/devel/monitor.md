@@ -561,7 +561,9 @@ const (
   is never continued: execve is notified in every mode and category, and
   the monitor answers with an errno, so a shell prints it and no program
   runs. Without a monitor the path does not exist (`ENOENT`). The monitor
-  parses the query (`EINVAL`, `ENAMETOOLONG` past `PATH_MAX`), resolves
+  parses the query (`EINVAL`, `ENAMETOOLONG` past `PATH_MAX`), fails it
+  with `ENOSYS` when its category (files) is not in `Config.Mediate`,
+  since nothing would enforce a grant, resolves
   the path like a write's, and evaluates the rules: covered
   (`EEXIST`, an allow for the whole tree, with no deny or ask rule below
   it, lasting at least `for` minus min(`for`/10, 1m)), denied (`EPERM`),

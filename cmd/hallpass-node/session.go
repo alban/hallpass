@@ -75,7 +75,7 @@ func newSession(id string, pid int, md metadata, p *Policy, rs []rules.Rule, ks 
 		}
 		return nil, fmt.Errorf("listener metadata: %w", err)
 	}
-	cfg := monitor.Config{ProcRoot: true}
+	cfg := monitor.Config{ProcRoot: true, Mediate: cats}
 	if ks != nil {
 		cfg.Kernel = ks
 	}

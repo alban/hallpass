@@ -23,7 +23,13 @@ to the policy), `deny` and `never`; see
 than `127.0.0.1:7323`. A request made
 [in advance](../workstation/usage.md#asking-in-advance) by a program in the
 container takes `grant` or `deny`; `hallpass-node pending` shows its
-duration and its reason, the program's own words.
+duration and its reason, the program's own words. The program gets the
+answer as an errno, as on a workstation (see the
+[list](../workstation/usage.md#asking-in-advance), with the shells' exit
+codes): `EALREADY` granted, `EPERM` denied, `ETIMEDOUT` not
+answered within the policy's `askTimeout`, and `ENOSYS` when the policy's
+`mediate` leaves out `files`, without a prompt; a shell exits 126 for
+each of them.
 
 [`hallpass web`](../answers/web.md) does the same in a browser, through the same
 port-forward: the pending requests, the activity and the rules of every

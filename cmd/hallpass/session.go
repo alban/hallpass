@@ -90,7 +90,7 @@ func runSession(cfg sessionConfig) (int, error) {
 		}
 		kernel = ks
 	}
-	m, err := monitor.New(monitor.Config{Kernel: kernel})
+	m, err := monitor.New(monitor.Config{Kernel: kernel, Mediate: cfg.Mediate})
 	if err != nil {
 		return 0, err
 	}

@@ -127,6 +127,7 @@ hallpass never runs anything: the `execve` always fails, and its error number is
 | `ETIMEDOUT` | Connection timed out | nobody answered within `--timeout` |
 | `ENOMSG` | No message of desired type | (check) a request would ask you |
 | `EINVAL`, `ENAMETOOLONG` | Invalid argument, File name too long | malformed request |
+| `ENOSYS` | Function not implemented | files are not mediated (`--mediate` without `files`, or a Kubernetes policy's `mediate`): nothing would enforce a grant, so nobody is asked |
 | `ENOENT` | No such file or directory | no hallpass: the path does not exist |
 
 With `--ask=deny`, requests are denied (`EPERM`) without a card; with `--ask=allow`, they are granted. A request is covered (`EEXIST`) when the rules already allow the whole path for the duration asked, so asking again right after a grant does not prompt.

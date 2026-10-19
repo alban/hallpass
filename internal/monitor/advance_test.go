@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/alban/hallpass/internal/rules"
+	"github.com/alban/hallpass/internal/seccomp"
 	"golang.org/x/sys/unix"
 )
 
@@ -147,6 +148,21 @@ func TestAdvanceNotSettled(t *testing.T) {
 		t.Fatalf("closed %+v", c)
 	}
 	fx.f.expectNone(t)
+}
+
+// TestAdvanceNotMediated: without files mediated, nothing would enforce a
+// grant: requests and checks fail with ENOSYS, without asking.
+func TestAdvanceNotMediated(t *testing.T) {
+	fx := setupConfig(t, Config{Mediate: seccomp.Exec | seccomp.Network}, false)
+	for _, q := range []string{"request?op=write&path=" + fx.dir + "/**", "check?op=write&path=" + fx.dir + "/x"} {
+		fx.f.expect(t, fx.f.advance(q), int32(unix.ENOSYS))
+	}
+	fx.f.expect(t, fx.f.advance("request?op=read&path=/x"), int32(unix.EINVAL))
+	select {
+	case ev := <-fx.evs:
+		t.Fatalf("event %+v", ev)
+	default:
+	}
 }
 
 // TestAdvanceRestarted checks that an execve restarted after a signal joins

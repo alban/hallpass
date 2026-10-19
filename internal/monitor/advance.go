@@ -29,6 +29,8 @@ import (
 //   - ETIMEDOUT: denied because nobody answered in time
 //     (Decision.TimedOut)
 //   - EINVAL, ENAMETOOLONG: malformed or too long
+//   - ENOSYS: the category asked for (files) is not mediated
+//     (Config.Mediate): nothing would enforce a grant
 //   - ENOMSG: (check only) a request would be needed
 //
 // See docs/devel/monitor.md.
@@ -124,6 +126,10 @@ func (m *Monitor) advance(l *listener, n seccomp.Notif, sc seccomp.Rule, raw str
 	q, errno := parseAdvance(raw)
 	if errno != 0 {
 		reply(errno)
+		return nil
+	}
+	if q.op&rules.OpFiles != 0 && m.mediate&seccomp.Files == 0 {
+		reply(unix.ENOSYS)
 		return nil
 	}
 	if m.kernel != nil {
