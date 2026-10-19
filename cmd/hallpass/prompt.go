@@ -212,7 +212,7 @@ func (s *session) menu() {
 		}
 	case 'w':
 		// Once the menu is closed: pairing asks in this overlay too.
-		go s.openWeb()
+		go s.openWeb("")
 	}
 }
 

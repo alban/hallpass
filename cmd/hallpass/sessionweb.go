@@ -31,8 +31,9 @@ type sessionWeb struct {
 }
 
 // openWeb starts the session's web UI if needed, lets one browser pair, and
-// opens the page with xdg-open.
-func (s *session) openWeb() {
+// opens the page with xdg-open. token, from a notification click, lets the
+// browser's window come to the front ("" from the terminal).
+func (s *session) openWeb(token string) {
 	u, err := s.startWeb()
 	if err != nil {
 		go s.notice(fmt.Sprintf("hallpass: web UI: %v", err))
@@ -45,6 +46,11 @@ func (s *session) openWeb() {
 	}
 	msg := fmt.Sprintf("hallpass: web UI at %s: confirm its pairing code %s", u, where)
 	c := exec.Command("xdg-open", u)
+	if token != "" {
+		// Wayland, then X11: without it, GNOME opens the page in a
+		// browser window left behind the others.
+		c.Env = append(os.Environ(), "XDG_ACTIVATION_TOKEN="+token, "DESKTOP_STARTUP_ID="+token)
+	}
 	// Its own session: the browser it may start must neither get the
 	// program's terminal nor its hangup. Not waited for: reap reaps it.
 	c.SysProcAttr = &syscall.SysProcAttr{Setsid: true}

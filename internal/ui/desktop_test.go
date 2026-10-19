@@ -116,8 +116,8 @@ func recv[T any](t *testing.T, c <-chan T, what string) T {
 
 func TestDesktopBodyClick(t *testing.T) {
 	d, f := newFakeDesktop(t)
-	clicked := make(chan struct{}, 4)
-	d.OnDefault = func() { clicked <- struct{}{} }
+	clicked := make(chan string, 4)
+	d.OnDefault = func(token string) { clicked <- token }
 	answer := make(chan Answer, 1)
 	go func() {
 		answer <- d.Ask(context.Background(), Request{Exe: "/bin/sh", PID: 42, Path: "/home/u/.bashrc"})
@@ -127,8 +127,11 @@ func TestDesktopBodyClick(t *testing.T) {
 	if !slices.Contains(n.actions, "default") || n.hints["resident"].Value() != true {
 		t.Errorf("actions %v hints %v: want a default action, resident", n.actions, n.hints)
 	}
+	f.emit(t, "ActivationToken", n.id, "gnome-shell//1-2-host_TIME3")
 	f.emit(t, "ActionInvoked", n.id, "default")
-	recv(t, clicked, "OnDefault")
+	if tok := recv(t, clicked, "OnDefault"); tok != "gnome-shell//1-2-host_TIME3" {
+		t.Errorf("OnDefault token %q", tok)
+	}
 	// gnome-shell, behind GNOME's proxy owning the name, broadcasts the
 	// same signals itself: not a second click.
 	shell, err := dbus.ConnectSessionBus()

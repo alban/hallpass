@@ -35,8 +35,9 @@ type Desktop struct {
 
 	// OnDefault, when set before the first Ask, is called in its own
 	// goroutine when the user clicks the body of a request's notification
-	// (its "default" action). The request stays asked.
-	OnDefault func()
+	// (its "default" action), with the activation token the service sent
+	// for it, if any. The request stays asked.
+	OnDefault func(token string)
 
 	// The bus's signals, sent to each listener (see listen).
 	lmu       sync.Mutex
@@ -244,6 +245,8 @@ func (d *Desktop) Ask(ctx context.Context, r Request) Answer {
 	}()
 	var reopenUntil time.Time
 	var hidden <-chan struct{}
+	// The service sends it right before the action it is for.
+	var token string
 	for {
 		select {
 		case h := <-yield:
@@ -261,6 +264,10 @@ func (d *Desktop) Ask(ctx context.Context, r Request) Answer {
 			if !ok {
 				return AnswerDismissed
 			}
+			if t, ok := activationToken(sig, id); ok {
+				token = t
+				continue
+			}
 			key, ok := forNotification(sig, id)
 			switch {
 			case !ok:
@@ -268,7 +275,7 @@ func (d *Desktop) Ask(ctx context.Context, r Request) Answer {
 				// Closed by us.
 			case key == "default":
 				if onDefault != nil {
-					go onDefault()
+					go onDefault(token)
 					reopenUntil = time.Now().Add(reopenAfterClick)
 				}
 			case key != "":
@@ -333,6 +340,20 @@ func (d *Desktop) Confirm(ctx context.Context, summary, body, yes, no string) bo
 			return false
 		}
 	}
+}
+
+// activationToken interprets an ActivationToken signal about notification
+// id: the token, for the window the action opens to get the focus (Wayland's
+// XDG_ACTIVATION_TOKEN, X11's DESKTOP_STARTUP_ID).
+func activationToken(sig *dbus.Signal, id uint32) (string, bool) {
+	if sig.Name != notifIfc+".ActivationToken" || len(sig.Body) < 2 {
+		return "", false
+	}
+	if got, _ := sig.Body[0].(uint32); got != id {
+		return "", false
+	}
+	t, ok := sig.Body[1].(string)
+	return t, ok
 }
 
 // forNotification interprets an ActionInvoked or NotificationClosed signal
