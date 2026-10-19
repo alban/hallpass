@@ -2,7 +2,7 @@
 
 Status: implemented in lite and strict mode (`internal/rules`,
 `internal/launch`, `internal/monitor`, `internal/defaults`; hallpass is a
-client). Not yet: the BPF extensions for ops, subjects and Ask.
+client). Not yet: the BPF extensions for ops and subjects.
 
 ## Scope
 
@@ -258,7 +258,7 @@ type Verdict int
 const (
 	Allow Verdict = iota
 	Deny
-	Ask // needs the BPF cut-off, see Strict mode
+	Ask // in BPF, a cut-off: see Strict mode
 )
 
 // SubjectMatch selects the processes a rule applies to. The zero value
@@ -329,12 +329,27 @@ Allow allows, otherwise a `Request`.
 ### Strict mode
 
 In strict mode, every rule must be evaluable in BPF. Today BPF has path
-trie nodes with `allow_tree`, `allow_exact` (with expiry), `deny_tree` and
-`deny_exact`; proc keys {name, comm} with allow/deny and expiry; and
-per-thread one-shot grants. It has no ops, no subjects and no Ask (which
-needs a cut-off bit: "no allow inherited from above"). The monitor refuses
-rules it cannot enforce (`ErrUnsupported`), so the UX cannot think a rule
-holds when the kernel ignores it.
+trie nodes with `allow_tree`, `allow_exact`, `ask_tree`, `ask_exact` (with
+expiry), `deny_tree` and `deny_exact`; proc keys {name, comm} with
+allow/ask/deny and expiry; and per-thread one-shot grants. It has no ops
+and no subjects. The monitor refuses rules it cannot enforce
+(`ErrUnsupported`), so the UX cannot think a rule holds when the kernel
+ignores it.
+
+An Ask rule is a cut-off in BPF: no allow inherited from above. The kernel
+follows `rules.Eval`: any Deny denies; otherwise the deepest Allow or Ask
+decides, Ask on a tie. An asked access is denied in the kernel unless a
+deeper Allow or the thread's "once" grant allows it: it is asked at seccomp
+time like any unmatched access, and the answer becomes the grant. The path
+walk clears the inherited allow at a node with a live ask, and an exact
+allow or ask on the target applies after the tree rules of its node. Two
+rules on one node from different host paths (a mount exposing a sub-tree)
+are ordered by the depth of their host paths; their expiries are then
+ignored in that ordering. Network entries carry the depth of their rule
+(`rules.ObjectMatch.Depth`), and an inet or abstract lookup allows only if
+the deepest live allow is deeper than the deepest live ask. An ask on
+every unix socket stops the "any unix socket" allow. `OwnListener` has no
+Ask in BPF (`ErrUnsupported`).
 
 Network rules go to separate maps (`internal/lsm/net.go`): LPM tries for
 IPv4 and IPv6 prefixes and for abstract unix names, each entry holding up

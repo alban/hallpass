@@ -32,6 +32,7 @@ spec:
   mediate: [files, exec, network]  # default: files, exec
   allowNetwork: ["tcp:*:443", "unix:@my-service"]
   denyNetwork: ["169.254.169.254"]
+  askNetwork: ["tcp:10.0.0.1:22"]
 ```
 
 - `allow` and `deny` are paths in the container: `/workspace/**` and
@@ -52,6 +53,10 @@ spec:
   syntax; `all` is every destination, unix sockets included. They need
   `network` in `mediate`. Deny wins. Loopback and unix listeners
   started in the container are allowed without asking.
+- `askNetwork`: destinations asked about even inside what `allowNetwork`
+  allows (`--ask-net`). The most specific rule decides, an ask wins over
+  an allow as specific, and a deny wins over both. Needs `network` in
+  `mediate`.
 
 Policy changes apply to containers started afterwards: a running
 session keeps the policy it started with.

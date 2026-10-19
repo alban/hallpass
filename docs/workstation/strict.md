@@ -6,6 +6,8 @@ Strict mode enforces your answers in the kernel with a BPF-LSM program, on the r
 
 "Allow once" in strict mode allows exactly the paused syscall: the kernel grants it to that thread only, and drops the grant when the syscall returns. Another thread, or a retry of the same write later, is asked again. Dropping the grant needs a `sys_exit` tracepoint, which slows down every syscall on the host a little (about 200 ns) while strict mode runs.
 
+Rules that ask about something inside what is allowed (`--ask-net`, or an ask rule added from a client) work as in lite mode: the kernel denies the asked file or destination unless a more specific allow rule or your "once" answer allows it, so the allow around it does not leak through.
+
 ## Requirements
 
 BPF-LSM active, i.e. `bpf` listed in `/sys/kernel/security/lsm`. Fedora enables it by default; Ubuntu builds it but does not activate it (add `bpf` to the `lsm=` kernel parameter). The programs also need the `bpf_path_d_path` kfunc (upstream 6.12; they also use `bpf_preempt_disable` from 6.10); the verifier rejects them otherwise. CI tests 6.12, 6.18 and 7.2.

@@ -18,6 +18,7 @@ hallpass [flags] [--] [command [args...]]     # default command: $SHELL
       --mediate LIST       mediated syscall categories: files, exec, network (default files,exec; network is experimental)
       --allow-net DEST     network destination allowed without asking (repeatable; needs network in --mediate)
       --deny-net DEST      network destination always denied (repeatable, wins over --allow-net)
+      --ask-net DEST       network destination asked about, even inside what --allow-net allows (repeatable)
       --escalate TOOL      strict mode as a regular user: how to run the loader as root:
                            auto | ask | pkexec | sudo | run0 | doas | su | manual | none
                            (default: saved choice, else ask on a terminal, else auto)
@@ -59,7 +60,7 @@ With `--mediate=files,exec,network`, hallpass also asks before a sandboxed proce
 
 Destinations are shown as addresses, not names: `1.2.3.4:443` with the protocol (`tcp`, `udp`) below, `[2001:db8::1]:53`, `unix /run/user/1000/bus`, `unix @name` (abstract). Answers cover that destination only, with any protocol. One kind is allowed without asking: a loopback or unix listener started inside the sandbox, such as a test server the agent runs; with `--no-implicit` it is asked, with the note "listener started inside the sandbox".
 
-`--allow-net` and `--deny-net` take:
+`--allow-net`, `--deny-net` and `--ask-net` take:
 
 | Syntax | Covers |
 |---|---|
@@ -69,6 +70,8 @@ Destinations are shown as addresses, not names: `1.2.3.4:443` with the protocol 
 | `unix:@name`, `unix:@prefix*` | an abstract name, or every one starting with `prefix` |
 
 For example, `hallpass --mediate=files,exec,network --allow-net=tcp:*:443 --deny-net=169.254.169.254 -- copilot` lets the agent reach HTTPS servers, never the cloud metadata service, and asks about the rest.
+
+`--ask-net` carves an exception out of what `--allow-net` allows: with `--allow-net=10.0.0.0/8 --ask-net=tcp:10.0.0.1:22`, SSH to `10.0.0.1` is asked about and the rest of the subnet is not. The most specific rule decides, an ask wins over an allow as specific, and `--deny-net` wins over both. This works in both modes: in strict mode, the kernel denies the asked destination unless you answer "once" (or a more specific `--allow-net` allows it).
 
 Some destinations are always denied, even with `--allow-net=all`, because they could answer for the sandbox: the session sockets (in `$XDG_RUNTIME_DIR/hallpass/`) and the ports of the running [`hallpass web`](../answers/web.md) UIs, including one started after the session. The Ctrl-] menu and `hallpass policy` list them as "(hallpass sessions)" and "(hallpass web UI)"; they cannot be removed. Writes to `$XDG_RUNTIME_DIR/hallpass/` are always denied too, with or without network mediation.
 
