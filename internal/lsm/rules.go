@@ -13,22 +13,26 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Rule allows or denies a host path: the path and everything below it (Tree)
-// or that exact path only. With Net, it is about connections and datagrams
-// to the unix sockets bound there, not about writing files.
+// Rule allows, denies or asks about a host path: the path and everything
+// below it (Tree) or that exact path only. With Net, it is about
+// connections and datagrams to the unix sockets bound there, not about
+// writing files. An ask rule cuts off the allows of the paths above: what
+// it matches is denied, unless a deeper allow rule or a GrantOnce allows
+// it. Deny wins over both.
 type Rule struct {
 	Path    string // absolute and clean
 	Tree    bool
 	Deny    bool
+	Ask     bool
 	Net     bool
 	Expires time.Time // zero: never (deny rules never expire)
 }
 
-// ProcRule allows or denies writes to file Name in /proc/<pid>/ of processes
-// named Comm outside the sandbox.
+// ProcRule allows, denies or asks about writes to file Name in /proc/<pid>/
+// of processes named Comm outside the sandbox. An ask wins over an allow.
 type ProcRule struct {
 	Name, Comm string
-	Deny       bool
+	Deny, Ask  bool
 	Expires    time.Time
 }
 
@@ -91,6 +95,7 @@ func (s *Session) sync() ([]mount, error) {
 // the grants. s.l.mu must be held.
 func (s *Session) ruleNodes(mounts []mount, expiry func(time.Time) uint64) map[nodeKey]hallpassRuleVal {
 	nodes := map[nodeKey]hallpassRuleVal{}
+	levels := map[nodeKey]*nodeLevels{}
 	for _, r := range s.lastRules {
 		exp := expiry(r.Expires)
 		if exp == 0 {
@@ -98,11 +103,19 @@ func (s *Session) ruleNodes(mounts []mount, expiry func(time.Time) uint64) map[n
 		}
 		for _, lc := range locate(mounts, r.Path, r.Tree, s.mountID(r.Path)) {
 			if k, ok := s.l.node(nodes, lc); ok {
-				v := nodes[k]
-				r.addTo(&v, exp)
-				nodes[k] = v
+				lv := levels[k]
+				if lv == nil {
+					lv = newNodeLevels()
+					levels[k] = lv
+				}
+				r.addTo(lv, exp)
 			}
 		}
+	}
+	for k, lv := range levels {
+		v := nodes[k]
+		lv.fill(&v)
+		nodes[k] = v
 	}
 	// The grants' nodes: they allow nothing by themselves.
 	for _, g := range s.once {
@@ -115,23 +128,88 @@ func (s *Session) ruleNodes(mounts []mount, expiry func(time.Time) uint64) map[n
 	return nodes
 }
 
-// addTo sets the bits of r in v, the value of its node: a deny, or an
-// allow until exp.
-func (r Rule) addTo(v *hallpassRuleVal, exp uint64) {
-	allow, deny := &v.AllowExact, &v.DenyExact
+// level is the rules of one node for its tree, or for itself only (exact),
+// for files or for unix sockets: the expiries of the allows and the asks,
+// and the depth (length of the host path) of the deepest of each, -1 for
+// none.
+type level struct {
+	allow, ask   uint64
+	allowD, askD int
+	deny         bool
+}
+
+// nodeLevels are the levels of a node, indexed by levelOf.
+type nodeLevels [4]level
+
+func newNodeLevels() *nodeLevels {
+	var lv nodeLevels
+	for i := range lv {
+		lv[i].allowD, lv[i].askD = -1, -1
+	}
+	return &lv
+}
+
+func (r Rule) levelOf() int {
+	i := 0
+	if r.Net {
+		i = 2
+	}
+	if !r.Tree {
+		i++
+	}
+	return i
+}
+
+// addTo adds r, allowing or asking until exp, to the levels of its node.
+func (r Rule) addTo(lv *nodeLevels, exp uint64) {
+	l := &lv[r.levelOf()]
+	d := len(r.Path)
 	switch {
-	case r.Net && r.Tree:
-		allow, deny = &v.NetAllowTree, &v.NetDenyTree
-	case r.Net:
-		allow, deny = &v.NetAllowExact, &v.NetDenyExact
-	case r.Tree:
-		allow, deny = &v.AllowTree, &v.DenyTree
+	case r.Deny:
+		l.deny = true
+	case r.Ask:
+		l.ask, l.askD = max(l.ask, exp), max(l.askD, d)
+	default:
+		l.allow, l.allowD = max(l.allow, exp), max(l.allowD, d)
 	}
-	if r.Deny {
-		*deny = 1
-	} else {
-		*allow = max(*allow, exp)
+}
+
+// fill sets the rules of lv in v. The kernel applies, at each node, the
+// tree allow, the tree ask, then for the target the exact allow and the
+// exact ask: an ask wins over an allow of the same node. Rules of
+// different depths only meet at one node through different mounts; then,
+// as in rules.Eval, the deepest decides (an ask on a tie), and the rules
+// it overrides are dropped. Their expiry is not taken into account.
+func (lv *nodeLevels) fill(v *hallpassRuleVal) {
+	tree, exact := lv[0], lv[1]
+	resolve(&tree, &exact)
+	v.AllowTree, v.AskTree, v.AllowExact, v.AskExact = tree.allow, tree.ask, exact.allow, exact.ask
+	v.DenyTree, v.DenyExact = b2u8(tree.deny), b2u8(exact.deny)
+	tree, exact = lv[2], lv[3]
+	resolve(&tree, &exact)
+	v.NetAllowTree, v.NetAskTree, v.NetAllowExact, v.NetAskExact = tree.allow, tree.ask, exact.allow, exact.ask
+	v.NetDenyTree, v.NetDenyExact = b2u8(tree.deny), b2u8(exact.deny)
+}
+
+// resolve drops the rules of a node that a deeper one of the same node
+// overrides, given the kernel's order (see fill).
+func resolve(tree, exact *level) {
+	if tree.askD < tree.allowD {
+		tree.ask = 0
 	}
+	if exact.askD < max(tree.allowD, exact.allowD) {
+		exact.ask = 0
+	}
+	if exact.allowD <= max(tree.askD, exact.askD) {
+		exact.allow = 0
+	}
+}
+
+func b2u8(b bool) uint8 {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // procRules returns the entries of lastProcs.
@@ -144,9 +222,12 @@ func (s *Session) procRules(expiry func(time.Time) uint64) map[hallpassProcKey]h
 		}
 		k := s.procKey(r.Name, r.Comm)
 		v := procs[k]
-		if r.Deny {
+		switch {
+		case r.Deny:
 			v.Deny = 1
-		} else {
+		case r.Ask:
+			v.Ask = max(v.Ask, exp)
+		default:
 			v.Allow = max(v.Allow, exp)
 		}
 		procs[k] = v

@@ -58,6 +58,13 @@
  * One rule node per path component: {parent cookie, name}. The root of a
  * filesystem is ROOT_COOKIE | s_dev; its own rules live under the empty name.
  * Expiries are bpf_ktime_get_ns() deadlines, FOREVER, or 0 (none).
+ *
+ * An ask rule is a cut-off: no allow inherited from above the node. The
+ * access is then denied unless an allow below it, or the thread's grant
+ * (the answer to the prompt), allows it. At one node, the ask wins over
+ * the allow (the supervisor drops an ask shallower than the allow, which
+ * only happens when rules reach the node through different mounts), and
+ * the exact rules come after the tree ones.
  */
 struct rule_key {
 	__u64 parent;
@@ -73,6 +80,11 @@ struct rule_val {
 	/* The same, for connections and sends to unix sockets bound there. */
 	__u64 net_allow_tree;
 	__u64 net_allow_exact;
+	/* Ask rules: the expiry of the cut-off, as for allows. */
+	__u64 ask_tree;
+	__u64 ask_exact;
+	__u64 net_ask_tree;
+	__u64 net_ask_exact;
 	__u8 deny_tree;
 	__u8 deny_exact;
 	__u8 net_deny_tree;
@@ -93,6 +105,7 @@ struct proc_key {
 
 struct proc_val {
 	__u64 allow; /* expiry, as in rule_val */
+	__u64 ask;   /* an ask rule on the same key wins over the allow */
 	__u8 deny;
 	__u8 pad[7];
 };
@@ -437,30 +450,53 @@ static __always_inline bool granted(struct hp_grant *g, __u64 cookie)
 
 #define WALK_ALLOW 1
 #define WALK_DENY 2
+/* An ask rule applies: allows from above it, or shallower, do not. */
+#define WALK_ASK 4
 
-/* The WALK_* bits of a node's rules; exact: the node is the target. */
-static __always_inline __u32 node_bits(struct rule_val *v, bool exact, bool net, __u64 now)
+/* An ask rule cuts off the allows found so far. */
+static __always_inline __u32 walk_ask(__u32 b)
 {
-	__u32 b = 0;
+	return (b & ~WALK_ALLOW) | WALK_ASK;
+}
+
+/*
+ * b updated with a node's rules, top-down; exact: the node is the target.
+ * Tree rules before exact ones, and an ask after the allow of its level.
+ */
+static __always_inline __u32 node_bits(struct rule_val *v, bool exact, bool net, __u64 now,
+				       __u32 b)
+{
+	__u64 allow_tree = v->allow_tree, allow_exact = v->allow_exact;
+	__u64 ask_tree = v->ask_tree, ask_exact = v->ask_exact;
+	bool deny = v->deny_tree || (exact && v->deny_exact);
 
 	if (net) {
-		if (v->net_deny_tree || (exact && v->net_deny_exact))
-			b |= WALK_DENY;
-		if (live(v->net_allow_tree, now) || (exact && live(v->net_allow_exact, now)))
+		allow_tree = v->net_allow_tree;
+		allow_exact = v->net_allow_exact;
+		ask_tree = v->net_ask_tree;
+		ask_exact = v->net_ask_exact;
+		deny = v->net_deny_tree || (exact && v->net_deny_exact);
+	}
+	if (deny)
+		b |= WALK_DENY;
+	if (live(allow_tree, now))
+		b |= WALK_ALLOW;
+	if (live(ask_tree, now))
+		b = walk_ask(b);
+	if (exact) {
+		if (live(allow_exact, now))
 			b |= WALK_ALLOW;
-	} else {
-		if (v->deny_tree || (exact && v->deny_exact))
-			b |= WALK_DENY;
-		if (live(v->allow_tree, now) || (exact && live(v->allow_exact, now)))
-			b |= WALK_ALLOW;
+		if (live(ask_exact, now))
+			b = walk_ask(b);
 	}
 	return b;
 }
 
 /*
- * The rules of target's path: WALK_ALLOW and WALK_DENY bits, or -EACCES
- * when the path cannot be named. net: the rules for connections and sends
- * to a unix socket bound there. Preemption must be disabled.
+ * The rules of target's path: WALK_* bits, or -EACCES when the path cannot
+ * be named. It is allowed with WALK_ALLOW and without WALK_DENY. net: the
+ * rules for connections and sends to a unix socket bound there.
+ * Preemption must be disabled.
  */
 static __always_inline int walk(struct hp_scratch *r, struct dentry *target,
 				 struct hp_grant *g, __u32 session, bool net)
@@ -510,7 +546,7 @@ static __always_inline int walk(struct hp_scratch *r, struct dentry *target,
 	__builtin_memset(r->key.name, 0, NAME_LEN);
 	v = bpf_map_lookup_elem(&rules, &r->key);
 	if (v)
-		r->bits |= node_bits(v, n == 0, net, now);
+		r->bits = node_bits(v, n == 0, net, now, r->bits);
 
 	for (__u32 k = 0; k < MAX_DEPTH; k++) {
 		const unsigned char *name;
@@ -530,7 +566,7 @@ static __always_inline int walk(struct hp_scratch *r, struct dentry *target,
 		v = bpf_map_lookup_elem(&rules, &r->key);
 		if (!v)
 			break;
-		r->bits |= node_bits(v, j == 0, net, now);
+		r->bits = node_bits(v, j == 0, net, now, r->bits);
 		if (j == 0)
 			r->leaf = v->cookie;
 		cookie = v->cookie;
@@ -538,7 +574,7 @@ static __always_inline int walk(struct hp_scratch *r, struct dentry *target,
 	if (granted(g, r->leaf))
 		r->bits |= WALK_ALLOW;
 
-	return r->bits & (WALK_ALLOW | WALK_DENY);
+	return r->bits & (WALK_ALLOW | WALK_DENY | WALK_ASK);
 }
 
 /* Returns 0 to allow or -EACCES. */
@@ -554,7 +590,7 @@ static __always_inline int check_dentry(struct dentry *target, __u32 session)
 	if (r)
 		ret = walk(r, target, g, session, false);
 	bpf_preempt_enable();
-	if (ret != WALK_ALLOW)
+	if (ret < 0 || (ret & (WALK_ALLOW | WALK_DENY)) != WALK_ALLOW)
 		return -EACCES;
 	return 0;
 }
@@ -612,7 +648,7 @@ static __always_inline int check_proc(struct dentry *dentry, struct inode *inode
 	v = bpf_map_lookup_elem(&proc, &key);
 	if (v && v->deny)
 		return -EACCES;
-	if (v && live(v->allow, bpf_ktime_get_ns()))
+	if (v && live(v->allow, bpf_ktime_get_ns()) && !live(v->ask, bpf_ktime_get_ns()))
 		return 0;
 	if (proc_granted(current_grant(), &key))
 		return 0;

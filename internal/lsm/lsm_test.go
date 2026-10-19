@@ -300,6 +300,91 @@ func TestEnforce(t *testing.T) {
 	time.Sleep(100 * time.Millisecond) // let the events be logged
 }
 
+// TestEnforceAsk checks ask rules: they cut off the allows from above,
+// a deeper allow re-allows, and a deny still wins.
+func TestEnforceAsk(t *testing.T) {
+	needRoot(t)
+	if err := Active(); err != nil {
+		skip(t, err)
+	}
+	a := t.TempDir()
+	for _, d := range []string{"secret/pub/no", "tie", "d", "old"} {
+		if err := os.MkdirAll(filepath.Join(a, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sleeper, tailer := exec.Command("sleep", "60"), exec.Command("tail", "-f", "/dev/null")
+	for _, c := range []*exec.Cmd{sleeper, tailer} {
+		if err := c.Start(); err != nil {
+			t.Fatal(err)
+		}
+		defer c.Process.Kill()
+	}
+	l, err := Load(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	s := newSession(t, l)
+	if err := s.Sync([]Rule{
+		devNull,
+		{Path: a, Tree: true},
+		{Path: a + "/env", Ask: true},
+		{Path: a + "/secret", Tree: true, Ask: true},
+		{Path: a + "/secret/pub", Tree: true},
+		{Path: a + "/secret/known"},
+		{Path: a + "/secret/pub/no", Tree: true, Deny: true},
+		{Path: a + "/tie", Tree: true, Ask: true},
+		{Path: a + "/tie", Tree: true},
+		{Path: a + "/d", Ask: true},
+		{Path: a + "/old", Tree: true, Ask: true, Expires: time.Now().Add(-time.Second)},
+	}, []ProcRule{
+		{Name: "oom_score_adj", Comm: "sleep"},
+		{Name: "oom_score_adj", Comm: "sleep", Ask: true},
+		{Name: "oom_score_adj", Comm: "tail"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	go s.Events(func(e Event) { t.Logf("event: %+v", e) })
+
+	cases := []struct {
+		cmd string
+		ok  bool
+	}{
+		{"echo > A/f", true},
+		{"echo > A/env", false},
+		{"echo > A/envx", true},
+		{"echo > A/secret/f", false},
+		{"mkdir A/secret/dir", false},
+		{"echo > A/secret/pub/f", true},
+		{"echo > A/secret/known", true},
+		{"echo > A/secret/known2", false},
+		{"echo > A/secret/pub/no/f", false},
+		{"echo > A/tie/f", false},
+		{"rmdir A/d", false},
+		{"echo > A/d/f", true},
+		{"echo > A/old/f", true},
+		{"mv A/f A/secret/f", false},
+		{fmt.Sprintf("echo 0 > /proc/%d/oom_score_adj", sleeper.Process.Pid), false},
+		{fmt.Sprintf("echo 0 > /proc/%d/oom_score_adj", tailer.Process.Pid), true},
+	}
+	var script strings.Builder
+	script.WriteString(try)
+	var want []string
+	for _, c := range cases {
+		fmt.Fprintf(&script, "try %q\n", strings.ReplaceAll(c.cmd, "A/", a+"/"))
+		want = append(want, map[bool]string{true: "ok", false: "fail"}[c.ok])
+	}
+	_, run := member(t, s, script.String())
+	got := strings.Fields(run())
+	for i, c := range cases {
+		if i >= len(got) || got[i] != want[i] {
+			t.Errorf("%s: got %v, want %s", c.cmd, got, want[i])
+		}
+	}
+	time.Sleep(100 * time.Millisecond) // let the events be logged
+}
+
 // member starts sh -c script as a member of s. It runs once go is closed,
 // and its output is returned by the func returned.
 func member(t *testing.T, s *Session, script string) (pid int, run func() string) {

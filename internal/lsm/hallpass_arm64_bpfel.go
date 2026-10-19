@@ -131,6 +131,7 @@ type hallpassProcKey struct {
 type hallpassProcVal struct {
 	_     structs.HostLayout
 	Allow uint64
+	Ask   uint64
 	Deny  uint8
 	Pad   [7]uint8
 }
@@ -150,6 +151,10 @@ type hallpassRuleVal struct {
 	AllowExact    uint64
 	NetAllowTree  uint64
 	NetAllowExact uint64
+	AskTree       uint64
+	AskExact      uint64
+	NetAskTree    uint64
+	NetAskExact   uint64
 	DenyTree      uint8
 	DenyExact     uint8
 	NetDenyTree   uint8
