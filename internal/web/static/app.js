@@ -235,6 +235,34 @@ function renderSessions() {
   }
 }
 
+// grantForText formats a protojson Duration ("600s") like the terminal:
+// "for 10m", or "for the rest of the session" when unset.
+function grantForText(d) {
+  const s = d ? Math.round(parseFloat(d)) : 0;
+  if (!s) return "for the rest of the session";
+  const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = s % 60;
+  return "for " + (h ? h + "h" : "") + (m ? m + "m" : "") + (sec ? sec + "s" : "");
+}
+
+// advanceCard shows a request the program made in advance. Its reason is
+// the program's own text: shown quoted, as its claim.
+function advanceCard(pid, p, answer, err) {
+  const forText = grantForText(p.grantFor);
+  const buttons = el("div", { class: "buttons" },
+    el("button", { class: "allow", onclick: answer("grant") }, "Grant " + forText),
+    el("button", { class: "deny", onclick: answer("deny") }, "Deny"));
+  const origin = [(p.cmdline || []).join(" "), ...(p.parents || [])].filter(x => x).join(" ← ");
+  return el("div", { class: "card" },
+    el("div", {}, baseName(p.exe) + " (pid " + (p.pid || 0) + ") asks in advance to " + (p.op || "write") + ":"),
+    el("div", { class: "path" }, p.path || ""),
+    el("div", {}, forText),
+    p.warn ? el("div", { class: "warn" }, p.warn) : null,
+    p.reason ? el("div", { class: "reason" }, "reason given by the program (unverified): ", el("q", {}, p.reason)) : null,
+    origin ? el("div", { class: "meta" }, "by: " + origin) : null,
+    el("div", { class: "meta" }, "session " + sessionLabel(pid) + " · request in advance"),
+    buttons, err);
+}
+
 function pendingCard(pid, r) {
   const p = r.prompt || {};
   const err = el("div", { class: "error" });
@@ -247,6 +275,7 @@ function pendingCard(pid, r) {
       ev.target.closest(".buttons").querySelectorAll("button").forEach(b => b.disabled = false);
     }
   };
+  if (p.advance) return advanceCard(pid, p, answer, err);
   const buttons = el("div", { class: "buttons" },
     el("button", { class: "allow", onclick: answer("once") }, "Allow once"));
   if (p.scope) {

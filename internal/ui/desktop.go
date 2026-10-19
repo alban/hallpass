@@ -114,13 +114,21 @@ func (d *Desktop) Ask(ctx context.Context, r Request) Answer {
 	}
 	// GNOME Shell shows at most three buttons; "always" and "never" need
 	// the terminal or `hallpass answer`.
-	actions := []string{"once", "Allow once"}
-	if r.Scope != "" {
+	var actions []string
+	switch {
+	case r.Advance:
+		body += "\n" + html.EscapeString(r.AdvanceFor())
+		if s := r.AdvanceReason(); s != "" {
+			body += "\n<i>" + html.EscapeString(ReasonLabel) + ":</i> " + html.EscapeString(s)
+		}
+		actions = []string{"grant", "Grant", "deny", "Deny"}
+	case r.Scope != "":
+		actions = []string{"once", "Allow once"}
 		body += fmt.Sprintf("\n\nAllow for %v: %s", TempGrant, html.EscapeString(sanitize(r.Scope)))
 		actions = append(actions, "temp", fmt.Sprintf("Allow %v", TempGrant))
 		actions = append(actions, "deny", "Deny")
-	} else {
-		actions = append(actions, "deny", "Deny", "never", "Never")
+	default:
+		actions = []string{"once", "Allow once", "deny", "Deny", "never", "Never"}
 	}
 	if r.Waiting > 0 {
 		body += fmt.Sprintf("\n(%d more waiting)", r.Waiting)
@@ -157,7 +165,7 @@ func (d *Desktop) Ask(ctx context.Context, r Request) Answer {
 			}
 		case <-deadline:
 			d.conn.Object(notifDest, notifPath).Call(notifIfc+".CloseNotification", 0, id)
-			return AnswerDismissed
+			return AnswerTimeout
 		case <-ctx.Done():
 			d.conn.Object(notifDest, notifPath).Call(notifIfc+".CloseNotification", 0, id)
 			return AnswerDismissed

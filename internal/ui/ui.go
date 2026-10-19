@@ -35,6 +35,12 @@ const (
 	// AnswerAllowAlways allows everything covered by Request.Scope for the
 	// rest of the session.
 	AnswerAllowAlways
+	// AnswerGrant grants a request made in advance (Request.Advance): Path
+	// for Request.For.
+	AnswerGrant
+	// AnswerTimeout is AnswerDismissed because nobody answered in time; a
+	// request made in advance learns why it was denied.
+	AnswerTimeout
 )
 
 // TempGrant is the duration of AnswerAllowTemp.
@@ -52,6 +58,10 @@ func (a Answer) String() string {
 		return "temp"
 	case AnswerAllowAlways:
 		return "always"
+	case AnswerGrant:
+		return "grant"
+	case AnswerTimeout:
+		return "timeout"
 	default:
 		return "dismiss"
 	}
@@ -71,6 +81,10 @@ func ParseAnswer(s string) Answer {
 		return AnswerAllowTemp
 	case "always", "folder":
 		return AnswerAllowAlways
+	case "grant":
+		return AnswerGrant
+	case "timeout":
+		return AnswerTimeout
 	}
 	return AnswerDismissed
 }
@@ -102,7 +116,50 @@ type Request struct {
 	// process. Both come from the process itself: display only.
 	Cmdline []string
 	Parents []string
+	// Advance is set for a request the program made in advance, before
+	// accessing Path: the answers are AnswerGrant or a denial.
+	Advance bool
+	// For is how long an advance request asks for; 0: the rest of the
+	// session.
+	For time.Duration
+	// Reason is the advance request's reason, written by the program:
+	// display only, as the program's claim.
+	Reason string
 }
+
+// maxReason bounds AdvanceReason's output.
+const maxReason = 300
+
+// AdvanceFor formats For, e.g. "for 10m" or "for the rest of the session".
+func (r Request) AdvanceFor() string {
+	if r.For == 0 {
+		return "for the rest of the session"
+	}
+	s := r.For.String()
+	if t, ok := strings.CutSuffix(s, "m0s"); ok {
+		s = t + "m"
+	}
+	if t, ok := strings.CutSuffix(s, "h0m"); ok {
+		s = t + "h"
+	}
+	return "for " + s
+}
+
+// AdvanceReason formats Reason for display, quoted and without control
+// characters, or "" if there is none.
+func (r Request) AdvanceReason() string {
+	if r.Reason == "" {
+		return ""
+	}
+	s := sanitize(r.Reason)
+	if len(s) > maxReason {
+		s = strings.ToValidUTF8(s[:maxReason], "") + "…"
+	}
+	return `"` + s + `"`
+}
+
+// ReasonLabel introduces AdvanceReason in prompts.
+const ReasonLabel = "reason given by the program (unverified)"
 
 // maxCommand bounds Command's output, so a prompt line stays readable.
 const maxCommand = 100
@@ -170,9 +227,37 @@ func shellQuote(s string) string {
 }
 
 // Valid reports whether a is a meaningful answer to r: the scoped grants
-// need a scope.
+// need a scope, a request made in advance is granted or denied, and only
+// it is granted.
 func (r Request) Valid(a Answer) bool {
+	if r.Advance {
+		return a == AnswerGrant || a == AnswerDenyOnce || a == AnswerDismissed || a == AnswerTimeout
+	}
+	if a == AnswerGrant {
+		return false
+	}
 	return r.Scope != "" || (a != AnswerAllowTemp && a != AnswerAllowAlways)
+}
+
+// Effective is the answer a counts as for r: a if valid, else "deny" for a
+// request made in advance and "allow once" for the others.
+func (r Request) Effective(a Answer) Answer {
+	switch {
+	case r.Valid(a):
+		return a
+	case r.Advance:
+		return AnswerDenyOnce
+	}
+	return AnswerAllowOnce
+}
+
+// Allows reports whether a allows the access asked about.
+func (a Answer) Allows() bool {
+	switch a {
+	case AnswerAllowOnce, AnswerAllowTemp, AnswerAllowAlways, AnswerGrant:
+		return true
+	}
+	return false
 }
 
 // Asker prompts the user and returns their answer. The supervisor serializes
@@ -194,12 +279,18 @@ func (AutoDeny) Ask(context.Context, Request) Answer { return AnswerDismissed }
 // Close is a no-op.
 func (AutoDeny) Close() error { return nil }
 
-// AutoAllow answers every prompt with "allow once", for --ask=allow: an
-// audit run that lets the program write and logs what it would have asked.
+// AutoAllow answers every prompt with "allow once", and grants requests
+// made in advance, for --ask=allow: an audit run that lets the program
+// write and logs what it would have asked.
 type AutoAllow struct{}
 
 // Ask always allows, once.
-func (AutoAllow) Ask(context.Context, Request) Answer { return AnswerAllowOnce }
+func (AutoAllow) Ask(_ context.Context, r Request) Answer {
+	if r.Advance {
+		return AnswerGrant
+	}
+	return AnswerAllowOnce
+}
 
 // Close is a no-op.
 func (AutoAllow) Close() error { return nil }
@@ -222,6 +313,7 @@ func (r Remote) Ask(ctx context.Context, _ Request) Answer {
 	select {
 	case <-ctx.Done():
 	case <-expired:
+		return AnswerTimeout
 	}
 	return AnswerDismissed
 }
@@ -232,6 +324,9 @@ func (Remote) Close() error { return nil }
 // Wants formats the headline after the process, e.g. "wants to write:"
 // (Path follows on the next line), or "wants to connect to".
 func (r Request) Wants() string {
+	if r.Advance {
+		return "asks in advance to " + sanitize(r.Op) + ":"
+	}
 	if strings.HasSuffix(r.Op, " to") {
 		return "wants to " + sanitize(r.Op)
 	}
@@ -259,6 +354,12 @@ func (r Request) Text() (string, map[string]Answer) {
 	if r.Warn != "" {
 		fmt.Fprintf(&b, "  [!] %s\n", sanitize(r.Warn))
 	}
+	if r.Advance {
+		fmt.Fprintf(&b, "  %s\n", r.AdvanceFor())
+		if s := r.AdvanceReason(); s != "" {
+			fmt.Fprintf(&b, "  %s: %s\n", ReasonLabel, s)
+		}
+	}
 	if d := r.Details(); d != "" {
 		fmt.Fprintf(&b, "  (%s)\n", d)
 	}
@@ -267,6 +368,10 @@ func (r Request) Text() (string, map[string]Answer) {
 	}
 	if r.Waiting > 0 {
 		fmt.Fprintf(&b, "  (%d more waiting)\n", r.Waiting)
+	}
+	if r.Advance {
+		b.WriteString("[g] grant " + r.AdvanceFor() + "  [d] deny: ")
+		return b.String(), map[string]Answer{"g": AnswerGrant, "d": AnswerDenyOnce}
 	}
 	keys := map[string]Answer{"o": AnswerAllowOnce, "d": AnswerDenyOnce, "n": AnswerNever}
 	b.WriteString("[o] allow once  ")

@@ -83,6 +83,64 @@ func TestGrant(t *testing.T) {
 	}
 }
 
+func advReq(p string, a monitor.Advance) *monitor.Request {
+	r := pathReq(p)
+	r.Op = rules.OpFiles
+	r.Advance = &a
+	return r
+}
+
+func TestRequestAdvance(t *testing.T) {
+	p := defaults.NewLexical("/root", "", nil, nil)
+	r := Request(p, advReq("/root/w", monitor.Advance{Tree: true, For: time.Minute, Reason: "why"}), 0)
+	if !r.Advance || r.Op != "write" || r.Path != "/root/w/**" || r.For != time.Minute || r.Reason != "why" || r.Scope != "" {
+		t.Errorf("got %+v", r)
+	}
+	if r := Request(p, advReq("/", monitor.Advance{Tree: true}), 0); r.Path != "/**" {
+		t.Errorf("root: %+v", r)
+	}
+}
+
+// TestApplyGrant: "grant" adds the rule asked for; other allows deny.
+func TestApplyGrant(t *testing.T) {
+	p := defaults.NewLexical("/root", "", nil, nil)
+	for _, tc := range []struct {
+		name string
+		adv  monitor.Advance
+		a    ui.Answer
+		want *rules.PathMatch
+	}{
+		{"tree", monitor.Advance{Tree: true, For: time.Hour}, ui.AnswerGrant, &rules.PathMatch{Path: "/w", Tree: true}},
+		{"exact", monitor.Advance{}, ui.AnswerGrant, &rules.PathMatch{Path: "/w"}},
+		{"always", monitor.Advance{Tree: true}, ui.AnswerAllowAlways, nil},
+		{"never", monitor.Advance{Tree: true}, ui.AnswerNever, nil},
+		{"timeout", monitor.Advance{Tree: true}, ui.AnswerTimeout, nil},
+	} {
+		m, err := monitor.New(monitor.Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		before := time.Now()
+		if err := Apply(m, p, advReq("/w", tc.adv), tc.a, nil, "test"); !errors.Is(err, monitor.ErrClosed) {
+			t.Errorf("%s: Apply: %v, want ErrClosed", tc.name, err)
+		}
+		_, rs, _ := m.Snapshot()
+		m.Close()
+		if tc.want == nil {
+			if len(rs) != 0 {
+				t.Errorf("%s: rules %+v", tc.name, rs)
+			}
+			continue
+		}
+		if len(rs) != 1 || rs[0].Verdict != rules.Allow || rs[0].Ops != rules.OpAll || *rs[0].Object.Path != *tc.want {
+			t.Fatalf("%s: rules %+v", tc.name, rs)
+		}
+		if e := rs[0].Expires; (tc.adv.For == 0) != e.IsZero() || (!e.IsZero() && e.Before(before.Add(tc.adv.For))) {
+			t.Errorf("%s: expires %v", tc.name, e)
+		}
+	}
+}
+
 func TestApplyClosed(t *testing.T) {
 	m, err := monitor.New(monitor.Config{})
 	if err != nil {

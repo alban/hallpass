@@ -38,12 +38,7 @@ func (s *session) Info() *pb.SessionInfo {
 
 // Prompt implements sessionapi.Session.
 func (s *session) Prompt(req *monitor.Request) *pb.Prompt {
-	r := s.uiRequest(req, 0)
-	return &pb.Prompt{
-		Op: r.Op, Path: r.Path, Exe: r.Exe, Pid: r.PID,
-		Cmdline: r.Cmdline, Parents: r.Parents,
-		Scope: r.Scope, Never: r.Never, Warn: r.Warn, Note: r.Note, Detail: r.Detail,
-	}
+	return sessionapi.ToPBPrompt(s.uiRequest(req, 0))
 }
 
 // Answer implements sessionapi.Session.

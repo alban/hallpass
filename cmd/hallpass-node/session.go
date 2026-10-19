@@ -220,13 +220,18 @@ func (s *session) closed(c *monitor.Closed) {
 	s.log.Info("request closed", "id", c.ID, "by", why)
 }
 
-// dismiss denies request id, if still pending, without remembering it.
+// dismiss denies request id, if still pending, without remembering it: at
+// once without asking, or because nobody answered in time.
 func (s *session) dismiss(id uint64) {
 	req, rs, err := answer.Find(s.m, id)
 	if err != nil {
 		return
 	}
-	if err := answer.Apply(s.m, s.d, req, ui.AnswerDismissed, rs, client); err != nil {
+	a := ui.AnswerDismissed
+	if s.policy.Ask {
+		a = ui.AnswerTimeout
+	}
+	if err := answer.Apply(s.m, s.d, req, a, rs, client); err != nil {
 		if !errors.Is(err, monitor.ErrClosed) {
 			s.log.Error("deny", "id", id, "err", err)
 		}
@@ -239,6 +244,9 @@ func (s *session) dismiss(id uint64) {
 
 // describe names a request in an Event: "write /etc/profile by /bin/sh".
 func describe(r ui.Request) string {
+	if r.Advance {
+		return "request in advance to " + r.Op + " " + clean(r.Path) + " " + r.AdvanceFor() + " by " + clean(r.Exe)
+	}
 	return r.Op + " " + clean(r.Path) + " by " + clean(r.Exe)
 }
 
@@ -267,12 +275,7 @@ func (s *session) Info() *pb.SessionInfo {
 
 // Prompt implements sessionapi.Session.
 func (s *session) Prompt(req *monitor.Request) *pb.Prompt {
-	r := answer.Request(s.d, req, 0)
-	return &pb.Prompt{
-		Op: r.Op, Path: r.Path, Exe: r.Exe, Pid: r.PID,
-		Cmdline: r.Cmdline, Parents: r.Parents,
-		Scope: r.Scope, Never: r.Never, Warn: r.Warn, Note: r.Note, Detail: r.Detail,
-	}
+	return sessionapi.ToPBPrompt(answer.Request(s.d, req, 0))
 }
 
 // Answer implements sessionapi.Session.
@@ -292,11 +295,12 @@ func (s *session) Answer(id uint64, a, who string) error {
 	if err := answer.Apply(s.m, s.d, req, ans, rs, who); err != nil {
 		return err
 	}
-	deny := ans == ui.AnswerDenyOnce || ans == ui.AnswerNever || ans == ui.AnswerDismissed
+	r := answer.Request(s.d, req, 0)
+	deny := !r.Effective(ans).Allows()
 	reason := reasonAllowed
 	if deny {
 		reason = reasonDenied
 	}
-	s.event(deny, reason, fmt.Sprintf("%s: answered %s from %s", describe(answer.Request(s.d, req, 0)), ans, clean(who)))
+	s.event(deny, reason, fmt.Sprintf("%s: answered %s from %s", describe(r), ans, clean(who)))
 	return nil
 }

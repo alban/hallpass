@@ -8,12 +8,28 @@ import (
 	"fmt"
 	"net/netip"
 
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	pb "github.com/alban/hallpass/api/session/v1"
 	"github.com/alban/hallpass/internal/monitor"
 	"github.com/alban/hallpass/internal/rules"
+	"github.com/alban/hallpass/internal/ui"
 )
+
+// ToPBPrompt converts what a prompt shows (see Session.Prompt).
+func ToPBPrompt(r ui.Request) *pb.Prompt {
+	p := &pb.Prompt{
+		Op: r.Op, Path: r.Path, Exe: r.Exe, Pid: r.PID,
+		Cmdline: r.Cmdline, Parents: r.Parents,
+		Scope: r.Scope, Never: r.Never, Warn: r.Warn, Note: r.Note, Detail: r.Detail,
+		Advance: r.Advance, Reason: r.Reason,
+	}
+	if r.For > 0 {
+		p.GrantFor = durationpb.New(r.For)
+	}
+	return p
+}
 
 func toPBRequest(r *monitor.Request, p *pb.Prompt) *pb.Request {
 	out := &pb.Request{
@@ -28,6 +44,12 @@ func toPBRequest(r *monitor.Request, p *pb.Prompt) *pb.Request {
 	}
 	for _, f := range r.Facts {
 		out.Facts = append(out.Facts, &pb.Fact{Kind: f.Kind, Value: f.Value, Trust: pb.Trust(f.Trust)})
+	}
+	if a := r.Advance; a != nil {
+		out.Advance = &pb.Advance{Tree: a.Tree, Reason: a.Reason}
+		if a.For > 0 {
+			out.Advance.For = durationpb.New(a.For)
+		}
 	}
 	return out
 }
@@ -178,6 +200,7 @@ func fromPBDecision(d *pb.Decision) (monitor.Decision, error) {
 		RemoveSets:   d.GetRemoveSets(),
 		IfGeneration: d.GetIfGeneration(),
 		Client:       d.GetClient(),
+		TimedOut:     d.GetTimedOut(),
 	}
 	for _, v := range d.GetVerdicts() {
 		out.Verdicts = append(out.Verdicts, monitor.Verdict{Request: v.GetRequest(), Allow: v.GetAllow()})

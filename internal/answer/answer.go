@@ -1,15 +1,16 @@
 // Copyright The hallpass Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package answer maps a prompt answer (once, temp, always, deny, never) to
-// a monitor decision with a session's policy, and describes a request the
-// way prompts show it. The CLI and the node agent share it, so an answer
-// means the same in both.
+// Package answer maps a prompt answer (once, temp, always, deny, never;
+// grant for a request made in advance) to a monitor decision with a
+// session's policy, and describes a request the way prompts show it. The
+// CLI and the node agent share it, so an answer means the same in both.
 package answer
 
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/alban/hallpass/internal/monitor"
@@ -51,13 +52,23 @@ func Find(m *monitor.Monitor, id uint64) (*monitor.Request, []rules.Rule, error)
 // It fails with monitor.ErrClosed if req is no longer pending; the rules
 // of a are applied anyway.
 func Apply(m *monitor.Monitor, p Policy, req *monitor.Request, a ui.Answer, rs []rules.Rule, who string) error {
-	if !Request(p, req, 0).Valid(a) {
-		a = ui.AnswerAllowOnce
-	}
+	a = Request(p, req, 0).Effective(a)
 	d := monitor.Decision{Client: who}
 	allow := false
 	obj := req.Objects[0]
 	switch a {
+	case ui.AnswerGrant:
+		allow = true
+		var expires time.Time
+		if req.Advance.For > 0 {
+			expires = time.Now().Add(req.Advance.For)
+		}
+		d.AddRules = append(d.AddRules, rules.Rule{
+			Ops: rules.OpAll, Verdict: rules.Allow, Expires: expires,
+			Object: rules.ObjectMatch{Path: &rules.PathMatch{Path: obj.Path.Path, Tree: req.Advance.Tree}},
+		})
+	case ui.AnswerTimeout:
+		d.TimedOut = true
 	case ui.AnswerAllowOnce:
 		allow = true
 	case ui.AnswerAllowTemp:
@@ -164,6 +175,16 @@ func Request(p Policy, req *monitor.Request, waiting int) ui.Request {
 		}
 	}
 	switch obj := req.Objects[0]; {
+	case req.Advance != nil && obj.Path != nil:
+		r.Advance, r.For, r.Reason = true, req.Advance.For, req.Advance.Reason
+		r.Op = "write"
+		r.Path = obj.Path.Path
+		if req.Advance.Tree {
+			r.Path = strings.TrimSuffix(r.Path, "/") + "/**"
+		}
+		if w := p.Warn(obj.Path.Path); w != "" {
+			r.Warn = w + " — secret store"
+		}
 	case obj.Path != nil:
 		r.Path = obj.Path.Path
 		r.Scope = p.FolderFor(r.Path)

@@ -106,6 +106,15 @@ message Request {
   Subject subject = 5;
   repeated Fact facts = 6;
   Prompt prompt = 7;
+  // Set for a request the workload made in advance (see
+  // docs/workstation/usage.md): objects[0] is the path asked for.
+  Advance advance = 8;
+}
+
+message Advance {
+  bool tree = 1; // the path and everything below it
+  google.protobuf.Duration for = 2; // unset: the rest of the session
+  string reason = 3; // written by the workload: untrusted, display only
 }
 
 // Prompt is what the session's terminal prompt shows about a request.
@@ -123,6 +132,11 @@ message Prompt {
   string warn = 9;   // e.g. "SSH keys — secret store"
   string note = 10;  // e.g. "listener started inside the sandbox"
   string detail = 11; // qualifies path, e.g. "udp" for a network address
+  // A request made in advance: answered with "grant" or "deny"; path ends
+  // with "/**" for a tree.
+  bool advance = 12;
+  string reason = 13; // written by the workload: show it as its claim
+  google.protobuf.Duration grant_for = 14; // unset: the rest of the session
 }
 
 message Object {
@@ -226,6 +240,9 @@ message Decision {
   repeated string remove_sets = 4;
   uint64 if_generation = 5;
   string client = 6;
+  // Denies the verdicts' requests made in advance with ETIMEDOUT rather
+  // than EPERM: nobody answered in time.
+  bool timed_out = 7;
 }
 
 message Verdict {
@@ -291,7 +308,8 @@ message ProcMatch {
 
 message AnswerRequest {
   uint64 request = 1;
-  // once, temp, always, deny, never; temp and always need a scope.
+  // once, temp, always, deny, never; temp and always need a scope. A
+  // request made in advance: grant or deny.
   string answer = 2;
   string client = 3; // reported in Reason.client
 }

@@ -4,8 +4,10 @@
 package ui
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestOrigin(t *testing.T) {
@@ -54,5 +56,57 @@ func TestTextNet(t *testing.T) {
 	r = Request{Exe: "sh", PID: 7, Op: "write", Path: "/a"}
 	if got, _ := r.Text(); !strings.HasPrefix(got, "sh (pid 7) wants to write:\n  /a\n[o]") {
 		t.Errorf("Text() = %q", got)
+	}
+}
+
+func TestTextAdvance(t *testing.T) {
+	r := Request{Exe: "/bin/sh", PID: 7, Op: "write", Path: "/w/**", Advance: true, For: 10 * time.Minute, Reason: "build\x1b[2J"}
+	got, keys := r.Text()
+	want := "sh (pid 7) asks in advance to write:\n  /w/**\n  for 10m\n  " + ReasonLabel + ": \"build?[2J\"\n[g] grant for 10m  [d] deny: "
+	if got != want {
+		t.Errorf("Text() = %q, want %q", got, want)
+	}
+	if len(keys) != 2 || keys["g"] != AnswerGrant || keys["d"] != AnswerDenyOnce {
+		t.Errorf("keys %v", keys)
+	}
+	r.For, r.Reason = 0, ""
+	if got, _ := r.Text(); strings.Contains(got, ReasonLabel) || !strings.Contains(got, "for the rest of the session") {
+		t.Errorf("Text() = %q", got)
+	}
+	for d, want := range map[time.Duration]string{time.Hour: "for 1h", 90 * time.Minute: "for 1h30m", 30 * time.Second: "for 30s", time.Hour + time.Second: "for 1h0m1s"} {
+		if got := (Request{For: d}).AdvanceFor(); got != want {
+			t.Errorf("AdvanceFor(%v) = %q, want %q", d, got, want)
+		}
+	}
+	if got := (Request{Reason: strings.Repeat("x", 1000)}).AdvanceReason(); len(got) > maxReason+len(`""…`) {
+		t.Errorf("AdvanceReason() not truncated: %d bytes", len(got))
+	}
+}
+
+func TestEffective(t *testing.T) {
+	adv := Request{Advance: true, Scope: "/w"}
+	for a, want := range map[Answer]Answer{
+		AnswerGrant: AnswerGrant, AnswerDenyOnce: AnswerDenyOnce, AnswerTimeout: AnswerTimeout, AnswerDismissed: AnswerDismissed,
+		AnswerAllowOnce: AnswerDenyOnce, AnswerAllowAlways: AnswerDenyOnce, AnswerNever: AnswerDenyOnce,
+	} {
+		if got := adv.Effective(a); got != want {
+			t.Errorf("advance: Effective(%v) = %v, want %v", a, got, want)
+		}
+	}
+	plain := Request{}
+	for a, want := range map[Answer]Answer{
+		AnswerGrant: AnswerAllowOnce, AnswerAllowTemp: AnswerAllowOnce, AnswerTimeout: AnswerTimeout, AnswerNever: AnswerNever,
+	} {
+		if got := plain.Effective(a); got != want {
+			t.Errorf("Effective(%v) = %v, want %v", a, got, want)
+		}
+	}
+	for _, a := range []Answer{AnswerGrant, AnswerTimeout} {
+		if ParseAnswer(a.String()) != a {
+			t.Errorf("ParseAnswer(%q)", a.String())
+		}
+	}
+	if (AutoAllow{}).Ask(context.Background(), adv) != AnswerGrant || (AutoAllow{}).Ask(context.Background(), plain) != AnswerAllowOnce {
+		t.Error("AutoAllow")
 	}
 }

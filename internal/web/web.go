@@ -436,7 +436,7 @@ func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 }
 
 // answer answers a request the way the terminal would: once, temp,
-// always, deny or never.
+// always, deny or never; grant or deny for a request made in advance.
 func (s *Server) answer(w http.ResponseWriter, r *http.Request) {
 	c, ctx, ok := s.sessionClient(w, r)
 	if !ok {
