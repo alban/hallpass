@@ -26,7 +26,7 @@ hallpass is enforced by the kernel, from outside the program, so it does not dep
 - **AI coding agents** (copilot, claude, codex, ...): they run commands on your behalf, sometimes in the wrong place.
 - **Installers and package hooks**: `curl | sh`, `npm install` or `pip install` running scripts you have not read.
 - **Unfamiliar builds and tools**: a project's `make install`, a tool you try for the first time.
-- **Audit**: see every file a program writes (`--ask=allow --log`), or check it against the paths it declares.
+- **Audit**: see every file a program writes (`--prompt=allow --log`), or check it against the paths it declares.
 
 See [Use cases](workstation/use-cases.md) for the flags of each.
 
@@ -42,6 +42,6 @@ $ go build ./cmd/hallpass
 $ ./hallpass -- copilot
 ```
 
-See [Install](workstation/install.md) to build it, [Usage](workstation/usage.md) for the flags, the default policy and running with agent CLIs, [Answers and rules](answers/index.md) for what to answer, and [Use cases](workstation/use-cases.md) for auditing, checking a tool's declared paths, CI and more. To sandbox pods, see [Kubernetes](kubernetes/index.md). [How it works](design.md) explains the design and its limitations.
+See [Install](workstation/install.md) to build it, [Usage](workstation/usage.md) for the default policy and running with agent CLIs, the [CLI reference](workstation/reference.md) for the flags, [Answers and rules](answers/index.md) for what to answer, and [Use cases](workstation/use-cases.md) for auditing, checking a tool's declared paths, CI and more. To sandbox pods, see [Kubernetes](kubernetes/index.md). [How it works](design.md) explains the design and its limitations.
 
 The user-space code is Apache-2.0 licensed; the BPF programs are GPL-2.0-only OR BSD-2-Clause. The source is on [GitHub](https://github.com/alban/hallpass).

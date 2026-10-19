@@ -41,6 +41,7 @@ nav:
       - workstation/index.md
       - Install: workstation/install.md
       - Usage: workstation/usage.md
+      - CLI reference: workstation/reference.md
       - Strict mode: workstation/strict.md
       - Use cases: workstation/use-cases.md
   - Kubernetes:

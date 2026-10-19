@@ -1,40 +1,18 @@
 # Usage
 
-```
-hallpass [flags] [--] [command [args...]]     # default command: $SHELL
+Run a command, an agent CLI for example, in the sandbox from your project directory:
 
-  -C, --workdir DIR        project dir, writable without asking (default: cwd)
-      --allow PATH         also writable without asking (repeatable)
-      --deny PATH          always denied (repeatable, wins over --allow)
-      --no-implicit        only --allow paths are writable and --allow-exec programs run: no project dir, $TMPDIR, devices, terminal or implicit program groups
-      --allow-tty          the session's own terminal is writable (default true; off with --no-implicit unless given)
-      --ask MODE           auto | term | desktop | answer | deny | allow   (default: auto = term if on a terminal, else desktop, else answer;
-                           allow = audit: allow everything, log it with --log)
-      --timeout DUR        unanswered prompt is denied after DUR (default 30s; 0 = wait forever)
-      --allow-userns       let the sandbox create user/mount namespaces (weakens lite mode; always on in strict mode)
-      --log FILE           append one JSON line per mediated syscall to FILE
-      --wait WHAT          main (default): exit with the command | all: keep supervising its background processes (Linux 5.9+)
-      --mode MODE          lite (default, no root) | strict (BPF-LSM enforcement)
-      --mediate LIST       mediated syscall categories: files, exec, network (default files,exec; network is experimental)
-      --allow-net DEST     network destination allowed without asking (repeatable; needs network in --mediate)
-      --deny-net DEST      network destination always denied (repeatable, wins over --allow-net)
-      --ask-net DEST       network destination asked about, even inside what --allow-net allows (repeatable)
-      --allow-exec PROG    program run without asking (repeatable, comma-separated): a name looked up in $PATH, a path, DIR/** for every program below DIR,
-                           or a group: @shells, @coreutils, @search, @git, @busybox
-      --deny-exec PROG     program never run (repeatable, comma-separated, no groups, wins over --allow-exec)
-      --group @NAME=PROG,...  a group of programs of your own, or a replacement for the built-in group of that name (repeatable)
-      --escalate TOOL      strict mode as a regular user: how to run the loader as root:
-                           auto | ask | pkexec | sudo | run0 | doas | su | manual | none
-                           (default: saved choice, else ask on a terminal, else auto)
-
-hallpass policy [flags]                       # print the rules these flags give, then exit
-hallpass answer [PID]                         # answer another session's prompts from this terminal
-hallpass web [--listen ADDR] [--open] [--node ADDR]  # follow and answer every session in a browser (experimental)
+```console
+hallpass -- copilot      # no command: your $SHELL
 ```
+
+The command can write the project without asking; any other write, and any program outside the common ones, pauses it and asks you. `hallpass policy` prints the rules a run with the same flags would get, and Ctrl-] in a session shows the current ones. Every flag is in the [CLI reference](reference.md).
 
 ## Default policy
 
 By default, only `~/.config/hallpass`, the hallpass binary itself and the session sockets' directory (`$XDG_RUNTIME_DIR/hallpass`) are denied (the sandbox must not change what hallpass runs next time, even when the binary sits in the project, nor tamper with the sessions); the project, a private `$TMPDIR` for the session (removed at exit if empty) and the usual `/dev` nodes are writable; anything else is asked, including the shared `/tmp`, `/var/tmp` and `/dev/shm` (answer "always" to allow them). `hallpass policy` prints the resulting rules.
+
+`--allow-path` adds a folder writable without asking, `--deny-path` one always denied, and `--ask-path` carves an exception out of what is allowed: with `--allow-path ~/.config --ask-path ~/.config/gh`, writes to `~/.config/gh` are asked about and the rest of `~/.config` is not. The most specific rule decides, an ask wins over an allow as specific, and a deny wins over both. This works in both modes: in strict mode, the kernel denies a write under an asked folder unless you answer.
 
 Writes to known secret stores (`~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.config/gh`, `~/.kube`, `~/.docker`, `~/.netrc`, `~/.git-credentials`) are asked about like any other write, but the prompt is flagged in red (for example "SSH keys — secret store"), so allowing one is a deliberate choice rather than a reflex. They are not denied outright: writing them is sometimes legitimate (`ssh-keygen`, `gh auth login`, `aws configure`), and a silent deny would hide the attempt instead of surfacing it.
 
@@ -48,7 +26,7 @@ Press Ctrl-] inside a session to see its current rules, including answers given 
 
 On a terminal, the window title starts with `[hallpass]` until the session ends: every title the program sets gets the prefix, and the command running in the foreground, if it is not a shell, is appended (`[hallpass] ~/src — vim main.go`), since the terminal itself only sees hallpass. At exit, hallpass restores the previous title in terminals that support the title stack (xterm, VTE-based ones such as GNOME Terminal); elsewhere, the title stays until your shell sets a new one.
 
-With `--no-implicit`, nothing is writable unless you `--allow` it: not the project, not a `$TMPDIR`, not even `/dev/null`. The session's own terminal stays off too, unless you also pass `--allow-tty` (its `/dev/pts/N` is only known once hallpass starts). Only the command and the `--allow-exec` programs run without asking: the groups allowed implicitly are off. See [use cases](use-cases.md) for examples.
+With `--no-implicit`, nothing is writable unless you `--allow-path` it: not the project, not a `$TMPDIR`, not even `/dev/null`. The session's own terminal stays off too, unless you also pass `--allow-tty` (its `/dev/pts/N` is only known once hallpass starts). Only the command and the `--allow-exec` programs run without asking: the groups allowed implicitly are off. See [use cases](use-cases.md) for examples.
 
 ## Programs
 
@@ -181,7 +159,7 @@ hallpass never runs anything: the `execve` always fails, and its error number is
 | `ENOSYS` | Function not implemented | files are not mediated (`--mediate` without `files`, or a Kubernetes policy's `mediate`): nothing would enforce a grant, so nobody is asked |
 | `ENOENT` | No such file or directory | no hallpass: the path does not exist |
 
-With `--ask=deny`, requests are denied (`EPERM`) without a card; with `--ask=allow`, they are granted. A request is covered (`EEXIST`) when the rules already allow the whole path for the duration asked, so asking again right after a grant does not prompt.
+With `--prompt=deny`, requests are denied (`EPERM`) without a card; with `--prompt=allow`, they are granted. A request is covered (`EEXIST`) when the rules already allow the whole path for the duration asked, so asking again right after a grant does not prompt.
 
 Agents can learn it from their instructions file (`AGENTS.md`, `.github/copilot-instructions.md`, `CLAUDE.md`...), for example:
 
@@ -220,7 +198,7 @@ hallpass -C ~/src/app -- codex
 Agents keep their own state (sessions, logs, caches) outside the project. For copilot that is `~/.copilot` and `~/.cache/copilot`:
 
 ```console
-hallpass -allow ~/.copilot -allow ~/.cache/copilot -- copilot
+hallpass --allow-path ~/.copilot --allow-path ~/.cache/copilot -- copilot
 ```
 
 The `-allow` flags are optional: without them, hallpass asks you when copilot writes there, which is a good way to see what an agent touches. Allowing all of `~/.copilot` does let the agent change its own config or hooks, which would apply to later runs without hallpass.
@@ -234,10 +212,10 @@ Things to know:
 
 ## Over ssh
 
-hallpass draws its prompt over the terminal, so it works over ssh like any other full-screen program. Without a terminal (for example a non-interactive session, or when the agent fully owns the screen), use a desktop prompt (`--ask=desktop`) or answer from another terminal:
+hallpass draws its prompt over the terminal, so it works over ssh like any other full-screen program. Without a terminal (for example a non-interactive session, or when the agent fully owns the screen), use a desktop prompt (`--prompt=desktop`) or answer from another terminal:
 
 ```console
-hallpass --ask=answer -- copilot     # in one terminal
+hallpass --prompt=answer -- copilot     # in one terminal
 hallpass answer                      # in another, to see prompts and reply
 ```
 

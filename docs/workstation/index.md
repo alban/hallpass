@@ -9,7 +9,9 @@ hallpass -- copilot      # or any command; no command: a shell
 ```
 
 - [Install](install.md): requirements and build.
-- [Usage](usage.md): flags, the default policy, agent CLIs, over ssh.
+- [Usage](usage.md): the default policy, programs, network, agent
+  CLIs, over ssh.
+- [CLI reference](reference.md): every flag.
 - [Strict mode](strict.md): enforce your answers in the kernel with
   BPF-LSM.
 - [Use cases](use-cases.md): audit, CI, checking a tool's declared

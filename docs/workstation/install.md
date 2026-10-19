@@ -22,4 +22,4 @@ $ cd ~/src/myproject
 $ hallpass -- copilot
 ```
 
-See [Usage](usage.md) for the flags and the default policy, and [Answers and rules](../answers/index.md) for what to answer.
+See [Usage](usage.md) for the default policy, the [CLI reference](reference.md) for the flags, and [Answers and rules](../answers/index.md) for what to answer.
