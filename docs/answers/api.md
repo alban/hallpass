@@ -17,10 +17,12 @@ Every client on the [previous page](clients.md) except the terminal prompt and t
 | `Info`, `List` | describe the session, or the sessions served |
 | `Snapshot` | the pending requests and the rules |
 | `Events` | a stream of requests opened and closed, rule changes, and with `decided` every decided access; with `snapshot`, the first batch carries a snapshot taken after subscribing, so no event is lost in between |
-| `Answer` | answer a pending request like the terminal prompt: `once`, `temp`, `always`, `deny` or `never`, with the session's own scope (`Prompt.scope`) |
+| `Answer` | answer a pending request like the terminal prompt: `once`, `temp`, `always`, `deny` or `never`, with the session's own scope (`Prompt.scope`); `grant`, `deny` or `dismiss` for a request made in advance |
 | `Apply` | the lower level: allow or deny requests, add and remove rules of your own scope, all at once, optionally only if the rules have not changed since a given generation |
 
 A request carries what the prompt shows (`Prompt`: operation, path, command line, parents, the scope of `temp` and `always`, a secret-store warning) and the raw data behind it (`Object`, `Subject`, `Fact`). The process controls its command line and parents: they help a human but prove nothing, so do not base automatic answers on them alone.
+
+A request made [in advance](../workstation/usage.md#asking-in-advance) has `Request.advance` set (whether the path is a folder, the duration asked and the program's reason) and, in its `Prompt`, `advance`, `grant_for` and `reason`; `Prompt.path` ends in `/**` for a folder. The reason is the program's own words: show it as such. Answering `grant` adds an allow rule for that path, expiring after `grant_for` (never, when it is zero). A request denied because nobody answered in time closes with `Decision.timed_out`.
 
 ## Example
 

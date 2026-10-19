@@ -30,7 +30,7 @@ The program runs on a pseudo-terminal that hallpass relays, so it cannot see or 
 
 ## Desktop notification
 
-Without a terminal, hallpass asks with a desktop notification. It has room for three buttons only: Allow once, Allow 5 min and Deny (or Allow once, Deny and Never when there is no folder to offer).
+Without a terminal, hallpass asks with a desktop notification. It has room for three buttons only: Allow once, Allow 5 min and Deny (or Allow once, Deny and Never when there is no folder to offer). A request made [in advance](../workstation/usage.md#asking-in-advance) shows the folder, the duration and the program's reason, with Grant and Deny.
 
 ## Another terminal
 

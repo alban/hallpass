@@ -20,7 +20,10 @@ The answers are the same as on a workstation: `once`, `temp` (5
 minutes), `always` (for the session's lifetime: nothing is written back
 to the policy), `deny` and `never`; see
 [Answers and rules](../answers/index.md). `--addr` selects another address
-than `127.0.0.1:7323`.
+than `127.0.0.1:7323`. A request made
+[in advance](../workstation/usage.md#asking-in-advance) by a program in the
+container takes `grant` or `deny`; `hallpass-node pending` shows its
+duration and its reason, the program's own words.
 
 [`hallpass web`](../answers/web.md) does the same in a browser, through the same
 port-forward: the pending requests, the activity and the rules of every
@@ -96,7 +99,9 @@ It adds:
 - **hallpass** in the sidebar: the pending requests of the cluster, the
   sessions (pod, container, node, policy) and the agents' connection
   state. Each request has the answer buttons `once`, `temp`, `always`,
-  `deny` and `never`.
+  `deny` and `never`; a request made in advance shows its folder, its
+  duration and the program's reason, marked as unverified, with `grant`
+  and `deny`.
 - A badge in the app bar with the number of pending requests, on every
   page. A blocked container waits for an answer.
 - A **hallpass** section in the details of a mediated pod: its policy,

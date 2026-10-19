@@ -40,9 +40,10 @@ spec:
 - Also allowed: `/dev/null` and the other harmless devices, the
   terminal (`/dev/tty`, `/dev/pts`) and `/dev/termination-log`.
 - `ask` (default `true`): ask about the other writes. With `false`, they
-  are denied at once.
+  are denied at once, and so are requests made in advance.
 - `askTimeout` (default `5m`): a request with no answer by then is
-  denied. `0` waits forever, like `hallpass --timeout=0`.
+  denied (`ETIMEDOUT` for a request made in advance). `0` waits forever,
+  like `hallpass --timeout=0`.
 - `mediate` (default `[files, exec]`): the syscall categories mediated.
   `network` (experimental) asks about connections and sends, like
   `hallpass --mediate` ([Network](../workstation/usage.md#network-experimental)).

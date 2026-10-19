@@ -86,6 +86,75 @@ Sometimes hallpass cannot read the path a syscall passes, for example when the p
 
 While a prompt is pending, the paused thread only reacts to fatal signals (Linux 5.19 and later): a Ctrl-C or other handled signal is delivered once you answer, instead of restarting the syscall and asking again.
 
+## Asking in advance
+
+A program that knows it will write a folder later, for example an agent about to start a long task while you are still there, can ask for it beforehand, so that you are not prompted while you are away. It runs a magic path that names what it wants:
+
+```console
+exec '/proc/self/hallpass/request?op=write&path=/home/me/.cache/build/**&for=30m&reason=cache+object+files'
+```
+
+The request shows a card in every client (terminal, desktop notification, `hallpass answer`, [web UI](../answers/web.md), Headlamp), with the folder, how long and the program's reason. The reason is the program's own words: hallpass shows it marked as unverified, never as a fact.
+
+```
+ hallpass: dash (pid 4242) asks in advance to write
+ /home/me/.cache/build/**
+ by: sh -c "exec '/proc/self/hallpass/request?op=write&path=/home/me/.cache/bu…
+ reason given by the program (unverified): "cache object files"
+ [g] grant for 30m  [d] deny  [Esc] dismiss
+```
+
+`grant` adds the same rule as an answer to a prompt, with an expiry: Ctrl-] lists it, the web UI can remove it, and in [strict mode](../design.md) the kernel enforces it like the other rules. The call blocks until you answer.
+
+The query string:
+
+| Key | Value |
+|---|---|
+| `op` | `write`, the only operation for now (it covers every file operation hallpass mediates) |
+| `path` | an absolute path; ending in `/**`, the folder and everything below it. No other globs (`*`, `?`, `[`). Percent-encode `&`, `;`, `%` and `+` in it (`%26`...) |
+| `for` | optional: a duration (`90s`, `10m`, `2h`); without it, the rest of the session |
+| `reason` | optional: why, shown to you as the program's words; `+` or `%20` for spaces |
+
+`/proc/self/hallpass/check?...`, with the same keys, asks whether a request would be needed, without asking you.
+
+hallpass never runs anything: the `execve` always fails, and its error number is the answer. A shell prints it (exit code 126, or 127 when there is no hallpass):
+
+| errno | Message | Meaning |
+|---|---|---|
+| `EEXIST` | File exists | already allowed for that long: nobody was asked |
+| `EALREADY` | Operation already in progress | granted |
+| `EPERM` | Operation not permitted | denied or dismissed, or a rule denies part of it |
+| `ETIMEDOUT` | Connection timed out | nobody answered within `--timeout` |
+| `ENOMSG` | No message of desired type | (check) a request would ask you |
+| `EINVAL`, `ENAMETOOLONG` | Invalid argument, File name too long | malformed request |
+| `ENOENT` | No such file or directory | no hallpass: the path does not exist |
+
+With `--ask=deny`, requests are denied (`EPERM`) without a card; with `--ask=allow`, they are granted. A request is covered (`EEXIST`) when the rules already allow the whole path for the duration asked, so asking again right after a grant does not prompt.
+
+Agents can learn it from their instructions file (`AGENTS.md`, `.github/copilot-instructions.md`, `CLAUDE.md`...), for example:
+
+````markdown
+## Sandbox
+
+You run under hallpass, which asks the user before writes outside the
+project. Before a long task that writes elsewhere, ask for the folder
+once, while the user is there:
+
+```sh
+sh -c "exec '/proc/self/hallpass/request?op=write&path=$HOME/.cache/build/**&for=1h&reason=build+cache+for+the+test+run'"
+```
+
+The command always fails: read its message. "Operation already in
+progress" (granted) or "File exists" (already allowed): go ahead.
+"Operation not permitted" or "Connection timed out": do not write
+there, tell the user. "No such file or directory": no hallpass.
+Ask only for what the task needs, and say why in the reason.
+````
+
+<video src="../assets/demos/advance-grant.mp4" poster="../assets/demos/advance-grant.png" controls muted playsinline aria-label="a script checks, then asks in advance to write ~/.cache/build for 30 minutes, with its reason marked unverified; after one grant, its writes there go through without prompts, and Ctrl-] shows the rule with its expiry"></video>
+
+*One question before the task, none during it: the grant is a rule with an expiry.*
+
 ## Using hallpass with agent CLIs
 
 Wrap the top-level command; there is nothing to configure in the agent:

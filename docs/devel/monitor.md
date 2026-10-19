@@ -454,6 +454,13 @@ type Request struct {
 	Objects []Object // 1, or 2 for rename and link
 	Subject Subject
 	Facts   []Fact
+	Advance *Advance // a request made in advance, see below
+}
+
+type Advance struct {
+	Tree   bool          // Objects[0] and everything below it
+	For    time.Duration // how long the grant is asked for; 0: the session
+	Reason string        // written by the workload: display only
 }
 
 type Closed struct {
@@ -501,6 +508,7 @@ type Decision struct {
 	RemoveSets   []string
 	IfGeneration uint64
 	Client       string // reported in Reason.Client
+	TimedOut     bool   // nobody answered: an advance request gets ETIMEDOUT
 }
 
 // Verdict allows or denies one request, once. In strict mode, an allow
@@ -547,6 +555,26 @@ const (
   requests are pending.
 - **Rename and link** are reported as one `Request` per object, in order,
   for now (one prompt per path, as today).
+- **Requests made in advance**: an execve of
+  `/proc/self/hallpass/request?op=write&path=/dir/**&for=10m&reason=...`
+  (`AdvanceDir`, see [usage](../workstation/usage.md#asking-in-advance))
+  is never continued: execve is notified in every mode and category, and
+  the monitor answers with an errno, so a shell prints it and no program
+  runs. Without a monitor the path does not exist (`ENOENT`). The monitor
+  parses the query (`EINVAL`, `ENAMETOOLONG` past `PATH_MAX`), resolves
+  the path like a write's, and evaluates the rules: covered
+  (`EEXIST`, an allow for the whole tree, with no deny or ask rule below
+  it, lasting at least `for` minus min(`for`/10, 1m)), denied (`EPERM`),
+  or a `Request` with `Advance` set, `Op` `OpFiles` and the path as its
+  object. `check?` stops there (`ENOMSG` instead of a request). That
+  request is coalesced with identical ones of the same thread group, is
+  never settled by rules (the UX answers it: a grant is an `AddRules` of
+  an expiring allow rule plus an allow verdict), emits no `Decided`
+  events, and fails the execve with `EALREADY` on an allow, `ETIMEDOUT`
+  on a deny with `Decision.TimedOut`, `EPERM` on another deny. In strict
+  mode the grant is a rule like any other, synced to the kernel; a
+  process in another mount view than the session's gets `EINVAL`, since
+  its path would not name the same file.
 - **Unreadable path** (lite): `Object{Unknown: err}`, matched only by
   `ObjectMatch{Unknown}` rules; a verdict allows that one syscall.
 - **Other mount namespace or unreadable path** (strict): the monitor
