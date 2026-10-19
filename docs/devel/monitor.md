@@ -330,9 +330,11 @@ Allow allows, otherwise a `Request`.
 
 In strict mode, every rule must be evaluable in BPF. Today BPF has path
 trie nodes with `allow_tree`, `allow_exact`, `ask_tree`, `ask_exact` (with
-expiry), `deny_tree` and `deny_exact`; proc keys {name, comm} with
+expiry), `deny_tree` and `deny_exact`, the same without asks for programs
+(`exec_*`, read by `bprm_check_security`); proc keys {name, comm} with
 allow/ask/deny and expiry; and per-thread one-shot grants. It has no ops
-and no subjects. The monitor refuses rules it cannot enforce
+and no subjects. Exec rules cannot ask: a program no rule allows is asked
+anyway. The monitor refuses rules it cannot enforce
 (`ErrUnsupported`), so the UX cannot think a rule holds when the kernel
 ignores it.
 

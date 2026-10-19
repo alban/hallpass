@@ -71,7 +71,7 @@ iframe { position: absolute; top: ${BAR}px; height: ${H - BAR}px; border: 0; }
 #pointer.click::after { animation: click .5s; }
 @keyframes click { from { opacity: .8; transform: scale(.3); } to { opacity: 0; transform: scale(1.6); } }
 </style></head><body>
-<div class="bar" style="left:0;width:${LEFT}px">Terminal: <b>hallpass -- sh</b></div>
+<div class="bar" style="left:0;width:${LEFT}px">Terminal: <b>hallpass --mediate=files -- sh</b></div>
 <div class="bar" style="left:${LEFT + GAP}px">Browser: <b>hallpass web</b></div>
 <iframe id="term" src="${ttydURL}"></iframe>
 <iframe id="web" src="${webURL}"></iframe>
@@ -269,7 +269,8 @@ async function main() {
     await card("");
     await sleep(1000);
 
-    await line("hallpass -- sh");
+    // Files only: make, cc and the program built run without exec prompts.
+    await line("hallpass --mediate=files -- sh");
     await sleep(1200);
     await webf.waitForFunction(() => document.querySelectorAll("#sessions .session").length > 0, { timeout: 10000 });
     await comment("inside the project: no question");

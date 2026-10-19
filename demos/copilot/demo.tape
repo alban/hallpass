@@ -3,7 +3,11 @@
 #
 # Run `make -C demos copilot`. The Makefile runs it from the repository root
 # and sets the output with `vhs -o`. The project is copied to
-# /tmp/hallpass-demo, a fixed path: trust it in copilot once beforehand.
+# /tmp/hallpass-demo (or $HALLPASS_DEMO_PROJECT), a fixed path: trust it in
+# copilot once beforehand.
+#
+# Exec mediation is off (--mediate=files): copilot runs many programs, and
+# the demo is about a write outside the project.
 
 Require copilot
 
@@ -16,7 +20,7 @@ Set Theme "Catppuccin Mocha"
 Set TypingSpeed 45ms
 
 Hide
-Type "export PATH=$PWD:$PATH PS1='$ ' && rm -rf /tmp/hallpass-demo && cp -r demos/example /tmp/hallpass-demo && cd /tmp/hallpass-demo && clear"
+Type `export PATH=$PWD:$PATH PS1='$ ' D=${HALLPASS_DEMO_PROJECT:-/tmp/hallpass-demo} && rm -rf "$D" && cp -r demos/example "$D" && cd "$D" && clear`
 Enter
 Sleep 500ms
 Type@1ms `clear && printf '\n\n   \033[1mAn agent with every permission: copilot --yolo\033[0m\n\n   Asked to build and install a project. The install step copies a file\n   into ~/.local/bin, outside the project, so hallpass asks.\n' && sleep 6 && clear`
@@ -28,7 +32,7 @@ Hide
 Sleep 800ms
 Show
 
-Type "hallpass -allow ~/.copilot -allow ~/.cache/copilot -- copilot --model claude-haiku-4.5 --yolo"
+Type "hallpass --mediate=files -allow ~/.copilot -allow ~/.cache/copilot -- copilot --model claude-haiku-4.5 --yolo"
 Sleep 3s
 Enter
 Wait+Screen@60s /Check for mistakes/

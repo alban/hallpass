@@ -25,7 +25,7 @@ Hide
 Sleep 800ms
 Show
 
-Type "hallpass -- sh"
+Type "hallpass --allow-exec=@coreutils -- sh"
 Sleep 300ms
 Enter
 Sleep 800ms

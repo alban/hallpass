@@ -9,6 +9,8 @@ metadata:
   name: kube-web
 spec:
   allow: [/workspace/**]
+  # busybox's shell and tools (kubectl exec sh, cat): not asked about.
+  allowExec: ["@busybox"]
   ask: true
   askTimeout: 5m
 ---

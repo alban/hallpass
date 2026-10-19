@@ -7,6 +7,9 @@
 # as $DEMO_DIR. clean-home then makes HOME /home/me, on a tmpfs in a private
 # mount namespace (needs passwordless sudo), so that the card shows a clean
 # path: the demo writes nothing in yours.
+#
+# Exec mediation is off (--mediate=files): the demo is about writes, and
+# the agent's programs would each be asked about.
 
 Set Shell bash
 Set FontSize 18
@@ -32,7 +35,7 @@ Hide
 Sleep 800ms
 Show
 
-Type "hallpass -- sh"
+Type "hallpass --mediate=files -- sh"
 Sleep 300ms
 Enter
 Sleep 800ms

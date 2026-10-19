@@ -8,6 +8,7 @@ Each demo is a directory with its recording script. The [Makefile](Makefile) fin
 | Copilot | [`copilot/demo.tape`](copilot/demo.tape) | home page | VHS, with copilot |
 | Coalesce | [`coalesce/demo.tape`](coalesce/demo.tape) | How it works | VHS |
 | Ask in advance | [`advance-grant/demo.tape`](advance-grant/demo.tape), with [`agent.sh`](advance-grant/agent.sh) | Usage | VHS |
+| Exec | [`exec/demo.tape`](exec/demo.tape) | Usage | VHS |
 | Strict | [`strict/demo.tape`](strict/demo.tape) | How it works | VHS, over ssh |
 | Web UI | [`web/record.js`](web/record.js) | Usage | Puppeteer |
 | Headlamp | [`headlamp/record.js`](headlamp/record.js) | Kubernetes | Puppeteer, on kind |
@@ -45,13 +46,14 @@ Then show it in the documentation, the paths relative to the page's URL, with a 
 
 Requirements: `vhs` (with `ttyd` and a Chromium; on arm64 Linux, `snap install chromium`) and `ffmpeg` (with libx264 and librsvg). Title cards and `#` comments typed in the shell explain each step.
 
-- `shell.mp4` (no agent, the same at every run apart from pids): a shell in the sandbox. Writing in the project goes through, appending to `~/.bashrc` is asked and denied, and Ctrl-] shows the session's rules.
-- `coalesce.mp4` (no agent): eight parallel `touch` under one folder outside the project give one prompt; "always" allows the folder, settles all eight, and shows as a rule. It runs with `HOME` in `$DEMO_DIR`.
-- `advance-grant.mp4` (a pretend agent, [`agent.sh`](advance-grant/agent.sh)): it checks, then asks in advance for `~/.cache/build` for 30 minutes; one grant, then its writes there need no prompt. So that the card shows `/home/me/...`, [`clean-home`](advance-grant/clean-home) runs the shell with `HOME=/home/me` on a tmpfs in a private mount namespace: it needs passwordless sudo.
+- `shell.mp4` (no agent, the same at every run apart from pids): a shell in the sandbox, with `--allow-exec=@coreutils` for `cat`. Writing in the project goes through, appending to `~/.bashrc` is asked and denied, and Ctrl-] shows the session's rules.
+- `coalesce.mp4` (no agent): eight parallel `touch` under one folder outside the project give one prompt; "always" allows the folder, settles all eight, and shows as a rule. `--allow-exec=@coreutils,@search` lets `seq`, `xargs`, `touch` and `ls` run. It runs with `HOME` in `$DEMO_DIR`.
+- `advance-grant.mp4` (a pretend agent, [`agent.sh`](advance-grant/agent.sh)): it checks, then asks in advance for `~/.cache/build` for 30 minutes; one grant, then its writes there need no prompt. It runs with `--mediate=files`: the demo is about writes. So that the card shows `/home/me/...`, [`clean-home`](advance-grant/clean-home) runs the shell with `HOME=/home/me` on a tmpfs in a private mount namespace: it needs passwordless sudo.
+- `exec.mp4` (no agent): which programs a shell in the sandbox may run. It starts with `--allow-exec=@coreutils,@search`: `ls` and `grep` run without a question. `git` is in a group not allowed: the prompt offers that group, and "group" allows `git` and its helpers. `curl` is asked and denied (the shell prints "Permission denied"); `./hello`, built in the project, is asked too, and "always" allows that program only. Ctrl-] shows the groups by name and count under "Run", next to `./hello`. It runs with `HOME` in `$DEMO_DIR`, and needs `cc`, `git` and `curl`.
 - `strict.mp4` (no agent): [`strict/race`](strict/race/main.go) opens a path while another thread flips one of its bytes, between `./.bashrc` in the project and `../.bashrc`, which is `~/.bashrc`. Under lite mode it soon writes to `~/.bashrc`; under strict mode it never does. Strict mode needs BPF-LSM, so the tape builds `race`, copies it and `hallpass` to `~/tmp/hallpass-demo-strict` on `$STRICT_HOST` (default `fedora`) and runs there over ssh, with `HOME` in that directory. The host needs `bpf` in `/sys/kernel/security/lsm`, Linux 6.12 or later, passwordless sudo, and this host's architecture. The try count varies from run to run.
-- `copilot.mp4`: `copilot --yolo` asked to "Build and install the project" in [`example/`](example). The `install` step copies the built binary into `~/.local/bin`, outside the project, so hallpass asks and the write is denied. A fast model (`--model claude-haiku-4.5`) keeps the agent's turn short. The agent's answers vary from run to run.
+- `copilot.mp4`: `copilot --yolo` asked to "Build and install the project" in [`example/`](example). The `install` step copies the built binary into `~/.local/bin`, outside the project, so hallpass asks and the write is denied. It runs with `--mediate=files`: copilot runs many programs, which exec mediation would ask about one by one. A fast model (`--model claude-haiku-4.5`) keeps the agent's turn short. The agent's answers vary from run to run.
 
-The copilot demo needs `copilot`, logged in. Its tape copies `example/` to `/tmp/hallpass-demo`, outside any git repository, so that copilot works on it alone. Copilot asks whether to trust a new folder, which the tape does not answer: trust it once beforehand.
+The copilot demo needs `copilot`, logged in. Its tape copies `example/` to `/tmp/hallpass-demo` (or `$HALLPASS_DEMO_PROJECT`), outside any git repository, so that copilot works on it alone. Copilot asks whether to trust a new folder, which the tape does not answer: trust it once beforehand.
 
 ```console
 $ cp -r demos/example /tmp/hallpass-demo && (cd /tmp/hallpass-demo && copilot)   # trust the folder, then /exit
@@ -60,7 +62,7 @@ $ make -C demos copilot   # about 2 minutes
 
 ## Web UI
 
-`web.mp4` shows a terminal (left) and [`hallpass web`](../docs/web.md) in a browser (right) side by side. A shell runs under hallpass in [`example/`](example): `make` writes in the project without a question; appending to `~/.bashrc` is asked in both places and denied from the browser, and the terminal prompt goes away; `make install` creates `~/.local/bin`, answered "Always" from the browser, which also covers the copy that follows. The Activity view (filtered on "answered") and the Rules view show the result.
+`web.mp4` shows a terminal (left) and [`hallpass web`](../docs/web.md) in a browser (right) side by side. A shell runs under hallpass in [`example/`](example), with `--mediate=files` (the demo is about files: `make`, `cc` and the program built run without exec prompts): `make` writes in the project without a question; appending to `~/.bashrc` is asked in both places and denied from the browser, and the terminal prompt goes away; `make install` creates `~/.local/bin`, answered "Always" from the browser, which also covers the copy that follows. The Activity view (filtered on "answered") and the Rules view show the result.
 
 No agent: [`web/record.js`](web/record.js) scripts the whole timeline, so every recording is the same apart from pids and times. It runs one headless Chromium page that frames a [ttyd](https://github.com/tsl0922/ttyd) terminal and `hallpass web` (whose `frame-ancestors`/`X-Frame-Options` headers it drops in that browser only), types the commands, clicks the answers with a drawn pointer and records the page with Puppeteer's screencast. The session gets its own `HOME`, `XDG_RUNTIME_DIR` and `XDG_CONFIG_HOME` in `WORKDIR`, so `hallpass web` only sees this session and the demo commands never write in your home.
 
