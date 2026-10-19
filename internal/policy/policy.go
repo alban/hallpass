@@ -257,6 +257,9 @@ type Context struct {
 	// Groups are the program groups, resolved as the sandbox finds them:
 	// for the policy's AllowGroups, and offered by prompts.
 	Groups []programs.Group
+	// AllowGroups are groups allowed to run without asking, after the
+	// policy's: the implicit ones (programs.Implicit).
+	AllowGroups []string
 	// Lexical: the paths are in another mount namespace (a container's),
 	// only cleaned and not symlink-resolved (defaults.NewLexical).
 	Lexical bool
@@ -290,7 +293,12 @@ func (p Policy) Defaults(c Context) *defaults.Defaults {
 		d.AllowExec(m.Path, m.Tree)
 	}
 	d.SetGroups(c.Groups)
+	// The policy's groups first: a program in several is listed under the
+	// one asked for.
 	for _, g := range p.AllowGroups {
+		d.AllowGroup(g)
+	}
+	for _, g := range c.AllowGroups {
 		d.AllowGroup(g)
 	}
 	for _, m := range p.DenyExec {

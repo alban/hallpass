@@ -114,7 +114,7 @@ func parseFlags(argv []string, printPolicy bool) (o options, code int, ok bool) 
 	fs.StringVar(&o.workdir, "workdir", "", "same as -C")
 	fs.Var(&allow, "allow", "`path` also writable without asking (repeatable)")
 	fs.Var(&deny, "deny", "`path` always denied (repeatable, wins over --allow)")
-	fs.BoolVar(&o.noImplicit, "no-implicit", false, "allowed without asking: only the --allow paths and --allow-exec programs (no project dir, $TMPDIR, devices or terminal; the command still runs)")
+	fs.BoolVar(&o.noImplicit, "no-implicit", false, "allowed without asking: only the --allow paths and --allow-exec programs (no project dir, $TMPDIR, devices, terminal or implicit program groups; the command still runs)")
 	fs.BoolVar(&o.allowTTY, "allow-tty", true, "the session's own terminal (/dev/tty, its /dev/pts/N) is writable without asking; --no-implicit turns it off unless given explicitly")
 	fs.StringVar(&o.ask, "ask", "auto", "how to ask: auto | term | desktop | answer | deny | allow (allow and log: audit)")
 	fs.DurationVar(&o.timeout, "timeout", 30*time.Second, "deny unanswered prompts after `duration` (0: wait forever)")
@@ -375,8 +375,8 @@ func (o *options) buildPolicy(home string) *defaults.Defaults {
 	c := policy.Context{Home: home, Deny: o.deny}
 	if o.policy.Mediate&seccomp.Exec != 0 {
 		// The command is named on the command line: it is explicit, kept
-		// with --no-implicit. Groups are allowed only when asked for, by
-		// --allow-exec=@name or a "group" answer.
+		// with --no-implicit. Groups are allowed by --allow-exec=@name, a
+		// "group" answer, or implicitly (programs.Implicit).
 		c.Execs = lookPrograms(o.workdir, o.args[:1])
 		c.Groups = programs.Finder{Path: os.Getenv("PATH"), Resolve: filepath.EvalSymlinks}.Groups(o.policy.GroupDefs())
 	}
@@ -384,6 +384,9 @@ func (o *options) buildPolicy(home string) *defaults.Defaults {
 		c.Workdir = o.workdir
 		c.Allow = defaults.DefaultAllows()
 		c.OwnListeners = o.policy.Mediate&seccomp.Network != 0
+		if o.policy.Mediate&seccomp.Exec != 0 {
+			c.AllowGroups = programs.Implicit()
+		}
 	}
 	return o.policy.Defaults(c)
 }

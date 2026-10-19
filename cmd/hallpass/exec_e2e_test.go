@@ -99,23 +99,28 @@ check missing ./missing
 	}
 }
 
-// TestExecGroups: only the command runs without asking, unless a group is
-// allowed; an unknown group is an error.
+// TestExecGroups: the command and the implicit groups run without asking;
+// with --no-implicit, only the command, unless a group is allowed; an
+// unknown group is an error.
 func TestExecGroups(t *testing.T) {
 	for _, mode := range modes(t) {
 		t.Run(mode, func(t *testing.T) {
 			e := newEnv(t)
 			script := checkExec + "check ls ls /\ncheck cat cat /dev/null\necho end=$?"
+			bare := []string{"--no-implicit", "--allow=/dev/null"}
 			for _, tc := range []struct {
 				flags   []string
 				ls, cat string
 			}{
-				{nil, "denied", "denied"},
-				{[]string{"--allow-exec=@coreutils"}, "allowed", "allowed"},
-				{[]string{"--no-implicit", "--allow=/dev/null", "--allow-exec=@search,@coreutils"}, "allowed", "allowed"},
+				{nil, "allowed", "allowed"},
+				{bare, "denied", "denied"},
+				{append(bare, "--allow-exec=@coreutils"), "allowed", "allowed"},
+				{append(bare, "--allow-exec=@search,@coreutils"), "allowed", "allowed"},
 				// A group of one's own, and one replacing a built-in group.
-				{[]string{"--group=@mine=ls", "--allow-exec=@mine"}, "allowed", "denied"},
-				{[]string{"--group=@coreutils=cat", "--allow-exec=@coreutils"}, "denied", "allowed"},
+				{append(bare, "--group=@mine=ls", "--allow-exec=@mine"), "allowed", "denied"},
+				{append(bare, "--group=@coreutils=cat", "--allow-exec=@coreutils"), "denied", "allowed"},
+				// Replacing an implicit group changes what is implicit.
+				{[]string{"--group=@coreutils=cat"}, "denied", "allowed"},
 			} {
 				c := e.rawCmd(script, append([]string{"--mode=" + mode, "--ask=deny"}, tc.flags...)...)
 				out, err := c.CombinedOutput()
@@ -157,6 +162,20 @@ func TestExecGroupsPrint(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "@mine (ls, cat: 2 programs)") {
 		t.Errorf("policy with --group:\n%s", out)
+	}
+	for _, noImplicit := range []bool{false, true} {
+		args := []string{"policy", "--", "sh"}
+		if noImplicit {
+			args = []string{"policy", "--no-implicit", "--", "sh"}
+		}
+		c = exec.Command(hallpassBin, args...)
+		c.Env = append(os.Environ(), "HOME="+e.home)
+		if out, err = c.CombinedOutput(); err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		if got := strings.Contains(string(out), "@git ("); got == noImplicit {
+			t.Errorf("--no-implicit %t: @git listed %t:\n%s", noImplicit, got, out)
+		}
 	}
 }
 
@@ -242,7 +261,7 @@ func TestExecPromptGroup(t *testing.T) {
 			e := newEnv(t)
 			bin := progs(t, e.root+"/bin", "other")
 			script := checkExec + "check ls ls /\ncheck cat cat /dev/null\ncheck other " + bin + "/other\n"
-			c := e.rawCmd(script, "--mode="+mode, "--ask=answer", "--timeout=20s")
+			c := e.rawCmd(script, "--mode="+mode, "--ask=answer", "--timeout=20s", "--no-implicit", "--allow=/dev/null", "--allow-tty")
 			var out strings.Builder
 			c.Stdout, c.Stderr = &out, &out
 			if err := c.Start(); err != nil {

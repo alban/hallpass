@@ -1,6 +1,6 @@
 # Records demos/media/exec.mp4: the programs a sandboxed shell runs. The
-# groups of programs given with --allow-exec run, others wait for an answer,
-# which covers that program or its group. See demos/README.md.
+# implicit groups of programs run, others wait for an answer, which covers
+# that program or its group. See demos/README.md.
 #
 # Run `make -C demos exec`. The Makefile runs it from the repository root,
 # sets the output with `vhs -o` and gives a fresh directory as $DEMO_DIR, used
@@ -18,7 +18,7 @@ Hide
 Type `export PATH=$PWD:$PATH PS1='$ ' HOME=$DEMO_DIR/home && mkdir -p $HOME && cp -r demos/example $DEMO_DIR/project && cd $DEMO_DIR/project && make -s && clear`
 Enter
 Sleep 2s
-Type@1ms `clear && printf '\n\n   \033[1mWhich programs run\033[0m\n\n   The groups of programs you allow run.\n   Other programs wait for your answer:\n   that program, or its whole group.\n' && sleep 4 && clear`
+Type@1ms `clear && printf '\n\n   \033[1mWhich programs run\033[0m\n\n   Common tools run: shells, coreutils, search, git.\n   Other programs wait for your answer:\n   that program, or its whole group.\n' && sleep 4 && clear`
 Enter
 Sleep 300ms
 Show
@@ -27,24 +27,24 @@ Hide
 Sleep 800ms
 Show
 
-Type "hallpass --allow-exec=@coreutils,@search -- sh"
+Type "hallpass --group=@build=make,cc -- sh"
 Sleep 300ms
 Enter
 Sleep 800ms
-Type "# common tools, allowed by group: no question"
+Type "# common tools, in the implicit groups: no question"
 Enter
 Type "ls && grep -n puts hello.c"
 Sleep 300ms
 Enter
 Sleep 1.5s
-Type "# git is in a group not allowed yet"
+Type "# make is in a group of my own, not allowed yet"
 Enter
-Type "git --version"
+Type "make --version | head -1"
 Sleep 300ms
 Enter
 Wait+Screen@10s /wants to exec/
 Sleep 4s
-# [g] group: allows git and its helpers.
+# [g] group: allows make and cc.
 Type "g"
 Sleep 2s
 Type "# another program: hallpass asks"

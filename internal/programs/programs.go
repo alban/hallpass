@@ -104,6 +104,12 @@ func Names() []string {
 	return out
 }
 
+// Implicit are the groups a workstation session allows without asking,
+// but for --no-implicit: what an agent runs all the time.
+func Implicit() []string {
+	return []string{"@shells", "@coreutils", "@search", "@git"}
+}
+
 // Builtin returns the built-in groups.
 func Builtin() []Def {
 	return Merge(nil)
