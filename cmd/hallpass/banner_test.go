@@ -17,9 +17,9 @@ func TestBanner(t *testing.T) {
 		menu   bool
 		want   string
 	}{
-		{false, &ui.Terminal{}, true, "hallpass: sandbox started (lite, session 42). Ctrl-] for the menu; run 'hallpass web' in another terminal for the full UI."},
-		{true, &ui.Terminal{}, true, "hallpass: sandbox started (strict, session 42). Ctrl-] for the menu; run 'hallpass web' in another terminal for the full UI."},
-		{false, &ui.Desktop{}, false, "hallpass: sandbox started (lite, session 42). Requests show as desktop notifications; run 'hallpass web' in another terminal for the full UI."},
+		{false, &ui.Terminal{}, true, "hallpass: sandbox started (lite, session 42). Ctrl-] for the menu, then w for the web UI; 'hallpass web' in another terminal for all sessions."},
+		{true, &ui.Terminal{}, true, "hallpass: sandbox started (strict, session 42). Ctrl-] for the menu, then w for the web UI; 'hallpass web' in another terminal for all sessions."},
+		{false, &ui.Desktop{}, false, "hallpass: sandbox started (lite, session 42). Requests show as desktop notifications, click one for the web UI; 'hallpass web' in another terminal for all sessions."},
 		{false, ui.Remote{}, false, "hallpass: sandbox started (lite, session 42). Answer from another terminal: 'hallpass answer 42', or 'hallpass web' for the full UI."},
 		{false, ui.AutoDeny{}, false, "hallpass: sandbox started (lite, session 42). Requests are denied without asking (--ask=deny)."},
 		{false, ui.AutoAllow{}, false, "hallpass: sandbox started (lite, session 42). Requests are allowed without asking (--ask=allow)."},

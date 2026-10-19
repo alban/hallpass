@@ -76,6 +76,9 @@ type session struct {
 
 	// web is the session's own web UI, started on demand.
 	web sessionWeb
+	// ports denies the sandbox the web UIs' ports; nil when the network
+	// is not mediated.
+	ports *portGuard
 }
 
 // runSession starts the command under the monitor, until it exits, and
@@ -130,6 +133,7 @@ func runSession(cfg sessionConfig) (int, error) {
 		if err := g.protect(sessionapi.ProtectedPorts()); err != nil {
 			return 0, err
 		}
+		s.ports = g
 	}
 	defer s.closeWeb()
 	if d, ok := cfg.Asker.(*ui.Desktop); ok {

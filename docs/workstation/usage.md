@@ -36,7 +36,7 @@ Writes to known secret stores (`~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.c
 When the sandbox starts, hallpass prints one line on stderr with the mode, the session number (hallpass's pid, as `hallpass answer` and `hallpass web` show it) and where to answer:
 
 ```
-hallpass: sandbox started (lite, session 1234). Ctrl-] for the menu; run 'hallpass web' in another terminal for the full UI.
+hallpass: sandbox started (lite, session 1234). Ctrl-] for the menu, then w for the web UI; 'hallpass web' in another terminal for all sessions.
 ```
 
 Press Ctrl-] inside a session to see its current rules, including answers given so far; `w` opens the session's [web UI](../answers/web.md#from-a-session), any other key closes the overlay.

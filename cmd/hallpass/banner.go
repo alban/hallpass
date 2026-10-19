@@ -19,7 +19,7 @@ func banner(strict bool, pid int, asker ui.Asker, menu bool) string {
 		mode = "strict"
 	}
 	s := fmt.Sprintf("hallpass: sandbox started (%s, session %d).", mode, pid)
-	const web = "run 'hallpass web' in another terminal for the full UI."
+	const all = "'hallpass web' in another terminal for all sessions."
 	switch asker.(type) {
 	case ui.AutoDeny:
 		return s + " Requests are denied without asking (--ask=deny)."
@@ -28,10 +28,10 @@ func banner(strict bool, pid int, asker ui.Asker, menu bool) string {
 	case ui.Remote:
 		return s + fmt.Sprintf(" Answer from another terminal: 'hallpass answer %d', or 'hallpass web' for the full UI.", pid)
 	case *ui.Desktop:
-		return s + " Requests show as desktop notifications; " + web
+		return s + " Requests show as desktop notifications, click one for the web UI; " + all
 	}
 	if menu {
-		return s + " Ctrl-] for the menu; " + web
+		return s + " Ctrl-] for the menu, then w for the web UI; " + all
 	}
-	return s + " R" + web[1:]
+	return s + " Run 'hallpass web' in another terminal for the full UI."
 }

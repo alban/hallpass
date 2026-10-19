@@ -57,7 +57,8 @@ either. The server is restricted to the session:
 The server dials the session's own socket, like any client; the peer
 check passes since the session is not under a seccomp filter. Pairing,
 the credential, the event stream and the rule editing so stay in one
-place.
+place. Its port is protected like `hallpass web`'s (see
+[Protected denials](#protected-denials)).
 
 A body click must not dismiss the request: the request's notification
 gets a `default` action and the `resident` hint, and hallpass closes it
@@ -210,7 +211,7 @@ even after "allow all networking":
 - with the network mediated: `connect`/`sendto` to the unix sockets under
   that directory (the sessions' answer sockets, which already reject
   sandboxed peers, now unreachable), and to the TCP/UDP ports registered
-  by `hallpass web`, at any address.
+  by `hallpass web` and by the sessions' own web UIs, at any address.
 
 They are shown with their label (`hallpass sessions`, `hallpass web UI`)
 in the Ctrl-] menu and `hallpass policy`.
@@ -238,6 +239,11 @@ exits. A file is trusted only if it is a regular file of this user (read
 with `O_NOFOLLOW`) and its pid is alive; the directory is 0700, and the
 sandbox cannot write to it.
 
+A session's own web UI registers its port the same way, under the
+session's pid, when it starts, and removes it when the session exits. A
+session that mediates the network also denies the port to its own
+sandbox right away, before the page opens, rather than when its watch
+sees the file; if it cannot, the web UI does not start.
 A push over the session API (web calling each session) was considered:
 it needs the file anyway for sessions started later, and `hallpass web`
 only discovers sessions when the page asks.

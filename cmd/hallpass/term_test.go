@@ -85,8 +85,8 @@ func runTerm(t *testing.T, e env, script string) (m *os.File, scr *screen, c *ex
 }
 
 // runTermAfter is runTerm on a screen already showing pre, as when hallpass
-// is started from a shell.
-func runTermAfter(t *testing.T, e env, pre, script string) (m *os.File, scr *screen, c *exec.Cmd, done chan struct{}) {
+// is started from a shell. flags are added to hallpass's.
+func runTermAfter(t *testing.T, e env, pre, script string, flags ...string) (m *os.File, scr *screen, c *exec.Cmd, done chan struct{}) {
 	t.Helper()
 	m, s := openPTY(t)
 	t.Cleanup(func() { m.Close() })
@@ -106,7 +106,7 @@ func runTermAfter(t *testing.T, e env, pre, script string) (m *os.File, scr *scr
 		}
 	}()
 
-	c = e.cmd(script, "--ask=term", "--timeout=20s")
+	c = e.cmd(script, append([]string{"--ask=term", "--timeout=20s"}, flags...)...)
 	c.Stdin, c.Stdout, c.Stderr = s, s, s
 	c.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
 	if err := c.Start(); err != nil {

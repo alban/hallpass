@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/alban/hallpass/internal/sessionapi"
 	"github.com/alban/hallpass/internal/ui"
 	"github.com/alban/hallpass/internal/web"
 )
@@ -25,6 +26,8 @@ type sessionWeb struct {
 	srv *web.Server
 	hs  *http.Server
 	url string
+	// unregister removes the port from the protected ports.
+	unregister func()
 }
 
 // openWeb starts the session's web UI if needed, lets one browser pair, and
@@ -66,6 +69,24 @@ func (s *session) startWeb() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// Registered as hallpass web does: the sessions that mediate the
+	// network deny their sandboxes connections to the port.
+	ports := protectPorts(ln.Addr(), "")
+	unregister, err := sessionapi.RegisterPorts(ports)
+	if err != nil {
+		go s.notice(fmt.Sprintf("hallpass: web UI: registering the port with the sessions: %v; their sandboxes can connect to it", err))
+		unregister = func() {}
+	}
+	// This sandbox now, before the page opens, not when the watch sees
+	// the file.
+	if s.ports != nil {
+		if err := s.ports.protect(ports); err != nil {
+			unregister()
+			ln.Close()
+			return "", err
+		}
+	}
+	w.unregister = unregister
 	w.srv = web.NewSession(os.Getpid())
 	w.srv.Confirm = s.confirmPair
 	w.srv.Warn = func(msg string) { go s.notice("hallpass: " + msg) }
@@ -83,6 +104,7 @@ func (s *session) closeWeb() {
 	if w.hs != nil {
 		_ = w.hs.Close()
 		w.srv.Close()
+		w.unregister()
 	}
 }
 
