@@ -234,8 +234,7 @@ function openSession(info) {
   (async () => {
     while (!s.ended) {
       try {
-        const vis = watching() ? "1" : "0";
-        await sse(`/api/sessions/${encodeURIComponent(pid)}/events?tab=${tabID}&visible=${vis}`, s.abort.signal, (type, data) => {
+        await sse(`/api/sessions/${encodeURIComponent(pid)}/events?tab=${tabID}&visible=${watching() ? "1" : "0"}&seq=${watchSeq}`, s.abort.signal, (type, data) => {
           if (type === "end") endSession(pid);
           else if (!s.ended) onBatch(pid, s, JSON.parse(data));
         });
@@ -561,12 +560,15 @@ document.getElementById("pair-again").addEventListener("click", pair);
 function watching() {
   return document.visibilityState === "visible" && document.hasFocus();
 }
+// Numbers the reports: the server keeps the latest, whatever the order the
+// requests arrive in.
+let watchSeq = 0;
 function reportWatching() {
   if (pairState !== "paired") return;
   api("/api/visibility", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ tab: tabID, visible: watching() }),
+    body: JSON.stringify({ tab: tabID, visible: watching(), seq: ++watchSeq }),
   }).catch(() => {});
 }
 document.addEventListener("visibilitychange", reportWatching);

@@ -91,6 +91,7 @@ type Server struct {
 type tab struct {
 	streams int // open event streams
 	visible bool
+	seq     uint64 // the page's count of reports, against reordering
 }
 
 // pairing is a browser's request to pair. id names it to its browser only;
@@ -563,7 +564,13 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	if id := r.URL.Query().Get("tab"); id != "" && len(id) <= 64 {
 		visible := r.URL.Query().Get("visible") == "1"
-		s.updateTab(id, func(t *tab) { t.streams++; t.visible = visible })
+		seq, _ := strconv.ParseUint(r.URL.Query().Get("seq"), 10, 64)
+		s.updateTab(id, func(t *tab) {
+			t.streams++
+			if seq >= t.seq {
+				t.visible, t.seq = visible, seq
+			}
+		})
 		defer s.updateTab(id, func(t *tab) { t.streams-- })
 	}
 	batches := make(chan *pb.EventBatch)
@@ -641,12 +648,14 @@ func (s *Server) updateTab(id string, f func(*tab)) {
 	}
 }
 
-// visibility records whether a page is visible, from its visibilitychange
-// events; its event streams carry the first value.
+// visibility records whether a page is watched, from its visibilitychange,
+// focus and blur events; its event streams carry the first value. Each
+// report is numbered: concurrent requests may arrive out of order.
 func (s *Server) visibility(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Tab     string `json:"tab"`
 		Visible bool   `json:"visible"`
+		Seq     uint64 `json:"seq"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -655,7 +664,11 @@ func (s *Server) visibility(w http.ResponseWriter, r *http.Request) {
 	_, ok := s.tabs[req.Tab]
 	s.mu.Unlock()
 	if ok {
-		s.updateTab(req.Tab, func(t *tab) { t.visible = req.Visible })
+		s.updateTab(req.Tab, func(t *tab) {
+			if req.Seq > t.seq {
+				t.visible, t.seq = req.Visible, req.Seq
+			}
+		})
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

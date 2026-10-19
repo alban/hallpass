@@ -367,12 +367,18 @@ func TestWatching(t *testing.T) {
 		}
 		return resp
 	}
-	visibility := func(tab string, visible bool) {
+	post := func(tab string, visible bool, seq int) {
 		t.Helper()
-		body := fmt.Sprintf(`{"tab":%q,"visible":%v}`, tab, visible)
+		body := fmt.Sprintf(`{"tab":%q,"visible":%v,"seq":%d}`, tab, visible, seq)
 		if resp := c.do("POST", "/api/visibility", body); resp.StatusCode != http.StatusNoContent {
 			t.Fatalf("visibility: %s", resp.Status)
 		}
+	}
+	seq := map[string]int{}
+	visibility := func(tab string, visible bool) {
+		t.Helper()
+		seq[tab]++
+		post(tab, visible, seq[tab])
 	}
 
 	hiddenTab := follow("a", "0")
@@ -388,6 +394,8 @@ func TestWatching(t *testing.T) {
 	none()
 	visibility("a", true)
 	expect(true)
+	post("a", false, seq["a"]-1) // an older report, arriving late
+	none()
 	hiddenTab.Body.Close()
 	expect(false)
 	if resp := (client{t: t, url: c.url}).do("POST", "/api/visibility", `{"tab":"a","visible":true}`); resp.StatusCode != http.StatusUnauthorized {

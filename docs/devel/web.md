@@ -152,8 +152,9 @@ Shaped for the UI, not for the monitor, and free to change with it:
 - `POST /api/sessions/{pid}/answer`: `{request, answer}` with the same
   answers as the terminal (once, temp, always, never, deny).
 - `POST /api/sessions/{pid}/rules`: remove a rule, or a set.
-- `POST /api/visibility`: `{tab, visible}`, on the page's
-  `visibilitychange`, `focus` and `blur` events.
+- `POST /api/visibility`: `{tab, visible, seq}`, on the page's
+  `visibilitychange`, `focus` and `blur` events. `seq` numbers the page's
+  reports, which may arrive out of order: the server keeps the latest.
 
 Request ids are JSON strings (protojson writes 64-bit integers as
 strings).
