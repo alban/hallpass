@@ -18,8 +18,13 @@
   </nav>
   <p class="experimental">Experimental: a sandboxed agent that reads this browser's cookies can answer its own requests. See docs/devel/web.md.</p>
 </header>
-<section id="sessions"></section>
-<main>
+<section id="pairing" hidden>
+  <p id="pair-text"></p>
+  <p id="pair-code"></p>
+  <button id="pair-again" hidden>Pair again</button>
+</section>
+<section id="sessions" hidden></section>
+<main hidden>
   <section id="view-pending"></section>
   <section id="view-activity" hidden>
     <input id="filter" type="search" placeholder="Filter: path, process, session, allow, deny, reason…">
@@ -27,6 +32,5 @@
   </section>
   <section id="view-rules" hidden></section>
 </main>
-<p id="unpaired" hidden>Not paired: open the link printed by <code>hallpass web</code> (press Enter in its terminal for a new one).</p>
 </body>
 </html>

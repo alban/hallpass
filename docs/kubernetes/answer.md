@@ -36,7 +36,7 @@ port-forward: the pending requests, the activity and the rules of every
 session on that node, named `namespace/pod/container`.
 
 ```
-hallpass web --node 127.0.0.1:7323                  # prints a pairing link
+hallpass web --node 127.0.0.1:7323                  # prints the page's address, asks to confirm its pairing code
 ```
 
 <video src="../../assets/demos/kube-web.mp4" poster="../../assets/demos/kube-web.png" controls muted playsinline aria-label="kubectl exec into a sandboxed pod on the left and hallpass web --node on the right: a write in /workspace goes through, a write to /etc/profile is denied from the browser, a write to /etc/agent.conf is allowed once"></video>

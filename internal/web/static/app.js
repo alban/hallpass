@@ -188,7 +188,77 @@ function endSession(pid) {
   markDirty();
 }
 
+// Pairing: the page shows a code, and hallpass asks the user to confirm it
+// where the sandbox can neither see nor answer: the terminal running hallpass
+// web, the session's terminal, or a desktop notification.
+let pairState = "unpaired"; // "pairing", "paired"
+
+function showPairing(text, code) {
+  document.getElementById("pairing").hidden = false;
+  document.getElementById("sessions").hidden = true;
+  document.querySelector("main").hidden = true;
+  document.getElementById("pair-text").textContent = text;
+  document.getElementById("pair-code").textContent = code ? "Pairing code: " + code : "";
+  document.getElementById("pair-again").hidden = pairState !== "unpaired";
+}
+
+function showPaired() {
+  document.getElementById("pairing").hidden = true;
+  document.getElementById("sessions").hidden = false;
+  document.querySelector("main").hidden = false;
+}
+
+function unpaired(text) {
+  pairState = "unpaired";
+  for (const pid of sessions.keys()) endSession(pid);
+  sessions.clear();
+  showPairing(text);
+}
+
+async function pair() {
+  if (pairState !== "unpaired") return;
+  pairState = "pairing";
+  showPairing("Asking hallpass to pair…");
+  try {
+    let r = await fetch("/api/pair", { method: "POST" });
+    if (!r.ok) throw new Error((await r.text()).trim() || r.statusText);
+    const { id, code } = await r.json();
+    showPairing("hallpass asks you to confirm this code: in the terminal running hallpass web, " +
+      "or in the session's terminal or desktop notification. Confirm only if it shows the same code.", code);
+    r = await fetch("/api/pair/wait", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    if (!r.ok) throw new Error((await r.text()).trim() || r.statusText);
+  } catch (e) {
+    pairState = "unpaired";
+    showPairing(e.message);
+    return;
+  }
+  pairState = "paired";
+  showPaired();
+  refreshSessions();
+}
+
+// start pairs, unless this browser still has the cookie.
+async function start() {
+  try {
+    const r = await fetch("/api/sessions");
+    if (r.ok) {
+      pairState = "paired";
+      showPaired();
+      refreshSessions();
+      return;
+    }
+  } catch (e) {
+    // Pair anyway: it says what goes wrong.
+  }
+  pair();
+}
+
 async function refreshSessions() {
+  if (pairState !== "paired") return;
   let r;
   try {
     r = await fetch("/api/sessions");
@@ -196,8 +266,7 @@ async function refreshSessions() {
     return;
   }
   if (r.status === 401) {
-    document.getElementById("unpaired").hidden = false;
-    document.querySelector("main").hidden = true;
+    unpaired("Not paired any more (hallpass web restarted?).");
     return;
   }
   if (!r.ok) return;
@@ -417,6 +486,7 @@ for (const b of document.querySelectorAll("nav button")) {
   });
 }
 document.getElementById("filter").addEventListener("input", renderActivity);
+document.getElementById("pair-again").addEventListener("click", pair);
 
-refreshSessions();
+start();
 setInterval(refreshSessions, 2000);

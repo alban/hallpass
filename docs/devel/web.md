@@ -77,10 +77,14 @@ Both ends check each other with `SO_PEERCRED`:
 
 Shaped for the UI, not for the monitor, and free to change with it:
 
-- `GET /pair?token=`: exchanges the pairing token for the cookie.
+- `POST /api/pair`: starts pairing this browser; returns `{id, code}`.
+  `hallpass web` asks the user to confirm the code (see
+  [Security](#security)).
+- `POST /api/pair/wait`: `{id}`; waits for the user's answer, and sets the
+  cookie if they confirmed.
 - `GET /` and static assets: one page, embedded (`go:embed`), no build
-  step. They need the cookie too: an unpaired browser gets a plain 401.
-- `GET /favicon.svg`: the logo, without the cookie.
+  step. They hold no secret, and are served before pairing, to pair.
+- `GET /favicon.svg`: the logo.
 - `GET /api/sessions`: the sessions and their `Info`.
 - `GET /api/sessions/{pid}/snapshot`: pending requests and rules.
 - `GET /api/sessions/{pid}/events`: server-sent events; first the
@@ -131,14 +135,22 @@ Measures:
 - **Headers**: `Content-Security-Policy: default-src 'self';
   frame-ancestors 'none'`, `X-Frame-Options: DENY`, `Cache-Control:
   no-store`. The page renders all session data as text, never as HTML.
-- **One-time pairing token**: `hallpass web` prints
-  `http://127.0.0.1:<port>/pair?token=<random>` on its own terminal. The
-  first request exchanges it for a session cookie (`HttpOnly`,
-  `SameSite=Strict`, no expiry, random per `hallpass web` process) and
-  burns it; Enter prints a new one. Not passed on a command line by
-  default (`/proc/<pid>/cmdline` is readable by the same user); `--open`
-  runs `xdg-open` anyway, for convenience. Stops other users and web
-  pages.
+- **Pairing code**: the page shows a short code ("Pairing code: 482 913"),
+  and `hallpass web` asks on its own terminal "Pair the browser showing
+  482 913? [y/n]". Once confirmed, the browser gets a session cookie
+  (`HttpOnly`, `SameSite=Strict`, no expiry, random per `hallpass web`
+  process). The URL holds no secret, so `--open` can pass it to
+  `xdg-open`. The code only needs to be authentic, not secret: the sandbox
+  can neither read nor answer `hallpass web`'s terminal. The risk is a
+  sandboxed process starting its own pairing just before the browser, and
+  the user confirming without comparing codes, so:
+  - at most one pairing is pending: another request cancels both and
+    warns that something else tried to pair. The user's browser always
+    asks too, so a sandbox racing it shows up as that warning, never as a
+    second code to tell apart;
+  - a pairing expires after 60 seconds, or when its page goes away.
+
+  Stops other users and web pages.
 - **Blocked at the source, with network mediation**: a session that
   mediates the network (`--mediate=files,exec,network`) denies its
   sandbox every connection to the web UI's ports and to the session
@@ -181,7 +193,7 @@ next registration). Each session that mediates the network:
    their ports;
 4. then starts the sandbox.
 
-`hallpass web` registers before it prints the pairing link, so a web UI
+`hallpass web` registers before it prints its URL, so a web UI
 started first is denied before the sandbox runs, and one started later is
 denied a few milliseconds after it registers, before anyone can pair a
 browser with it. Each session only adds denials; it keeps them until it
@@ -203,9 +215,10 @@ loopback, which no workload reaches, so no denial is needed there; a
 local `hallpass web --node` through a port-forward registers the
 forwarded port.
 
-**Known hole without network mediation**: the token and the cookie do not
-stop the sandbox. It cannot read the token (printed on the web process's
-terminal), but it can read the cookie from the browser profile (plaintext
+**Known hole without network mediation**: pairing does not stop the
+sandbox from reading the cookie: it cannot see the code's confirmation
+(asked on the web process's terminal), but it can read the cookie from
+the browser profile (plaintext
 in Firefox's `cookies.sqlite`; Chrome encrypts it with the keyring), then
 connect to 127.0.0.1 and approve its own requests. This is weaker than
 the terminal answer socket, which rejects peers with a seccomp filter.

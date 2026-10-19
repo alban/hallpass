@@ -47,21 +47,53 @@ const Client = "hallpass web"
 
 const cookieName = "hallpass-web"
 
+// PairTimeout is how long a pairing waits for the user's confirmation.
+const PairTimeout = 60 * time.Second
+
 // Server is the web UI. Its zero value is not usable: see New.
 type Server struct {
 	// SocketDir is where the sessions' sockets are.
 	SocketDir string
 
+	// Confirm asks the user whether to pair the browser showing code
+	// ("482 913"), somewhere the sandbox cannot answer: hallpass web's
+	// terminal, the session's overlay or a desktop notification. It
+	// returns false when ctx ends: the pairing expired, or was cancelled.
+	// Without it, browsers cannot pair.
+	Confirm func(ctx context.Context, code string) bool
+	// Warn, when set, tells the user something they should know, such as a
+	// pairing cancelled because another one started meanwhile.
+	Warn func(msg string)
+
 	// A node agent's session API, instead of SocketDir (see NewNode).
 	node     pb.SessionClient
 	nodeConn *grpc.ClientConn
 
-	cookie string // random per process
+	cookie      string // random per process
+	pairTimeout time.Duration
 
 	mu       sync.Mutex
-	token    string // the pairing token; "" once used
+	pairing  *pairing // the last pairing started, until the browser gets its result
 	sessions map[int]*session
 }
+
+// pairing is a browser's request to pair. id names it to its browser only;
+// code is shown both in the browser and by Confirm.
+type pairing struct {
+	id, code  string
+	cancel    context.CancelCauseFunc
+	cancelled bool          // by another pairing; guarded by Server.mu
+	done      chan struct{} // closed once decided; ok and err are set then
+	ok        bool
+	err       error // why not, when !ok
+}
+
+var (
+	errPairRefused   = errors.New("pairing refused in hallpass")
+	errPairExpired   = errors.New("pairing expired: nobody confirmed it in time")
+	errPairContended = errors.New("pairing cancelled: something else tried to pair at the same time")
+	errPairGone      = errors.New("pairing cancelled: the browser went away")
+)
 
 type session struct {
 	conn   *grpc.ClientConn
@@ -71,9 +103,10 @@ type session struct {
 // New returns a server for the sessions in sessionapi.SocketDir.
 func New() *Server {
 	return &Server{
-		SocketDir: sessionapi.SocketDir(),
-		cookie:    randomHex(32),
-		sessions:  map[int]*session{},
+		SocketDir:   sessionapi.SocketDir(),
+		cookie:      randomHex(32),
+		pairTimeout: PairTimeout,
+		sessions:    map[int]*session{},
 	}
 }
 
@@ -98,18 +131,24 @@ func randomHex(n int) string {
 	return hex.EncodeToString(b)
 }
 
-// NewToken returns a new one-time pairing token, replacing the previous.
-func (s *Server) NewToken() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.token = randomHex(16)
-	return s.token
+// randomCode returns a pairing code: six random digits, grouped by three.
+func randomCode() string {
+	b := make([]byte, 4)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
+	n := (uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])) % 1000000
+	return fmt.Sprintf("%03d %03d", n/1000, n%1000)
 }
 
-// Close closes the connections to the sessions.
+// Close closes the connections to the sessions, and cancels a pending
+// pairing.
 func (s *Server) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.pairing != nil {
+		s.pairing.cancel(errors.New("hallpass web stopped"))
+	}
 	for pid, c := range s.sessions {
 		c.conn.Close()
 		delete(s.sessions, pid)
@@ -124,12 +163,14 @@ func (s *Server) Handler() http.Handler {
 	sub, _ := fs.Sub(static, "static")
 	files := http.FileServerFS(sub)
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /pair", s.pair)
+	mux.HandleFunc("POST /api/pair", s.pair)
+	mux.HandleFunc("POST /api/pair/wait", s.pairWait)
 	mux.HandleFunc("GET /favicon.svg", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "image/svg+xml")
 		_, _ = w.Write(hallpass.Logo)
 	})
-	mux.Handle("GET /", s.auth(files.ServeHTTP))
+	// The page holds no secret: it is served before pairing, to pair.
+	mux.Handle("GET /", files)
 	mux.Handle("GET /api/sessions", s.auth(s.list))
 	mux.Handle("GET /api/sessions/{key}/snapshot", s.auth(s.snapshot))
 	mux.Handle("GET /api/sessions/{key}/events", s.auth(s.events))
@@ -175,31 +216,116 @@ func checkOrigin(next http.Handler) http.Handler {
 	})
 }
 
-// pair exchanges the one-time token for the session cookie.
+// pair starts pairing a browser. It returns the pairing's id, which only
+// this browser learns, and its code, which the browser shows and Confirm
+// asks about; the browser then waits for the outcome with pairWait. At most
+// one pairing is pending: another request cancels both, so that a
+// sandboxed process racing the user's browser shows up as a warning
+// rather than as a second code to tell apart.
 func (s *Server) pair(w http.ResponseWriter, r *http.Request) {
-	tok := r.URL.Query().Get("token")
+	if s.Confirm == nil {
+		http.Error(w, "This server cannot pair browsers.", http.StatusServiceUnavailable)
+		return
+	}
 	s.mu.Lock()
-	ok := s.token != "" && subtle.ConstantTimeCompare([]byte(tok), []byte(s.token)) == 1
-	if ok {
-		s.token = ""
+	if old := s.pairing; old != nil && !old.cancelled && !old.decided() {
+		old.cancelled = true
+		old.cancel(errPairContended)
+		s.mu.Unlock()
+		s.warn("two browsers tried to pair at once: both pairings cancelled. If you opened only one page, something else tried to pair, maybe the sandbox.")
+		http.Error(w, errPairContended.Error(), http.StatusConflict)
+		return
+	}
+	ctx, cancel := context.WithCancelCause(context.Background())
+	p := &pairing{id: randomHex(16), code: randomCode(), cancel: cancel, done: make(chan struct{})}
+	s.pairing = p
+	s.mu.Unlock()
+	go func() {
+		tctx, tcancel := context.WithTimeoutCause(ctx, s.pairTimeout, errPairExpired)
+		defer tcancel()
+		ok := s.Confirm(tctx, p.code)
+		switch {
+		case tctx.Err() != nil:
+			p.err = context.Cause(tctx)
+		case !ok:
+			p.err = errPairRefused
+		default:
+			p.ok = true
+		}
+		close(p.done)
+		cancel(nil)
+		// Forget the outcome if the browser does not come for it.
+		time.AfterFunc(s.pairTimeout, func() {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			if s.pairing == p {
+				s.pairing = nil
+			}
+		})
+	}()
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"id": p.id, "code": p.code})
+}
+
+func (p *pairing) decided() bool {
+	select {
+	case <-p.done:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Server) warn(msg string) {
+	if s.Warn != nil {
+		s.Warn(msg)
+	}
+}
+
+// pairWait waits for the outcome of the browser's pairing, and gives it
+// the session cookie if the user confirmed it. The browser going away
+// cancels the pairing.
+func (s *Server) pairWait(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID string `json:"id"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	s.mu.Lock()
+	p := s.pairing
+	s.mu.Unlock()
+	if p == nil || subtle.ConstantTimeCompare([]byte(req.ID), []byte(p.id)) != 1 {
+		http.Error(w, "No such pairing: reload the page to pair again.", http.StatusNotFound)
+		return
+	}
+	select {
+	case <-p.done:
+	case <-r.Context().Done():
+		p.cancel(errPairGone)
+		return
+	}
+	s.mu.Lock()
+	if s.pairing == p {
+		s.pairing = nil
 	}
 	s.mu.Unlock()
-	if !ok {
-		http.Error(w, "This pairing link is not valid (it works once). Press Enter in the terminal running hallpass web for a new one.", http.StatusForbidden)
+	if !p.ok {
+		http.Error(w, p.err.Error(), http.StatusForbidden)
 		return
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name: cookieName, Value: s.cookie, Path: "/",
 		HttpOnly: true, SameSite: http.SameSiteStrictMode,
 	})
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) auth(h http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c, err := r.Cookie(cookieName)
 		if err != nil || subtle.ConstantTimeCompare([]byte(c.Value), []byte(s.cookie)) != 1 {
-			http.Error(w, "Not paired: open the link printed by hallpass web.", http.StatusUnauthorized)
+			http.Error(w, "Not paired: reload the page to pair.", http.StatusUnauthorized)
 			return
 		}
 		h(w, r)

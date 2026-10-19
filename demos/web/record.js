@@ -112,18 +112,17 @@ async function main() {
 
   const web = start(HALLPASS, ["web"], { env, stdio: ["pipe", "pipe", "pipe"] });
   let webOut = "";
-  const pairURL = await new Promise((resolve, reject) => {
-    const on = d => {
-      webOut += d;
-      const m = webOut.match(/(http:\/\/127\.0\.0\.1:\d+)\/pair\?token=\w+/);
-      if (m) resolve(m[0]);
-    };
-    web.stdout.on("data", on);
-    web.stderr.on("data", on);
-    web.on("exit", c => reject(new Error(`hallpass web exited (${c}): ${webOut}`)));
-    setTimeout(() => reject(new Error("no pairing URL: " + webOut)), 10000);
-  });
-  const webBase = pairURL.replace(/\/pair.*/, "");
+  web.stdout.on("data", d => webOut += d);
+  web.stderr.on("data", d => webOut += d);
+  const waitWeb = async (re, what) => {
+    for (const end = Date.now() + 10000; Date.now() < end; await sleep(100)) {
+      const m = webOut.match(re);
+      if (m) return m[1];
+      if (web.exitCode !== null) break;
+    }
+    throw new Error(`hallpass web: no ${what}: ${webOut}`);
+  };
+  const webBase = await waitWeb(/open (http:\/\/127\.0\.0\.1:\d+)\//, "address");
 
   const ttydPort = await freePort();
   const ttydArgs = ["-i", "127.0.0.1", "-p", String(ttydPort), "-W",
@@ -161,10 +160,9 @@ async function main() {
     const errors = [];
     page.on("pageerror", e => errors.push(String(e)));
 
-    // Pair, then let the page frame hallpass web: it refuses to be framed
+    // Let the page frame hallpass web: it refuses to be framed
     // (frame-ancestors 'none', X-Frame-Options), so drop those headers on
     // its document. Only this recording browser sees the change.
-    await page.goto(pairURL);
     const cdp = await page.createCDPSession();
     await cdp.send("Fetch.enable", { patterns: [{ urlPattern: webBase + "/", requestStage: "Response" }] });
     cdp.on("Fetch.requestPaused", async ev => {
@@ -183,7 +181,14 @@ async function main() {
     const term = await frameOf("term");
     const webf = await frameOf("web");
     await term.waitForFunction(() => window.term && window.term.buffer, { timeout: 10000 });
-    await webf.waitForSelector("#sessions", { timeout: 10000 });
+    // Pair the web pane: confirm in hallpass web the code it shows.
+    await webf.waitForFunction(() => /\d{3} \d{3}/.test(document.getElementById("pair-code").textContent), { timeout: 10000 });
+    const shown = (await webf.$eval("#pair-code", e => e.textContent)).match(/\d{3} \d{3}/)[0];
+    const asked = await waitWeb(/Pair the browser showing (\d{3} \d{3})\?/, "pairing question");
+    if (asked !== shown) throw new Error(`pairing: hallpass web asks about ${asked}, the page shows ${shown}`);
+    await sleep(700); // hallpass web ignores what is typed right after it asks
+    web.stdin.write("y\n");
+    await webf.waitForSelector("#sessions:not([hidden])", { timeout: 10000 });
 
     const screen = () => term.evaluate(() => {
       const b = window.term.buffer.active, out = [];
