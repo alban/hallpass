@@ -61,6 +61,7 @@ adv longer 'check?op=write&path=` + e.home + `/adv/**&for=1h'
 adv deny 'request?op=write&path=` + e.home + `/no'
 adv bad 'request?op=read&path=/x'
 adv relative 'request?op=write&path=x'
+adv long "request?op=write&path=/$(printf %5000s | tr ' ' a)"
 `
 		c := e.cmd(script, "--mode="+mode, "--ask=answer", "--timeout=20s")
 		var out strings.Builder
@@ -104,6 +105,10 @@ adv relative 'request?op=write&path=x'
 				t.Errorf("output lacks %q", want)
 			}
 		}
+		// dash exits 127 for it, bash 126.
+		if want := strings.ToLower("long=" + unix.ENAMETOOLONG.Error() + " rc=12"); !strings.Contains(strings.ToLower(out.String()), want) {
+			t.Errorf("output lacks %q", want)
+		}
 		if b, err := os.ReadFile(e.home + "/adv/sub/f"); err != nil || string(b) != "x\n" {
 			t.Errorf("adv/sub/f: %q, %v", b, err)
 		}
@@ -120,7 +125,7 @@ func TestAdvanceNoAnswer(t *testing.T) {
 	advanceModes(t, func(t *testing.T, mode string) {
 		e := newEnv(t)
 		q := "request?op=write&path=" + e.home + "/x"
-		script := advanceScript + "adv req '" + q + "'\n"
+		script := advanceScript + "adv req '" + q + "'\nadv bad 'request?op=read&path=/x'\n"
 		for _, tc := range []struct {
 			flags []string
 			want  string
@@ -128,14 +133,18 @@ func TestAdvanceNoAnswer(t *testing.T) {
 			{[]string{"--ask=deny"}, advanceWant("req", unix.EPERM)},
 			{[]string{"--ask=answer", "--timeout=1s"}, advanceWant("req", unix.ETIMEDOUT)},
 			{[]string{"--ask=allow"}, advanceWant("req", unix.EALREADY)},
+			// execve is notified whatever the categories mediated.
+			{[]string{"--ask=deny", "--mediate=exec"}, advanceWant("req", unix.EPERM)},
 		} {
 			c := e.cmd(script, append([]string{"--mode=" + mode}, tc.flags...)...)
 			out, err := c.CombinedOutput()
 			if err != nil {
 				t.Fatalf("%v: %v\n%s", tc.flags, err, out)
 			}
-			if !strings.Contains(strings.ToLower(string(out)), tc.want+"\n") {
-				t.Errorf("%v: output lacks %q:\n%s", tc.flags, tc.want, out)
+			for _, want := range []string{tc.want, advanceWant("bad", unix.EINVAL)} {
+				if !strings.Contains(strings.ToLower(string(out)), want+"\n") {
+					t.Errorf("%v: output lacks %q:\n%s", tc.flags, want, out)
+				}
 			}
 		}
 	})

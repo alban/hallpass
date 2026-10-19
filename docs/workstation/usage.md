@@ -117,7 +117,7 @@ The query string:
 
 `/proc/self/hallpass/check?...`, with the same keys, asks whether a request would be needed, without asking you.
 
-hallpass never runs anything: the `execve` always fails, and its error number is the answer. A shell prints it (exit code 126, or 127 when there is no hallpass):
+hallpass never runs anything: the `execve` always fails, and its error number is the answer. A shell prints it (exit code 126, or 127 when there is no hallpass; dash also exits 127 for `ENAMETOOLONG`):
 
 | errno | Message | Meaning |
 |---|---|---|
