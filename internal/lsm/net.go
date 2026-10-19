@@ -100,17 +100,7 @@ func (s *Session) SyncNet(net NetRules) error {
 	if s.closed {
 		return errors.New("session closed")
 	}
-	now := time.Now()
-	mono := monotonic()
-	expiry := func(t time.Time) uint64 {
-		if t.IsZero() {
-			return forever
-		}
-		if !t.After(now) {
-			return 0
-		}
-		return mono + uint64(t.Sub(now))
-	}
+	expiry := expiryClock()
 
 	inet, err := inetTrie(s.id, net.Inet, expiry)
 	if err != nil {
@@ -120,36 +110,12 @@ func (s *Session) SyncNet(net NetRules) error {
 	if err != nil {
 		return err
 	}
-	for k, v := range inet {
-		if old, ok := s.inet[k]; ok && old == v {
-			continue
-		}
-		if err := s.l.inet.Update(k, v, ebpf.UpdateAny); err != nil {
-			return fmt.Errorf("update inet rule: %w", err)
-		}
-	}
-	for k := range s.inet {
-		if _, ok := inet[k]; !ok {
-			if err := s.l.inet.Delete(k); err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
-				return err
-			}
-		}
+	if err := syncMap(s.l.inet, s.inet, inet, same); err != nil {
+		return fmt.Errorf("update inet rules: %w", err)
 	}
 	s.inet = inet
-	for k, v := range abs {
-		if old, ok := s.abs[k]; ok && old == v {
-			continue
-		}
-		if err := s.l.abstract.Update(k, v, ebpf.UpdateAny); err != nil {
-			return fmt.Errorf("update abstract unix rule: %w", err)
-		}
-	}
-	for k := range s.abs {
-		if _, ok := abs[k]; !ok {
-			if err := s.l.abstract.Delete(k); err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
-				return err
-			}
-		}
+	if err := syncMap(s.l.abstract, s.abs, abs, same); err != nil {
+		return fmt.Errorf("update abstract unix rules: %w", err)
 	}
 	s.abs = abs
 
