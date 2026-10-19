@@ -115,6 +115,24 @@ func open() (*Diag, error) {
 // Close closes d.
 func (d *Diag) Close() error { return unix.Close(d.fd) }
 
+// Supported returns an error if this kernel cannot dump TCP or unix
+// sockets: without CONFIG_INET_DIAG or CONFIG_UNIX_DIAG, the dumps fail
+// with ENOENT.
+func Supported() error {
+	d, err := open()
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	if _, err := d.TCPListeners(1); err != nil {
+		return fmt.Errorf("sock_diag of TCP sockets: %w", err)
+	}
+	if _, err := d.UnixSockets(); err != nil {
+		return fmt.Errorf("sock_diag of unix sockets: %w", err)
+	}
+	return nil
+}
+
 // TCPListeners returns the TCP listeners, IPv4 and IPv6, on port (any
 // port if 0).
 func (d *Diag) TCPListeners(port uint16) ([]TCPListener, error) {

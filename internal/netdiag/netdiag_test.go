@@ -4,12 +4,15 @@
 package netdiag
 
 import (
+	"errors"
 	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"syscall"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 func sockIno(t *testing.T, c syscall.Conn) uint64 {
@@ -25,7 +28,17 @@ func sockIno(t *testing.T, c syscall.Conn) uint64 {
 	return st.Ino
 }
 
+// needSockDiag skips on kernels without CONFIG_INET_DIAG or
+// CONFIG_UNIX_DIAG, such as the CI's.
+func needSockDiag(t *testing.T) {
+	t.Helper()
+	if err := Supported(); errors.Is(err, unix.ENOENT) {
+		t.Skipf("kernel without sock_diag: %v", err)
+	}
+}
+
 func TestTCPListeners(t *testing.T) {
+	needSockDiag(t)
 	ln, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -97,6 +110,7 @@ func TestTCPCandidates(t *testing.T) {
 }
 
 func TestUnixSockets(t *testing.T) {
+	needSockDiag(t)
 	path := filepath.Join(t.TempDir(), "s")
 	ln, err := net.Listen("unix", path)
 	if err != nil {

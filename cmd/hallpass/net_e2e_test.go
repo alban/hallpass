@@ -17,6 +17,7 @@ import (
 	"unsafe"
 
 	"github.com/alban/hallpass/internal/lsm"
+	"github.com/alban/hallpass/internal/netdiag"
 	"golang.org/x/sys/unix"
 )
 
@@ -29,6 +30,16 @@ func modes(t *testing.T) []string {
 		t.Fatal("HALLPASS_REQUIRE_LSM=1: strict mode cannot run")
 	}
 	return m
+}
+
+// needSockDiag skips on kernels without CONFIG_INET_DIAG or
+// CONFIG_UNIX_DIAG, such as the CI's: listeners started inside the
+// sandbox are not detected there.
+func needSockDiag(t *testing.T) {
+	t.Helper()
+	if err := netdiag.Supported(); errors.Is(err, unix.ENOENT) {
+		t.Skipf("kernel without sock_diag: %v", err)
+	}
 }
 
 // TestMediateExec checks that --mediate without files leaves writes alone,
@@ -303,6 +314,9 @@ func TestNetInside(t *testing.T) {
 			{"no-implicit", []string{"--ask=deny", "--mediate=files,exec,network", "--no-implicit", "--allow=" + "/"}, "denied"},
 		} {
 			t.Run(mode+"/"+tc.name, func(t *testing.T) {
+				if tc.want == "ok" {
+					needSockDiag(t)
+				}
 				e := newEnv(t)
 				self, err := os.Executable()
 				if err != nil {
@@ -383,6 +397,7 @@ func TestNetAllow(t *testing.T) {
 // TestNetPrompt answers network prompts: address-only answers, and the
 // note on a listener started inside the sandbox.
 func TestNetPrompt(t *testing.T) {
+	needSockDiag(t)
 	for _, mode := range modes(t) {
 		t.Run(mode, func(t *testing.T) {
 			e := newEnv(t)

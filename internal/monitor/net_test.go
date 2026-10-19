@@ -5,12 +5,14 @@ package monitor
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net/netip"
 	"path/filepath"
 	"testing"
 	"unsafe"
 
+	"github.com/alban/hallpass/internal/netdiag"
 	"github.com/alban/hallpass/internal/rules"
 	"golang.org/x/sys/unix"
 )
@@ -208,6 +210,9 @@ func rulesDecision(rs ...rules.Rule) Decision { return Decision{AddRules: rs} }
 // TestNetOwnListener: listeners held by the workload (here, the test
 // process) get the OwnListener fact, which an implicit rule allows.
 func TestNetOwnListener(t *testing.T) {
+	if err := netdiag.Supported(); errors.Is(err, unix.ENOENT) {
+		t.Skipf("kernel without sock_diag: %v", err)
+	}
 	fx := setup(t, nil, false)
 	f := fx.f
 	ln := sock(t, unix.AF_INET, unix.SOCK_STREAM)
