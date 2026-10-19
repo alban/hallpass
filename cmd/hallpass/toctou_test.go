@@ -105,7 +105,7 @@ func swapPath(pid uint32, path string) error {
 // hallpass asked about another file: strict mode denies the open, as the
 // kernel checks the file actually opened. Lite mode only checks the path it
 // read, and the kernel opens the swapped one: a documented limitation (see
-// docs/design.md), asserted so that a change of behaviour is noticed.
+// docs/how-it-works/lite.md), asserted so that a change of behaviour is noticed.
 func checkTOCTOU(t *testing.T, e env, mode, out string) {
 	t.Helper()
 	secret, err := os.ReadFile(e.home + "/.ssh/id")

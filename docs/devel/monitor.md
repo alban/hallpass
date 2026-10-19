@@ -660,7 +660,7 @@ exec in `Config.Mediate` (the default), the monitor decides
 them with the `OpExec` rules: the program's path is read and resolved
 like a file's, plus the `#!` interpreters as the kernel will run them,
 and an undecided one is asked about (see
-[Programs](../design.md#programs)). Without it, the monitor continues
+[Programs](../how-it-works/exec.md)). Without it, the monitor continues
 them (`Reason.Builtin` "execve"). Either way, in strict mode the
 process is made a BPF member first. It costs one
 notification round trip per exec: about 0.2 ms on the arm64 test VM,

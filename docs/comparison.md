@@ -23,7 +23,7 @@ Most tools below are static: the policy is decided before the program runs, and 
 | [gVisor](https://gvisor.dev) | all syscalls | no | a userspace kernel | none | yes | with Docker | yes (RuntimeClass) |
 | Dev containers, VMs | everything outside the box | no | container runtime or hypervisor | varies | yes | yes | varies |
 
-"TOCTOU resistant" means the decision is taken on the object the kernel acts on. A supervisor that checks the syscall's arguments and then lets the kernel run it can be raced by a multi-threaded process; see [How it works](design.md#strict-mode-bpf-lsm).
+"TOCTOU resistant" means the decision is taken on the object the kernel acts on. A supervisor that checks the syscall's arguments and then lets the kernel run it can be raced by a multi-threaded process; see [How it works](how-it-works/strict.md#why-toctou).
 
 ## The tools
 

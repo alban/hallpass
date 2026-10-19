@@ -30,7 +30,7 @@ Everything the program starts (shells, compilers, `git`, `npm`, scripts) inherit
 
 Without a terminal, hallpass asks with a desktop notification, or from another terminal or a browser. See [Answers and rules](https://alban.github.io/hallpass/answers/) for what each answer does.
 
-> **Status: proof of concept.** It catches honest mistakes; it does not contain a hostile program yet. See the [security model](https://alban.github.io/hallpass/design/#security-model).
+> **Status: proof of concept.** It catches honest mistakes; it does not contain a hostile program yet. See the [security model](https://alban.github.io/hallpass/how-it-works/#security-model).
 
 ## Why
 
@@ -61,7 +61,7 @@ On [alban.github.io/hallpass](https://alban.github.io/hallpass/):
 - [Install](https://alban.github.io/hallpass/workstation/install/), [Usage](https://alban.github.io/hallpass/workstation/usage/) (default policy, agent CLIs, over ssh), [CLI reference](https://alban.github.io/hallpass/workstation/reference/) (flags), [Strict mode](https://alban.github.io/hallpass/workstation/strict/), [Use cases](https://alban.github.io/hallpass/workstation/use-cases/) (audit, CI, checking a tool's declared paths)
 - [Kubernetes](https://alban.github.io/hallpass/kubernetes/): sandbox pods with a node agent and answer from Headlamp
 - [Answers and rules](https://alban.github.io/hallpass/answers/), [Web UI](https://alban.github.io/hallpass/answers/web/), [Write a client](https://alban.github.io/hallpass/answers/api/) for the session API
-- [How it works](https://alban.github.io/hallpass/design/): design, security model and limitations
+- [How it works](https://alban.github.io/hallpass/how-it-works/): design, security model and limitations
 
 Developer notes are in [docs/devel/](docs/devel/).
 

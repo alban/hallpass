@@ -133,7 +133,7 @@ The request shows a card in every client (terminal, desktop notification, `hallp
  [g] grant for 30m  [d] deny  [Esc] dismiss
 ```
 
-`grant` adds the same rule as an answer to a prompt, with an expiry: Ctrl-] lists it, the web UI can remove it, and in [strict mode](../design.md) the kernel enforces it like the other rules. The call blocks until you answer.
+`grant` adds the same rule as an answer to a prompt, with an expiry: Ctrl-] lists it, the web UI can remove it, and in [strict mode](../how-it-works/strict.md) the kernel enforces it like the other rules. The call blocks until you answer.
 
 The query string:
 
@@ -225,4 +225,4 @@ hallpass answer                      # in another, to see prompts and reply
 
 The [web UI](../answers/web.md) (`hallpass web`, experimental) does the same in a browser, for every session of the user.
 
-See [Limitations](../design.md#limitations) for what hallpass does not cover.
+See [Limitations](../how-it-works/limitations.md) for what hallpass does not cover.

@@ -96,7 +96,7 @@ Policy changes apply to containers started afterwards: a running
 session keeps the policy it started with.
 
 The syscalls mediated are the same as `hallpass`'s: writes, renames,
-links, removals... (see [How it works](../design.md)), plus the programs
+links, removals... (see [Files](../how-it-works/files.md)), plus the programs
 run with `exec` in `mediate`, connections and sends with `network`, and new user and
 mount namespaces are refused. The policy is merged into the container's
 own seccomp profile (`RuntimeDefault`, `Localhost` or `Unconfined`):

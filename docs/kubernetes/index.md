@@ -53,7 +53,7 @@ flowchart LR
 ## Limitations
 
 - In lite mode, seccomp user notification is exposed to TOCTOU races
-  (see [How it works](../design.md)); strict mode closes them.
+  (see [Lite mode](../how-it-works/lite.md)); strict mode closes them.
 - Containers created while the agent is not running are not mediated,
   unless you [fail closed](install.md#fail-open).
 - Agent restarts keep the sessions only while `hallpass-fd-store` runs

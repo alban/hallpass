@@ -299,7 +299,7 @@ only discovers sessions when the page asks.
 
 Limits: in lite mode the address is read from the sandbox's memory, which
 it can change after the check (the TOCTOU gap of lite mode, see
-[design](../design.md)); strict mode checks the kernel's copy. A BPF prefix
+[Network](../how-it-works/network.md)); strict mode checks the kernel's copy. A BPF prefix
 holds 8 entries: many web UIs at once can exceed it; a session then
 fails to start, or prints a warning for a later registration. In
 Kubernetes, the node agent's session API listens on its own pod's
