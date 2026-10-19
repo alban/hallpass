@@ -105,15 +105,17 @@ func takeStale[K comparable, V any](stale map[uint32]map[K]V, id uint32, into *m
 // ID is the session's id in the kernel.
 func (s *Session) ID() uint32 { return s.id }
 
-// Bits of session_cfg.mediate.
+// Bits of session_cfg.mediate, those of seccomp.Category.
 const (
 	mediateFiles   = 1
+	mediateExec    = 2
 	mediateNetwork = 4
 )
 
 // Mediate sets what the programs check for the session's members: files,
-// network. Until it is called, a session mediates files only.
-func (s *Session) Mediate(files, network bool) error {
+// the programs they execute, network. Until it is called, a session
+// mediates files only.
+func (s *Session) Mediate(files, exec, network bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
@@ -122,6 +124,9 @@ func (s *Session) Mediate(files, network bool) error {
 	s.cfg.Mediate = 0
 	if files {
 		s.cfg.Mediate |= mediateFiles
+	}
+	if exec {
+		s.cfg.Mediate |= mediateExec
 	}
 	if network {
 		s.cfg.Mediate |= mediateNetwork

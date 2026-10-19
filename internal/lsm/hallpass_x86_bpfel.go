@@ -53,7 +53,7 @@ type hallpassEvent struct {
 type hallpassHpGrant struct {
 	_     structs.HostLayout
 	Seq   uint64
-	Nodes [2]uint64
+	Nodes [8]uint64
 	Proc  hallpassProcKey
 	Inet  [4]struct {
 		_     structs.HostLayout
@@ -148,21 +148,25 @@ type hallpassRuleKey struct {
 }
 
 type hallpassRuleVal struct {
-	_             structs.HostLayout
-	Cookie        uint64
-	AllowTree     uint64
-	AllowExact    uint64
-	NetAllowTree  uint64
-	NetAllowExact uint64
-	AskTree       uint64
-	AskExact      uint64
-	NetAskTree    uint64
-	NetAskExact   uint64
-	DenyTree      uint8
-	DenyExact     uint8
-	NetDenyTree   uint8
-	NetDenyExact  uint8
-	Pad           [4]uint8
+	_              structs.HostLayout
+	Cookie         uint64
+	AllowTree      uint64
+	AllowExact     uint64
+	NetAllowTree   uint64
+	NetAllowExact  uint64
+	AskTree        uint64
+	AskExact       uint64
+	NetAskTree     uint64
+	NetAskExact    uint64
+	ExecAllowTree  uint64
+	ExecAllowExact uint64
+	DenyTree       uint8
+	DenyExact      uint8
+	NetDenyTree    uint8
+	NetDenyExact   uint8
+	ExecDenyTree   uint8
+	ExecDenyExact  uint8
+	Pad            [2]uint8
 }
 
 type hallpassSessionCfg struct {
@@ -193,6 +197,7 @@ const (
 	hallpassMapScratch              = "scratch"
 	hallpassMapSessions             = "sessions"
 	hallpassMapSocks                = "socks"
+	hallpassProgHpBprmCheckSecurity = "hp_bprm_check_security"
 	hallpassProgHpFileOpen          = "hp_file_open"
 	hallpassProgHpFileSendSigiotask = "hp_file_send_sigiotask"
 	hallpassProgHpListen            = "hp_listen"
@@ -263,6 +268,7 @@ type hallpassSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type hallpassProgramSpecs struct {
+	HpBprmCheckSecurity *ebpf.ProgramSpec `ebpf:"hp_bprm_check_security"`
 	HpFileOpen          *ebpf.ProgramSpec `ebpf:"hp_file_open"`
 	HpFileSendSigiotask *ebpf.ProgramSpec `ebpf:"hp_file_send_sigiotask"`
 	HpListen            *ebpf.ProgramSpec `ebpf:"hp_listen"`
@@ -385,6 +391,7 @@ type hallpassVariables struct {
 //
 // It can be passed to loadHallpassObjects or ebpf.CollectionSpec.LoadAndAssign.
 type hallpassPrograms struct {
+	HpBprmCheckSecurity *ebpf.Program `ebpf:"hp_bprm_check_security"`
 	HpFileOpen          *ebpf.Program `ebpf:"hp_file_open"`
 	HpFileSendSigiotask *ebpf.Program `ebpf:"hp_file_send_sigiotask"`
 	HpListen            *ebpf.Program `ebpf:"hp_listen"`
@@ -412,6 +419,7 @@ type hallpassPrograms struct {
 
 func (p *hallpassPrograms) Close() error {
 	return _HallpassClose(
+		p.HpBprmCheckSecurity,
 		p.HpFileOpen,
 		p.HpFileSendSigiotask,
 		p.HpListen,

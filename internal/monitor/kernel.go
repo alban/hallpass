@@ -13,10 +13,11 @@ import (
 
 // toLSM translates r for the kernel. The BPF programs have no operations
 // and see no unreadable paths: a file rule must cover every file op, a
-// network rule every network op. An ask rule denies what it matches in
-// the kernel, but for more specific allows and the one-time grants of
-// prompts. Network rules go to net, but for unix socket paths (a Rule with
-// Net).
+// network rule every network op, and an exec rule is for exec alone and
+// cannot ask (a program no rule allows is asked anyway). An ask rule
+// denies what it matches in the kernel, but for more specific allows and
+// the one-time grants of prompts. Network rules go to net, but for unix
+// socket paths (a Rule with Net).
 func toLSM(r rules.Rule, net *lsm.NetRules) (*lsm.Rule, *lsm.ProcRule, error) {
 	deny, ask := r.Verdict == rules.Deny, r.Verdict == rules.Ask
 	if o := r.Object; o.IsNet() {
@@ -42,6 +43,14 @@ func toLSM(r rules.Rule, net *lsm.NetRules) (*lsm.Rule, *lsm.ProcRule, error) {
 			return &lsm.Rule{Path: o.Unix.Path, Tree: o.Unix.Prefix, Deny: deny, Ask: ask, Net: true, Expires: r.Expires}, nil, nil
 		}
 		return nil, nil, nil
+	}
+	if r.Ops&rules.OpExec != 0 {
+		// Programs, by path; never an unknown path or a /proc file.
+		p := r.Object.Path
+		if ask || r.Ops != rules.OpExec || p == nil || len(p.Args) > 0 {
+			return nil, nil, fmt.Errorf("%w: %+v", ErrUnsupported, r)
+		}
+		return &lsm.Rule{Path: p.Path, Tree: p.Tree, Deny: deny, Exec: true, Expires: r.Expires}, nil, nil
 	}
 	if r.Object.Unknown || r.Ops&rules.OpFiles != rules.OpFiles {
 		return nil, nil, fmt.Errorf("%w: %+v", ErrUnsupported, r)
@@ -144,6 +153,8 @@ func lsmOp(name string) rules.Op {
 		return rules.OpConnect
 	case "send":
 		return rules.OpSend
+	case "exec":
+		return rules.OpExec
 	}
 	return rules.OpAll
 }

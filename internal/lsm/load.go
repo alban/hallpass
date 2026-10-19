@@ -20,7 +20,7 @@ import (
 var attachOrder = []string{
 	"hp_task_alloc", "hp_sb_alloc", "hp_sb_free", "hp_sb_kern_mount", "hp_task_kill", "hp_file_send_sigiotask",
 	"hp_file_open", "hp_path_mknod", "hp_path_mkdir", "hp_path_rmdir", "hp_path_unlink",
-	"hp_path_symlink", "hp_path_link", "hp_path_rename", "hp_path_truncate",
+	"hp_path_symlink", "hp_path_link", "hp_path_rename", "hp_path_truncate", "hp_bprm_check_security",
 	"hp_socket_post_create", "hp_sk_free", "hp_socket_connect", "hp_socket_sendmsg",
 	"hp_unix_stream_connect", "hp_unix_may_send",
 }
@@ -57,7 +57,7 @@ func programsByName(p *hallpassPrograms) map[string]*ebpf.Program {
 		"hp_path_mknod": p.HpPathMknod, "hp_path_mkdir": p.HpPathMkdir,
 		"hp_path_rmdir": p.HpPathRmdir, "hp_path_unlink": p.HpPathUnlink,
 		"hp_path_symlink": p.HpPathSymlink, "hp_path_link": p.HpPathLink,
-		"hp_path_rename": p.HpPathRename, "hp_path_truncate": p.HpPathTruncate,
+		"hp_path_rename": p.HpPathRename, "hp_path_truncate": p.HpPathTruncate, "hp_bprm_check_security": p.HpBprmCheckSecurity,
 		"hp_socket_post_create": p.HpSocketPostCreate, "hp_sk_free": p.HpSkFree,
 		"hp_socket_connect": p.HpSocketConnect, "hp_socket_sendmsg": p.HpSocketSendmsg,
 		"hp_unix_stream_connect": p.HpUnixStreamConnect, "hp_unix_may_send": p.HpUnixMaySend,

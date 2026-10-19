@@ -300,11 +300,11 @@ func TestEnforceNet(t *testing.T) {
 	defer l.Close()
 	s, off, all := newSession(t, l), newSession(t, l), newSession(t, l)
 	for _, x := range []*Session{s, all} {
-		if err := x.Mediate(true, true); err != nil {
+		if err := x.Mediate(true, false, true); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := off.Mediate(true, false); err != nil {
+	if err := off.Mediate(true, false, false); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Sync([]Rule{devNull, {Path: dir + "/ok", Tree: true, Net: true}}, nil); err != nil {
@@ -446,7 +446,7 @@ func TestEnforceNetAsk(t *testing.T) {
 	// ask and an allow for every unix socket.
 	s, any, tie := newSession(t, l), newSession(t, l), newSession(t, l)
 	for _, x := range []*Session{s, any, tie} {
-		if err := x.Mediate(true, true); err != nil {
+		if err := x.Mediate(true, false, true); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -559,10 +559,10 @@ func TestMediateFiles(t *testing.T) {
 	}
 	defer l.Close()
 	off, on := newSession(t, l), newSession(t, l)
-	if err := off.Mediate(false, false); err != nil {
+	if err := off.Mediate(false, false, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := on.Mediate(true, false); err != nil {
+	if err := on.Mediate(true, false, false); err != nil {
 		t.Fatal(err)
 	}
 	for _, s := range []*Session{off, on} {

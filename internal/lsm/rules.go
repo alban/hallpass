@@ -16,7 +16,8 @@ import (
 // Rule allows, denies or asks about a host path: the path and everything
 // below it (Tree) or that exact path only. With Net, it is about
 // connections and datagrams to the unix sockets bound there, not about
-// writing files. An ask rule cuts off the allows of the paths above: what
+// writing files. With Exec, it is about executing the programs there, and
+// it cannot ask. An ask rule cuts off the allows of the paths above: what
 // it matches is denied, unless a deeper allow rule or a GrantOnce allows
 // it. Deny wins over both.
 type Rule struct {
@@ -25,6 +26,7 @@ type Rule struct {
 	Deny    bool
 	Ask     bool
 	Net     bool
+	Exec    bool
 	Expires time.Time // zero: never (deny rules never expire)
 }
 
@@ -129,9 +131,9 @@ func (s *Session) ruleNodes(mounts []mount, expiry func(time.Time) uint64) map[n
 }
 
 // level is the rules of one node for its tree, or for itself only (exact),
-// for files or for unix sockets: the expiries of the allows and the asks,
-// and the depth (length of the host path) of the deepest of each, -1 for
-// none.
+// for files, for unix sockets or for programs: the expiries of the allows
+// and the asks, and the depth (length of the host path) of the deepest of
+// each, -1 for none.
 type level struct {
 	allow, ask   uint64
 	allowD, askD int
@@ -139,7 +141,7 @@ type level struct {
 }
 
 // nodeLevels are the levels of a node, indexed by levelOf.
-type nodeLevels [4]level
+type nodeLevels [6]level
 
 func newNodeLevels() *nodeLevels {
 	var lv nodeLevels
@@ -151,8 +153,11 @@ func newNodeLevels() *nodeLevels {
 
 func (r Rule) levelOf() int {
 	i := 0
-	if r.Net {
+	switch {
+	case r.Net:
 		i = 2
+	case r.Exec:
+		i = 4
 	}
 	if !r.Tree {
 		i++
@@ -180,6 +185,7 @@ func (r Rule) addTo(lv *nodeLevels, exp uint64) {
 // different depths only meet at one node through different mounts; then,
 // as in rules.Eval, the deepest decides (an ask on a tie), and the rules
 // it overrides are dropped. Their expiry is not taken into account.
+// Programs have no asks.
 func (lv *nodeLevels) fill(v *hallpassRuleVal) {
 	tree, exact := lv[0], lv[1]
 	resolve(&tree, &exact)
@@ -189,6 +195,9 @@ func (lv *nodeLevels) fill(v *hallpassRuleVal) {
 	resolve(&tree, &exact)
 	v.NetAllowTree, v.NetAskTree, v.NetAllowExact, v.NetAskExact = tree.allow, tree.ask, exact.allow, exact.ask
 	v.NetDenyTree, v.NetDenyExact = b2u8(tree.deny), b2u8(exact.deny)
+	tree, exact = lv[4], lv[5]
+	v.ExecAllowTree, v.ExecAllowExact = tree.allow, exact.allow
+	v.ExecDenyTree, v.ExecDenyExact = b2u8(tree.deny), b2u8(exact.deny)
 }
 
 // resolve drops the rules of a node that a deeper one of the same node

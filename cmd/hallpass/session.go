@@ -94,7 +94,7 @@ func runSession(cfg sessionConfig) (int, error) {
 			return 0, err
 		}
 		defer ks.Close()
-		if err := ks.Mediate(cfg.Mediate&seccomp.Files != 0, cfg.Mediate&seccomp.Network != 0); err != nil {
+		if err := ks.Mediate(cfg.Mediate&seccomp.Files != 0, cfg.Mediate&seccomp.Exec != 0, cfg.Mediate&seccomp.Network != 0); err != nil {
 			return 0, err
 		}
 		kernel = ks

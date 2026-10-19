@@ -24,7 +24,7 @@ type Event struct {
 	Allowed bool
 }
 
-var opNames = [...]string{1: "open", "create", "mkdir", "rmdir", "unlink", "symlink", "link", "rename", "truncate", "connect", "send"}
+var opNames = [...]string{1: "open", "create", "mkdir", "rmdir", "unlink", "symlink", "link", "rename", "truncate", "connect", "send", "exec"}
 
 // Events calls fn for each decision on the session's members reported by
 // the programs, until the session or the LSM is closed.

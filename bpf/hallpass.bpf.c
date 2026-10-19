@@ -85,11 +85,16 @@ struct rule_val {
 	__u64 ask_exact;
 	__u64 net_ask_tree;
 	__u64 net_ask_exact;
+	/* Allows for executing the programs there (no asks). */
+	__u64 exec_allow_tree;
+	__u64 exec_allow_exact;
 	__u8 deny_tree;
 	__u8 deny_exact;
 	__u8 net_deny_tree;
 	__u8 net_deny_exact;
-	__u8 pad[4];
+	__u8 exec_deny_tree;
+	__u8 exec_deny_exact;
+	__u8 pad[2];
 };
 
 /*
@@ -110,7 +115,11 @@ struct proc_val {
 	__u8 pad[7];
 };
 
-#define GRANT_NODES 2
+/*
+ * A script and its #! interpreters are all checked at exec: up to 5 files,
+ * each maybe at several rule nodes (bind mounts).
+ */
+#define GRANT_NODES 8
 #define GRANT_INET 4
 #define UNIX_NAME_LEN 108
 
@@ -132,7 +141,7 @@ struct grant_inet {
  */
 struct hp_grant {
 	__u64 seq;		   /* for the supervisor, to tell its grants apart */
-	__u64 nodes[GRANT_NODES]; /* rule nodes allowed exactly: one per path of the syscall (rename, link: 2) */
+	__u64 nodes[GRANT_NODES]; /* rule nodes allowed exactly: the paths of the syscall (rename, link: 2; exec: the program and its interpreters) */
 	struct proc_key proc;	   /* proc.name[0] == 0: none */
 	struct grant_inet inet[GRANT_INET]; /* sendmmsg: several */
 	__u32 abstract_set;
@@ -152,6 +161,7 @@ enum hp_op {
 	HP_OP_TRUNCATE,
 	HP_OP_CONNECT,
 	HP_OP_SEND,
+	HP_OP_EXEC,
 };
 
 struct event {
@@ -257,6 +267,7 @@ struct {
 } events SEC(".maps");
 
 #define HP_MEDIATE_FILES 1
+#define HP_MEDIATE_EXEC 2
 #define HP_MEDIATE_NET 4
 
 #define HP_OWN_LISTENERS 1
@@ -468,23 +479,36 @@ static __always_inline __u32 walk_ask(__u32 b)
 	return (b & ~WALK_ALLOW) | WALK_ASK;
 }
 
+/* Which rules of a node a walk reads. */
+enum flavour {
+	FLAVOUR_FILES,
+	FLAVOUR_NET,  /* connections and sends to a unix socket bound there */
+	FLAVOUR_EXEC, /* executing the program; no asks */
+};
+
 /*
  * b updated with a node's rules, top-down; exact: the node is the target.
  * Tree rules before exact ones, and an ask after the allow of its level.
  */
-static __always_inline __u32 node_bits(struct rule_val *v, bool exact, bool net, __u64 now,
+static __always_inline __u32 node_bits(struct rule_val *v, bool exact, __u32 flavour, __u64 now,
 				       __u32 b)
 {
 	__u64 allow_tree = v->allow_tree, allow_exact = v->allow_exact;
 	__u64 ask_tree = v->ask_tree, ask_exact = v->ask_exact;
 	bool deny = v->deny_tree || (exact && v->deny_exact);
 
-	if (net) {
+	if (flavour == FLAVOUR_NET) {
 		allow_tree = v->net_allow_tree;
 		allow_exact = v->net_allow_exact;
 		ask_tree = v->net_ask_tree;
 		ask_exact = v->net_ask_exact;
 		deny = v->net_deny_tree || (exact && v->net_deny_exact);
+	} else if (flavour == FLAVOUR_EXEC) {
+		allow_tree = v->exec_allow_tree;
+		allow_exact = v->exec_allow_exact;
+		ask_tree = 0;
+		ask_exact = 0;
+		deny = v->exec_deny_tree || (exact && v->exec_deny_exact);
 	}
 	if (deny)
 		b |= WALK_DENY;
@@ -503,12 +527,11 @@ static __always_inline __u32 node_bits(struct rule_val *v, bool exact, bool net,
 
 /*
  * The rules of target's path: WALK_* bits, or -EACCES when the path cannot
- * be named. It is allowed with WALK_ALLOW and without WALK_DENY. net: the
- * rules for connections and sends to a unix socket bound there.
- * Preemption must be disabled.
+ * be named. It is allowed with WALK_ALLOW and without WALK_DENY. flavour:
+ * which rules. Preemption must be disabled.
  */
 static __always_inline int walk(struct hp_scratch *r, struct dentry *target,
-				 struct hp_grant *g, __u32 session, bool net)
+				 struct hp_grant *g, __u32 session, __u32 flavour)
 {
 	struct super_block *sb = BPF_CORE_READ(target, d_sb);
 	__u64 sbkey = (__u64)sb;
@@ -518,13 +541,20 @@ static __always_inline int walk(struct hp_scratch *r, struct dentry *target,
 	__u32 *owner;
 	__u32 n;
 
-	if (!net) {
+	if (flavour == FLAVOUR_FILES) {
 		/* Pipes, sockets, memfds: not reachable by path. */
 		if (BPF_CORE_READ(sb, s_flags) & SB_NOUSER)
 			return WALK_ALLOW;
 		owner = bpf_map_lookup_elem(&owned_sbs, &sbkey);
 		if (owner && *owner == session)
 			return WALK_ALLOW;
+	} else if (flavour == FLAVOUR_EXEC) {
+		/*
+		 * A memfd (execveat with AT_EMPTY_PATH) has no path a rule
+		 * could name, nor a path the supervisor could ask about.
+		 */
+		if (BPF_CORE_READ(sb, s_flags) & SB_NOUSER)
+			return 0;
 	}
 
 	r->depth = MAX_DEPTH;
@@ -555,7 +585,7 @@ static __always_inline int walk(struct hp_scratch *r, struct dentry *target,
 	__builtin_memset(r->key.name, 0, NAME_LEN);
 	v = bpf_map_lookup_elem(&rules, &r->key);
 	if (v)
-		r->bits = node_bits(v, n == 0, net, now, r->bits);
+		r->bits = node_bits(v, n == 0, flavour, now, r->bits);
 
 	for (__u32 k = 0; k < MAX_DEPTH; k++) {
 		const unsigned char *name;
@@ -575,7 +605,7 @@ static __always_inline int walk(struct hp_scratch *r, struct dentry *target,
 		v = bpf_map_lookup_elem(&rules, &r->key);
 		if (!v)
 			break;
-		r->bits = node_bits(v, j == 0, net, now, r->bits);
+		r->bits = node_bits(v, j == 0, flavour, now, r->bits);
 		if (j == 0)
 			r->leaf = v->cookie;
 		cookie = v->cookie;
@@ -587,7 +617,7 @@ static __always_inline int walk(struct hp_scratch *r, struct dentry *target,
 }
 
 /* Returns 0 to allow or -EACCES. */
-static __always_inline int check_dentry(struct dentry *target, __u32 session)
+static __always_inline int check_dentry_for(struct dentry *target, __u32 session, __u32 flavour)
 {
 	__u32 zero = 0;
 	struct hp_scratch *r;
@@ -597,11 +627,16 @@ static __always_inline int check_dentry(struct dentry *target, __u32 session)
 	bpf_preempt_disable();
 	r = bpf_map_lookup_elem(&scratch, &zero);
 	if (r)
-		ret = walk(r, target, g, session, false);
+		ret = walk(r, target, g, session, flavour);
 	bpf_preempt_enable();
 	if (ret < 0 || (ret & (WALK_ALLOW | WALK_DENY)) != WALK_ALLOW)
 		return -EACCES;
 	return 0;
+}
+
+static __always_inline int check_dentry(struct dentry *target, __u32 session)
+{
+	return check_dentry_for(target, session, FLAVOUR_FILES);
 }
 
 static __always_inline bool proc_granted(struct hp_grant *g, struct proc_key *k)
@@ -1043,7 +1078,7 @@ static __always_inline int check_unix(__u32 op, struct sock *self, struct sock *
 		bpf_preempt_disable();
 		r = bpf_map_lookup_elem(&scratch, &zero);
 		if (r)
-			bits = walk(r, dentry, g, s, true);
+			bits = walk(r, dentry, g, s, FLAVOUR_NET);
 		bpf_preempt_enable();
 		if (bits < 0)
 			bits = WALK_DENY;
@@ -1502,6 +1537,29 @@ int BPF_PROG(hp_path_truncate, const struct path *path, int ret)
 	if (ret)
 		return ret;
 	return check_one(HP_OP_TRUNCATE, path, path->dentry, false);
+}
+
+/*
+ * The file an execve runs: the program, then each #! interpreter or
+ * binfmt_misc handler, as the kernel looks them up. The supervisor asks
+ * at seccomp time and grants the syscall once.
+ */
+SEC("lsm/bprm_check_security")
+int BPF_PROG(hp_bprm_check_security, struct linux_binprm *bprm, int ret)
+{
+	struct file *file;
+	__u32 s;
+
+	if (ret)
+		return ret;
+	s = current_session_for(HP_MEDIATE_EXEC);
+	if (!s)
+		return 0;
+	file = bprm->file;
+	if (!file)
+		return finish(HP_OP_EXEC, -EACCES, 0, 0, s);
+	return finish(HP_OP_EXEC, check_dentry_for(file->f_path.dentry, s, FLAVOUR_EXEC),
+		      &file->f_path, 0, s);
 }
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
