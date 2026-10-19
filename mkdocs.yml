@@ -40,6 +40,7 @@ nav:
   - Workstation:
       - workstation/index.md
       - Install: workstation/install.md
+      - Getting started: workstation/getting-started.md
       - Usage: workstation/usage.md
       - CLI reference: workstation/reference.md
       - Strict mode: workstation/strict.md
@@ -49,12 +50,19 @@ nav:
       - Install and operate: kubernetes/install.md
       - Opt in and policies: kubernetes/policies.md
       - Answer requests: kubernetes/answer.md
-  - Answers:
+  - Answers and rules:
       - answers/index.md
       - Where to answer: answers/clients.md
       - Web UI: answers/web.md
       - Write a client: answers/api.md
-  - How it works: design.md
+  - How it works:
+      - how-it-works/index.md
+      - Lite mode: how-it-works/lite.md
+      - Strict mode: how-it-works/strict.md
+      - Files: how-it-works/files.md
+      - Network: how-it-works/network.md
+      - Programs: how-it-works/exec.md
+      - Limitations: how-it-works/limitations.md
   - Comparison: comparison.md
 
 markdown_extensions:

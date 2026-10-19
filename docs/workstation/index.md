@@ -9,6 +9,7 @@ hallpass -- copilot      # or any command; no command: a shell
 ```
 
 - [Install](install.md): requirements and build.
+- [Getting started](getting-started.md): a first session, step by step.
 - [Usage](usage.md): the default policy, programs, network, agent
   CLIs, over ssh.
 - [CLI reference](reference.md): every flag.
