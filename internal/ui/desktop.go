@@ -93,7 +93,10 @@ func NewDesktop(timeout time.Duration) (*Desktop, error) {
 	}
 
 	d := &Desktop{conn: conn, timeout: timeout, icon: logoIcon(), listeners: map[chan *dbus.Signal]struct{}{}}
+	// Only from the name's owner: on GNOME, it forwards to gnome-shell,
+	// which broadcasts the same signals itself, with the same ids.
 	if err := conn.AddMatchSignal(
+		dbus.WithMatchSender(notifDest),
 		dbus.WithMatchObjectPath(notifPath),
 		dbus.WithMatchInterface(notifIfc),
 	); err != nil {

@@ -129,6 +129,21 @@ func TestDesktopBodyClick(t *testing.T) {
 	}
 	f.emit(t, "ActionInvoked", n.id, "default")
 	recv(t, clicked, "OnDefault")
+	// gnome-shell, behind GNOME's proxy owning the name, broadcasts the
+	// same signals itself: not a second click.
+	shell, err := dbus.ConnectSessionBus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shell.Close()
+	if err := shell.Emit(notifPath, notifIfc+".ActionInvoked", n.id, "default"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-clicked:
+		t.Fatal("OnDefault called again for a signal from another sender")
+	case <-time.After(200 * time.Millisecond):
+	}
 	// The service closes the notification after the click: it comes back.
 	f.emit(t, "NotificationClosed", n.id, uint32(2))
 	n2 := recv(t, f.shown, "notification shown again")
