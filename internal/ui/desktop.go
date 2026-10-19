@@ -45,6 +45,11 @@ type Desktop struct {
 
 	mu      sync.Mutex
 	replace uint32
+
+	// yield, while Ask shows a request, asks it to hide the request until
+	// the channel sent is closed (see Confirm).
+	ymu   sync.Mutex
+	yield chan chan struct{}
 }
 
 // reopenAfterClick is how long after a body click a request's notification
@@ -228,9 +233,30 @@ func (d *Desktop) Ask(ctx context.Context, r Request) Answer {
 		defer t.Stop()
 		deadline = t.C
 	}
+	yield := make(chan chan struct{}, 1)
+	d.ymu.Lock()
+	d.yield = yield
+	d.ymu.Unlock()
+	defer func() {
+		d.ymu.Lock()
+		d.yield = nil
+		d.ymu.Unlock()
+	}()
 	var reopenUntil time.Time
+	var hidden <-chan struct{}
 	for {
 		select {
+		case h := <-yield:
+			if hidden == nil {
+				hidden = h
+				d.closeNotification(id)
+			}
+		case <-hidden:
+			hidden = nil
+			if id, err = d.notify(0, "hallpass", body, actions, hints); err != nil {
+				return AnswerDismissed
+			}
+			d.replace = id
 		case sig, ok := <-sigs:
 			if !ok {
 				return AnswerDismissed
@@ -238,6 +264,8 @@ func (d *Desktop) Ask(ctx context.Context, r Request) Answer {
 			key, ok := forNotification(sig, id)
 			switch {
 			case !ok:
+			case hidden != nil:
+				// Closed by us.
 			case key == "default":
 				if onDefault != nil {
 					go onDefault()
@@ -270,8 +298,20 @@ func (d *Desktop) Ask(ctx context.Context, r Request) Answer {
 
 // Confirm shows a notification of its own with yes and no buttons, and
 // reports whether the user clicked yes before ctx ends. Unlike Ask, it does
-// not replace the request's notification, and can show beside it.
+// not replace the request's notification; but notification services show
+// one critical notification at a time (GNOME queues the others), so the
+// request's is hidden meanwhile, and shown again afterwards.
 func (d *Desktop) Confirm(ctx context.Context, summary, body, yes, no string) bool {
+	done := make(chan struct{})
+	defer close(done)
+	d.ymu.Lock()
+	if d.yield != nil {
+		select {
+		case d.yield <- done:
+		default:
+		}
+	}
+	d.ymu.Unlock()
 	hints := map[string]dbus.Variant{"urgency": dbus.MakeVariant(byte(2))}
 	sigs, stop := d.listen()
 	defer stop()

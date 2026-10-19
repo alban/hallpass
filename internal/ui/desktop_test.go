@@ -156,16 +156,31 @@ func TestDesktopBodyClick(t *testing.T) {
 	default:
 	}
 
-	// A pairing confirmation shows beside it, without replacing it.
+	// A pairing confirmation shows on its own, without replacing it: the
+	// request's is hidden meanwhile (GNOME shows one critical notification
+	// at a time), then shown again.
 	confirmed := make(chan bool, 1)
 	go func() { confirmed <- d.Confirm(context.Background(), "pair", "482 913", "Pair", "Cancel") }()
 	c := recv(t, f.shown, "confirmation")
 	if c.replaces != 0 || c.id == n2.id || c.summary != "pair" {
 		t.Errorf("confirmation %+v", c)
 	}
+	if id := recv(t, f.closed, "request hidden"); id != n2.id {
+		t.Errorf("closed %d, want the request's %d", id, n2.id)
+	}
+	f.emit(t, "NotificationClosed", n2.id, uint32(3))
 	f.emit(t, "ActionInvoked", c.id, "yes")
 	if !recv(t, confirmed, "confirmation answer") {
 		t.Error("confirmation: want yes")
+	}
+	n2 = recv(t, f.shown, "request shown again")
+	if n2.replaces != 0 || n2.summary != "hallpass" {
+		t.Errorf("request shown again as %+v", n2)
+	}
+	select {
+	case a := <-answer:
+		t.Fatalf("answered %v after the confirmation", a)
+	default:
 	}
 
 	f.emit(t, "ActionInvoked", n2.id, "once")
