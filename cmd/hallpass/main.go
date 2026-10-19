@@ -38,9 +38,65 @@ const usageText = `Usage:
   hallpass policy [flags]                     print the rules these flags give
 
 In the program's terminal, press Ctrl-] to show the current rules.
-
-Flags:
 `
+
+// flagGroups is the order of the flags in --help, by topic; the CLI
+// reference in docs/workstation/reference.md follows it.
+var flagGroups = []struct {
+	title string
+	flags []string
+}{
+	{"Sandbox", []string{"mode", "mediate", "escalate", "allow-userns", "no-implicit"}},
+	{"Files", []string{"C", "workdir", "allow-path", "deny-path", "ask-path", "allow-tty"}},
+	{"Programs", []string{"allow-exec", "deny-exec", "group"}},
+	{"Network (experimental)", []string{"allow-net", "deny-net", "ask-net"}},
+	{"Prompts", []string{"prompt", "timeout"}},
+	{"Session", []string{"log", "wait"}},
+}
+
+// printFlags prints fs's flags in flagGroups order, then any flag missing
+// from flagGroups under "Other".
+func printFlags(w io.Writer, fs *flag.FlagSet) {
+	seen := map[string]bool{}
+	print1 := func(f *flag.Flag) {
+		seen[f.Name] = true
+		dash := "--"
+		if len(f.Name) == 1 {
+			dash = "-"
+		}
+		name, usage := flag.UnquoteUsage(f)
+		line := "  " + dash + f.Name
+		if name != "" {
+			line += " " + name
+		}
+		fmt.Fprintf(w, "%s\n    \t%s", line, usage)
+		switch f.DefValue {
+		case "", "false", "0", "0s", "[]":
+		default:
+			fmt.Fprintf(w, " (default %s)", f.DefValue)
+		}
+		fmt.Fprintln(w)
+	}
+	for _, g := range flagGroups {
+		fmt.Fprintf(w, "\n%s:\n", g.title)
+		for _, n := range g.flags {
+			if f := fs.Lookup(n); f != nil {
+				print1(f)
+			}
+		}
+	}
+	other := false
+	fs.VisitAll(func(f *flag.Flag) {
+		if seen[f.Name] {
+			return
+		}
+		if !other {
+			fmt.Fprintf(w, "\nOther:\n")
+			other = true
+		}
+		print1(f)
+	})
+}
 
 type listFlag []string
 
@@ -108,11 +164,11 @@ func parseFlags(argv []string, printPolicy bool) (o options, code int, ok bool) 
 	fs := flag.NewFlagSet("hallpass", flag.ContinueOnError)
 	fs.Usage = func() {
 		fmt.Fprint(fs.Output(), usageText)
-		fs.PrintDefaults()
+		printFlags(fs.Output(), fs)
 	}
 	var allow, deny, ask listFlag
 	fs.StringVar(&o.workdir, "C", "", "project `dir`, writable without asking (default: current directory)")
-	fs.StringVar(&o.workdir, "workdir", "", "same as -C")
+	fs.StringVar(&o.workdir, "workdir", "", "same as -C (project `dir`)")
 	fs.Var(&allow, "allow-path", "`path` also writable without asking (repeatable)")
 	fs.Var(&deny, "deny-path", "`path` always denied (repeatable, wins over --allow-path)")
 	fs.Var(&ask, "ask-path", "`path` asked about even inside a less specific --allow-path (repeatable; a more specific --allow-path still allows)")
@@ -134,7 +190,7 @@ func parseFlags(argv []string, printPolicy bool) (o options, code int, ok bool) 
 	fs.Var(&allowExec, "allow-exec", "`program` allowed to run without asking (repeatable, comma-separated): a name looked up in $PATH, a path, dir/** for every program below dir, or a group of programs: "+strings.Join(programs.Names(), ", "))
 	fs.Var(&denyExec, "deny-exec", "`program` never allowed to run (repeatable, comma-separated, same syntax but no groups, wins over --allow-exec)")
 	var groupFlags listFlag
-	fs.Var(&groupFlags, "group", "`@name=program,...`: a group of programs, offered in prompts and allowed by --allow-exec=@name (repeatable; programs as in --allow-exec, without groups); replaces the built-in group of the same name")
+	fs.Var(&groupFlags, "group", "a group of programs, as `@name=program,...`, offered in prompts and allowed by --allow-exec=@name (repeatable; programs as in --allow-exec, without groups); replaces the built-in group of the same name")
 	if err := fs.Parse(argv); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return o, 0, false
