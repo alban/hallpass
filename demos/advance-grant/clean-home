@@ -1,0 +1,23 @@
+#!/bin/sh
+# Replaces the demo's shell with one where HOME is /home/me, so that the
+# card shows a path like the docs' rather than the fresh directory's: a
+# private mount namespace (sudo) gets a tmpfs on /home, with /home/me
+# owned by the caller, who runs the shell. Nothing is written in the real
+# /home, and the tmpfs goes away with the shell.
+#
+# $1: the demo's fresh directory, with bin/ (hallpass, copied to
+# ~/.local/bin) and project/.
+set -eu
+cd "$1"
+exec sudo -n unshare --mount --propagation private sh -euc '
+mount -t tmpfs -o mode=755 hallpass-demo /home
+mkdir -p /home/me/.cache /home/me/.local
+# The cwd is still the fresh directory, hidden under the tmpfs otherwise.
+cp -r project /home/me/
+cp -r bin /home/me/.local/
+chown -R "$1:$2" /home/me
+cd /home/me/project
+exec setpriv --reuid="$1" --regid="$2" --init-groups \
+	env HOME=/home/me PATH="/home/me/.local/bin:$PATH" PS1="\$ " TERM="$3" XDG_RUNTIME_DIR="$4" \
+	bash --norc --noprofile
+' clean-home "$(id -u)" "$(id -g)" "${TERM:-xterm}" "${XDG_RUNTIME_DIR:-}"

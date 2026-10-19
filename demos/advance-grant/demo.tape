@@ -4,7 +4,9 @@
 #
 # Run `make -C demos advance-grant`. The Makefile runs it from the
 # repository root, sets the output with `vhs -o` and gives a fresh directory
-# as $DEMO_DIR, used as HOME: the demo writes nothing in yours.
+# as $DEMO_DIR. clean-home then makes HOME /home/me, on a tmpfs in a private
+# mount namespace (needs passwordless sudo), so that the card shows a clean
+# path: the demo writes nothing in yours.
 
 Set Shell bash
 Set FontSize 18
@@ -15,7 +17,10 @@ Set Theme "Catppuccin Mocha"
 Set TypingSpeed 45ms
 
 Hide
-Type `export PATH=$PWD:$PATH PS1='$ ' HOME=$DEMO_DIR/home && mkdir -p $HOME/.cache && cp -r demos/example $DEMO_DIR/project && cp demos/advance-grant/agent.sh $DEMO_DIR/project/agent && cd $DEMO_DIR/project && clear`
+Type `cp -r demos/example $DEMO_DIR/project && cp demos/advance-grant/agent.sh $DEMO_DIR/project/agent && mkdir $DEMO_DIR/bin && cp hallpass $DEMO_DIR/bin/ && exec demos/advance-grant/clean-home $DEMO_DIR`
+Enter
+Sleep 1s
+Type `clear`
 Enter
 Sleep 500ms
 Type@1ms `clear && printf '\n\n   \033[1mAsk in advance\033[0m\n\n   Before a long task, the agent asks for the folder it will write:\n   one question while you are there, then no prompt while you are away.\n' && sleep 4 && clear`
