@@ -7,6 +7,7 @@ Each demo is a directory with its recording script. The [Makefile](Makefile) fin
 | Shell | [`shell/demo.tape`](shell/demo.tape) | README, home page | [VHS](https://github.com/charmbracelet/vhs) |
 | Copilot | [`copilot/demo.tape`](copilot/demo.tape) | home page | VHS, with copilot |
 | Coalesce | [`coalesce/demo.tape`](coalesce/demo.tape) | How it works | VHS |
+| Ask in advance | [`advance-grant/demo.tape`](advance-grant/demo.tape), with [`agent.sh`](advance-grant/agent.sh) | Usage | VHS |
 | Strict | [`strict/demo.tape`](strict/demo.tape) | How it works | VHS, over ssh |
 | Web UI | [`web/record.js`](web/record.js) | Usage | Puppeteer |
 | Headlamp | [`headlamp/record.js`](headlamp/record.js) | Kubernetes | Puppeteer, on kind |
