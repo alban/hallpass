@@ -114,23 +114,24 @@ func recv[T any](t *testing.T, c <-chan T, what string) T {
 	}
 }
 
-func TestDesktopBodyClick(t *testing.T) {
+func TestDesktopOpenWeb(t *testing.T) {
 	d, f := newFakeDesktop(t)
 	clicked := make(chan string, 4)
-	d.OnDefault = func(token string) { clicked <- token }
+	d.OnWeb = func(token string) { clicked <- token }
 	answer := make(chan Answer, 1)
 	go func() {
 		answer <- d.Ask(context.Background(), Request{Exe: "/bin/sh", PID: 42, Path: "/home/u/.bashrc"})
 	}()
 
 	n := recv(t, f.shown, "notification")
-	if !slices.Contains(n.actions, "default") || n.hints["resident"].Value() != true {
-		t.Errorf("actions %v hints %v: want a default action, resident", n.actions, n.hints)
+	if !slices.Equal(n.actions, []string{"once", "Allow once", "deny", "Deny", "web", "Open web UI"}) || n.hints["resident"].Value() != true {
+		t.Errorf("actions %v hints %v: want an Open web UI button, resident", n.actions, n.hints)
 	}
+	f.emit(t, "ActionInvoked", n.id, "default") // a body click does nothing
 	f.emit(t, "ActivationToken", n.id, "gnome-shell//1-2-host_TIME3")
-	f.emit(t, "ActionInvoked", n.id, "default")
-	if tok := recv(t, clicked, "OnDefault"); tok != "gnome-shell//1-2-host_TIME3" {
-		t.Errorf("OnDefault token %q", tok)
+	f.emit(t, "ActionInvoked", n.id, "web")
+	if tok := recv(t, clicked, "OnWeb"); tok != "gnome-shell//1-2-host_TIME3" {
+		t.Errorf("OnWeb token %q", tok)
 	}
 	// gnome-shell, behind GNOME's proxy owning the name, broadcasts the
 	// same signals itself: not a second click.
@@ -139,12 +140,12 @@ func TestDesktopBodyClick(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer shell.Close()
-	if err := shell.Emit(notifPath, notifIfc+".ActionInvoked", n.id, "default"); err != nil {
+	if err := shell.Emit(notifPath, notifIfc+".ActionInvoked", n.id, "web"); err != nil {
 		t.Fatal(err)
 	}
 	select {
 	case <-clicked:
-		t.Fatal("OnDefault called again for a signal from another sender")
+		t.Fatal("OnWeb called again for a signal from another sender")
 	case <-time.After(200 * time.Millisecond):
 	}
 	// The service closes the notification after the click: it comes back.
@@ -256,9 +257,9 @@ func TestDesktopConfirm(t *testing.T) {
 		t.Error("confirmed after no")
 	}
 
-	// Without OnDefault, no default action.
+	// Without OnWeb, no web button.
 	go d.Ask(ctx, Request{Exe: "/bin/sh", PID: 42, Path: "/home/u/.bashrc"})
-	if n := recv(t, f.shown, "notification"); slices.Contains(n.actions, "default") {
+	if n := recv(t, f.shown, "notification"); slices.Contains(n.actions, "web") {
 		t.Errorf("actions %v", n.actions)
 	}
 }

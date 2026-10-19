@@ -234,7 +234,7 @@ function openSession(info) {
   (async () => {
     while (!s.ended) {
       try {
-        const vis = document.visibilityState === "visible" ? "1" : "0";
+        const vis = watching() ? "1" : "0";
         await sse(`/api/sessions/${encodeURIComponent(pid)}/events?tab=${tabID}&visible=${vis}`, s.abort.signal, (type, data) => {
           if (type === "end") endSession(pid);
           else if (!s.ended) onBatch(pid, s, JSON.parse(data));
@@ -556,14 +556,22 @@ for (const b of document.querySelectorAll("nav button")) {
 }
 document.getElementById("filter").addEventListener("input", renderActivity);
 document.getElementById("pair-again").addEventListener("click", pair);
-document.addEventListener("visibilitychange", () => {
+// A covered window is still "visible": the page counts as watched only while
+// its window also has the focus.
+function watching() {
+  return document.visibilityState === "visible" && document.hasFocus();
+}
+function reportWatching() {
   if (pairState !== "paired") return;
   api("/api/visibility", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ tab: tabID, visible: document.visibilityState === "visible" }),
+    body: JSON.stringify({ tab: tabID, visible: watching() }),
   }).catch(() => {});
-});
+}
+document.addEventListener("visibilitychange", reportWatching);
+window.addEventListener("focus", reportWatching);
+window.addEventListener("blur", reportWatching);
 
 start();
 setInterval(refreshSessions, 2000);

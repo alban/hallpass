@@ -137,7 +137,7 @@ func runSession(cfg sessionConfig) (int, error) {
 	}
 	defer s.closeWeb()
 	if d, ok := cfg.Asker.(*ui.Desktop); ok {
-		d.OnDefault = s.openWeb
+		d.OnWeb = s.openWeb
 	}
 
 	spec := launch.ProcSpec{

@@ -36,7 +36,7 @@ prompt (see [monitor.md](monitor.md#behaviour)).
 ### One server, two scopes
 
 A session opens its own web UI from the Ctrl-] menu ("[w] open the web
-UI") or when the user clicks the body of a request's desktop
+UI") or with the "Open web UI" button of a request's desktop
 notification. It embeds the same `internal/web` server as `hallpass web`
 (`web.NewSession(pid)`), started on the first "open" on a random
 loopback port, and opens the page with `xdg-open` (in a new session, so
@@ -64,26 +64,29 @@ the credential, the event stream and the rule editing so stay in one
 place. Its port is protected like `hallpass web`'s (see
 [Protected denials](#protected-denials)).
 
-A body click must not dismiss the request: the request's notification
-gets a `default` action and the `resident` hint, and hallpass closes it
-itself once answered. Services that close it on click anyway get it shown
-again (closed within 2 seconds of the click). The click's activation
+The "Open web UI" button must not dismiss the request: the request's
+notification gets the `resident` hint, and hallpass closes it itself once
+answered. Services that close it on click anyway get it shown again
+(closed within 2 seconds of the click). GNOME has room for three buttons,
+so with this one the notification offers Allow once and Deny only; the
+page has all answers. A click on the notification's text does nothing.
+The click's activation
 token (the service's `ActivationToken` signal) goes to `xdg-open` as
 `XDG_ACTIVATION_TOKEN` and `DESKTOP_STARTUP_ID`, so that the browser's
 window comes to the front. Signals are taken only from the owner of
 `org.freedesktop.Notifications`: on GNOME it is a proxy, and gnome-shell
 broadcasts the same signals behind it.
 
-While a paired page shows the session, its requests get no desktop
-notification: one place to answer, not two. Each page names itself with
-a random tab id on its event streams (`?tab=…&visible=1`) and reports
-its `visibilitychange` events (`POST /api/visibility`); the server tells
-the session (`Server.Watching`, then `Desktop.SetQuiet`) whether some
-page has a stream open and is visible. When the last one closes, or is
-minimised or put in a background tab, the pending request's notification
-comes back. A window merely covered by others still counts as visible:
-browsers do not report it. `hallpass web` serves all sessions and does
-not quiet their notifications.
+While a paired page has the user's attention, the session's requests get
+no desktop notification: one place to answer, not two. Each page names
+itself with a random tab id on its event streams (`?tab=…&visible=1`) and
+reports its `visibilitychange`, `focus` and `blur` events
+(`POST /api/visibility`); the server tells the session (`Server.Watching`,
+then `Desktop.SetQuiet`) whether some page has a stream open, is visible
+and has the focus. Visibility alone is not enough: a window merely covered
+by others still counts as visible. So the notification shows while the
+user types in the terminal, and goes away while the page has the focus.
+`hallpass web` serves all sessions and does not quiet their notifications.
 
 ## Session API (gRPC)
 
@@ -145,12 +148,12 @@ Shaped for the UI, not for the monitor, and free to change with it:
   snapshot, then the events (Opened, Closed, Rules, Decided). The page
   reads them with `fetch`, not `EventSource`, which cannot send the
   `Authorization` header. `?tab=…&visible=0|1` names the page and says
-  whether it is visible (see [One server, two scopes](#one-server-two-scopes)).
+  whether it is visible and has the focus (see [One server, two scopes](#one-server-two-scopes)).
 - `POST /api/sessions/{pid}/answer`: `{request, answer}` with the same
   answers as the terminal (once, temp, always, never, deny).
 - `POST /api/sessions/{pid}/rules`: remove a rule, or a set.
 - `POST /api/visibility`: `{tab, visible}`, on the page's
-  `visibilitychange` events.
+  `visibilitychange`, `focus` and `blur` events.
 
 Request ids are JSON strings (protojson writes 64-bit integers as
 strings).

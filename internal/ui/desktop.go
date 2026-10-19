@@ -33,11 +33,11 @@ type Desktop struct {
 	timeout time.Duration
 	icon    string
 
-	// OnDefault, when set before the first Ask, is called in its own
-	// goroutine when the user clicks the body of a request's notification
-	// (its "default" action), with the activation token the service sent
-	// for it, if any. The request stays asked.
-	OnDefault func(token string)
+	// OnWeb, when set before the first Ask, adds an "Open web UI" button to
+	// requests' notifications, and is called in its own goroutine when the
+	// user clicks it, with the activation token the service sent for it, if
+	// any. The request stays asked.
+	OnWeb func(token string)
 
 	// The bus's signals, sent to each listener (see listen).
 	lmu       sync.Mutex
@@ -56,9 +56,9 @@ type Desktop struct {
 	quietCh chan struct{}
 }
 
-// reopenAfterClick is how long after a body click a request's notification
-// is shown again if it closes: notification services close non-resident
-// notifications on click, which must not dismiss the request.
+// reopenAfterClick is how long after a click on "Open web UI" a request's
+// notification is shown again if it closes: notification services may close
+// it on click despite "resident", which must not dismiss the request.
 const reopenAfterClick = 2 * time.Second
 
 // logoIcon writes the logo where the notification service can read it and
@@ -189,8 +189,9 @@ func (d *Desktop) Ask(ctx context.Context, r Request) Answer {
 	if o := r.Origin(); o != "" {
 		body += "\nby: " + html.EscapeString(o)
 	}
-	// GNOME Shell shows at most three buttons; "always" and "never" need
-	// the terminal or `hallpass answer`.
+	// GNOME Shell shows at most three buttons; the other answers need the
+	// web UI, the terminal or `hallpass answer`.
+	onWeb := d.OnWeb
 	var actions []string
 	switch {
 	case r.Advance:
@@ -199,6 +200,11 @@ func (d *Desktop) Ask(ctx context.Context, r Request) Answer {
 			body += "\n<i>" + html.EscapeString(ReasonLabel) + ":</i> " + html.EscapeString(s)
 		}
 		actions = []string{"grant", "Grant", "deny", "Deny"}
+		if onWeb != nil {
+			actions = append(actions, "web", "Open web UI")
+		}
+	case onWeb != nil:
+		actions = []string{"once", "Allow once", "deny", "Deny", "web", "Open web UI"}
 	case r.Scope != "":
 		actions = []string{"once", "Allow once"}
 		body += fmt.Sprintf("\n\nAllow for %v: %s", TempGrant, html.EscapeString(sanitize(r.Scope)))
@@ -214,11 +220,9 @@ func (d *Desktop) Ask(ctx context.Context, r Request) Answer {
 		// Critical notifications stay on screen until answered.
 		"urgency": dbus.MakeVariant(byte(2)),
 	}
-	onDefault := d.OnDefault
-	if onDefault != nil {
-		// A body click opens the web UI: keep the notification (resident),
-		// so that the request stays answerable here too.
-		actions = append([]string{"default", "Open the web UI"}, actions...)
+	if onWeb != nil {
+		// Opening the web UI keeps the notification (resident), so that
+		// the request stays answerable here too.
 		hints["resident"] = dbus.MakeVariant(true)
 	}
 
@@ -308,17 +312,17 @@ func (d *Desktop) Ask(ctx context.Context, r Request) Answer {
 			switch {
 			case !ok:
 			case key == "default":
-				if onDefault != nil {
-					go onDefault(token)
-					reopenUntil = time.Now().Add(reopenAfterClick)
-				}
+				// A body click: no answer.
+			case key == "web" && onWeb != nil:
+				go onWeb(token)
+				reopenUntil = time.Now().Add(reopenAfterClick)
 			case key != "":
-				if onDefault != nil {
+				if onWeb != nil {
 					d.closeNotification(id) // resident
 				}
 				return ParseAnswer(key)
 			case time.Now().Before(reopenUntil):
-				// Closed by the body click, despite "resident".
+				// Closed by the click, despite "resident".
 				reopenUntil = time.Time{}
 				id = 0
 				if refresh() != nil {
