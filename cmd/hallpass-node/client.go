@@ -16,6 +16,7 @@ import (
 
 	pb "github.com/alban/hallpass/api/session/v1"
 	"github.com/alban/hallpass/internal/nodeclient"
+	"github.com/alban/hallpass/internal/ui"
 )
 
 // clientFlags are the flags of the client commands.
@@ -102,8 +103,27 @@ func cmdPending(args []string) error {
 	for _, r := range snap.Pending {
 		p := r.GetPrompt()
 		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%d\n", r.GetId(), p.GetOp(), p.GetPath(), p.GetExe(), p.GetPid())
+		if s := advanceLine(p); s != "" {
+			// No tab: a line's last cell does not size the columns.
+			fmt.Fprintln(w, s)
+		}
 	}
 	return w.Flush()
+}
+
+// advanceLine describes a request made in advance below its row, or ""
+// for another request: "  asked in advance for 10m; reason given by the
+// program (unverified): "...""
+func advanceLine(p *pb.Prompt) string {
+	if !p.GetAdvance() {
+		return ""
+	}
+	r := ui.Request{For: p.GetGrantFor().AsDuration(), Reason: p.GetReason()}
+	s := "  asked in advance " + r.AdvanceFor() + ", answer grant or deny"
+	if reason := r.AdvanceReason(); reason != "" {
+		s += "; " + ui.ReasonLabel + ": " + reason
+	}
+	return s
 }
 
 func cmdAnswer(args []string) error {
