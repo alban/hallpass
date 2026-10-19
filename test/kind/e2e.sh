@@ -186,12 +186,12 @@ check_log hallpass-e2e mediated denied=denied
 check_log hallpass-e2e plain plain=ok
 check_log hallpass-e2e-off unselected unselected=ok
 
-# The two answers are Events on the mediated pod.
+# The start and the two answers are Events on the mediated pod.
 has_event() {
 	"${KUBECTL[@]}" -n hallpass-e2e get events --field-selector "involvedObject.name=mediated,reason=$1" \
 		-o jsonpath='{.items[*].message}' | grep -q "$2"
 }
-for e in "HallpassAllowed /etc/once" "HallpassDenied /etc/denied"; do
+for e in "HallpassStarted sandboxed" "HallpassAllowed /etc/once" "HallpassDenied /etc/denied"; do
 	# shellcheck disable=SC2086
 	wait_for 30 has_event $e || fail "no $e event on the mediated pod"
 done

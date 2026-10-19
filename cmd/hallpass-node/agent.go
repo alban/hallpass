@@ -254,6 +254,7 @@ func (a *agent) attach(st *specs.ContainerProcessState, fd int) error {
 	a.startLocked(s)
 	a.mu.Unlock()
 	a.log.Info("session started", "container", id, "namespace", md.Namespace, "pod", md.Pod, "name", md.Container, "policy", pol.Name, "strict", ks != nil, "pid", st.Pid)
+	s.event(false, reasonStarted, startedMessage(pol, ks != nil))
 	a.persist(s)
 	return nil
 }

@@ -33,6 +33,12 @@ By default, only `~/.config/hallpass`, the hallpass binary itself and the sessio
 
 Writes to known secret stores (`~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.config/gh`, `~/.kube`, `~/.docker`, `~/.netrc`, `~/.git-credentials`) are asked about like any other write, but the prompt is flagged in red (for example "SSH keys — secret store"), so allowing one is a deliberate choice rather than a reflex. They are not denied outright: writing them is sometimes legitimate (`ssh-keygen`, `gh auth login`, `aws configure`), and a silent deny would hide the attempt instead of surfacing it.
 
+When the sandbox starts, hallpass prints one line on stderr with the mode, the session number (hallpass's pid, as `hallpass answer` and `hallpass web` show it) and where to answer:
+
+```
+hallpass: sandbox started (lite, session 1234). Ctrl-] for the menu; run 'hallpass web' in another terminal for the full UI.
+```
+
 Press Ctrl-] inside a session to see its current rules, including answers given so far; any key closes the overlay.
 
 On a terminal, the window title starts with `[hallpass]` until the session ends: every title the program sets gets the prefix, and the command running in the foreground, if it is not a shell, is appended (`[hallpass] ~/src — vim main.go`), since the terminal itself only sees hallpass. At exit, hallpass restores the previous title in terminals that support the title stack (xterm, VTE-based ones such as GNOME Terminal); elsewhere, the title stays until your shell sets a new one.

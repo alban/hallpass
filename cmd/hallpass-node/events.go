@@ -31,7 +31,22 @@ const (
 	// policy that does not ask), summarized at most once per
 	// summaryPeriod per container.
 	reasonPolicyDenied = "HallpassPolicyDenied"
+	// reasonStarted: the container is sandboxed, and how to answer.
+	reasonStarted = "HallpassStarted"
 )
+
+// startedMessage is the message of the reasonStarted Event.
+func startedMessage(pol *Policy, strict bool) string {
+	mode := "lite"
+	if strict {
+		mode = "strict"
+	}
+	s := fmt.Sprintf("sandboxed by hallpass (%s mode, policy %q); ", mode, pol.Name)
+	if !pol.Ask {
+		return s + "requests are denied without asking"
+	}
+	return s + "answer its requests with Headlamp or `hallpass web --node`"
+}
 
 // summaryPeriod is how often automatic denials are reported, per container
 // (a variable for the tests).

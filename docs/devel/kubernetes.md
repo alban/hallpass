@@ -526,7 +526,9 @@ design above:
   API is on the pod's loopback, out of reach of an httpGet or grpc
   probe). No liveness probe: a restart drops the running containers'
   listeners.
-- **Events.** Each session subscribes to its monitor's `Decided`
+- **Events.** A new session (not one restored after an agent restart)
+  emits `HallpassStarted`: the mode, the policy, and how to answer
+  (Headlamp or `hallpass web --node`, or "denied without asking"). Each session subscribes to its monitor's `Decided`
   events. An answer through `session.Answer` is one Event, with who
   answered; a denial of the agent itself while the policy asks is a
   timeout (`HallpassNotAnswered`); the other denials (rules, built-ins)

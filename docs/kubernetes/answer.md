@@ -40,13 +40,16 @@ The agent logs every request, answer and session
 (`kubectl -n hallpass-system logs`).
 
 The decisions are Events on the pod, shown by `kubectl describe pod` and
-`kubectl get events`: `HallpassAllowed` and `HallpassDenied` for each
+`kubectl get events`: `HallpassStarted` when a container's sandbox
+starts (mode, policy, and how to answer), `HallpassAllowed` and
+`HallpassDenied` for each
 answer and who gave it, `HallpassNotAnswered` when a request timed out,
 and `HallpassPolicyDenied` for the denials of the policy and of the
 built-in rules, without a human (the first one at once, then at most a
 summary per minute per container, with the most frequent paths):
 
 ```
+Normal   HallpassStarted       container agent: sandboxed by hallpass (strict mode, policy "agent"); answer its requests with Headlamp or `hallpass web --node`
 Warning  HallpassPolicyDenied  container agent: denied by the policy: write /etc/a1
 Warning  HallpassPolicyDenied  container agent: denied by the policy 5 times in the last 1m0s: write /etc/a2 (2), write /etc/a0 (1), write /etc/a1 (1) and 1 more
 ```

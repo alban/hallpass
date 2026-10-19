@@ -128,9 +128,6 @@ func runSession(cfg sessionConfig) (int, error) {
 			return 0, err
 		}
 	}
-	if _, remote := cfg.Asker.(ui.Remote); remote {
-		fmt.Fprintf(os.Stderr, "hallpass: answer from another terminal with: hallpass answer %d\n", os.Getpid())
-	}
 
 	spec := launch.ProcSpec{
 		Args:        cfg.Args,
@@ -173,6 +170,8 @@ func runSession(cfg sessionConfig) (int, error) {
 	signal.Notify(fwd, syscall.SIGTERM, syscall.SIGHUP)
 	defer signal.Stop(fwd)
 
+	// Before the overlay: Start syncs with the cursor, below this line.
+	fmt.Fprintln(os.Stderr, banner(cfg.LSM != nil, os.Getpid(), cfg.Asker, cfg.TTY != nil))
 	if cfg.TTY != nil {
 		if err := cfg.TTY.Start(filepath.Base(cfg.Args[0])); err != nil {
 			return 0, fmt.Errorf("terminal: %w", err)
