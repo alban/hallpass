@@ -36,7 +36,9 @@ prompt (see [monitor.md](monitor.md#behaviour)).
 ### One server, two scopes
 
 A session opens its own web UI from the Ctrl-] menu ("[w] open the web
-UI") or with the "Open web UI" button of a request's desktop
+UI"), with `[w]` in a request's terminal prompt (desktop sessions only:
+`DISPLAY` or `WAYLAND_DISPLAY` set), or with the "Open web UI" button of
+a request's desktop
 notification. It embeds the same `internal/web` server as `hallpass web`
 (`web.NewSession(pid)`), started on the first "open" on a random
 loopback port, and opens the page with `xdg-open` (in a new session, so
@@ -51,10 +53,13 @@ either. The server is restricted to the session:
   sandbox cannot start pairings out of the blue. A request racing the
   user's browser still cancels both and warns (the contention check
   comes first).
-- The pairing code is confirmed in the Ctrl-] overlay, or in a second
+- The pairing code is confirmed in the terminal's overlay, or in a second
   desktop notification with [Pair] [Cancel]. Notification services show
   one critical notification at a time (GNOME queues the others), so the
-  request's notification is hidden while the confirmation shows.
+  request's notification is hidden while the confirmation shows. In the
+  terminal, the confirmation takes the place of the request's prompt
+  (`ui.Terminal.Preempt`), which comes back afterwards: the request keeps
+  `promptMu` until answered.
 - Nothing is printed in the terminal, where a line would stay after the
   pairing; only an `xdg-open` failure prints the URL.
 - Once paired, the page closes the pairing window

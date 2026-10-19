@@ -126,39 +126,46 @@ func (s *session) confirmPair(ctx context.Context, code string) bool {
 			fmt.Sprintf("Pair the browser showing <b>%s</b>?\nOnly if the web page shows the same code.", code),
 			"Pair", "Cancel")
 	}
-	if s.cfg.TTY == nil || !lockCtx(ctx, &s.promptMu) {
+	if s.cfg.TTY == nil {
 		return false
 	}
-	defer s.promptMu.Unlock()
-	var timeout time.Duration
-	if dl, ok := ctx.Deadline(); ok {
-		if timeout = time.Until(dl); timeout <= 0 {
-			return false
+	ask := func() bool {
+		var timeout time.Duration
+		if dl, ok := ctx.Deadline(); ok {
+			if timeout = time.Until(dl); timeout <= 0 {
+				return false
+			}
 		}
+		lines := []string{
+			fmt.Sprintf(" hallpass: pair the browser showing %s?", code),
+			" Only if the web page shows the same code.   [y] pair   [n] cancel",
+		}
+		k := s.cfg.TTY.Prompt(lines, "yYnN\x1b\x03", typeahead, timeout, ctx.Done(), nil)
+		return k == 'y' || k == 'Y'
 	}
-	lines := []string{
-		fmt.Sprintf(" hallpass: pair the browser showing %s?", code),
-		" Only if the web page shows the same code.   [y] pair   [n] cancel",
-	}
-	k := s.cfg.TTY.Prompt(lines, "yYnN\x1b\x03", typeahead, timeout, ctx.Done(), nil)
-	return k == 'y' || k == 'Y'
-}
-
-// lockCtx locks mu, unless ctx ends first.
-func lockCtx(ctx context.Context, mu *sync.Mutex) bool {
+	// A request's prompt holds promptMu until answered: show the
+	// confirmation in its place instead of waiting.
 	locked := make(chan struct{})
 	go func() {
-		mu.Lock()
+		s.promptMu.Lock()
 		close(locked)
 	}()
-	select {
-	case <-locked:
-		return true
-	case <-ctx.Done():
+	unlockLater := func() {
 		go func() {
 			<-locked
-			mu.Unlock()
+			s.promptMu.Unlock()
 		}()
+	}
+	done := make(chan bool, 1)
+	select {
+	case <-locked:
+		defer s.promptMu.Unlock()
+		return ask()
+	case s.preempt <- func() { done <- ask() }:
+		unlockLater()
+		return <-done
+	case <-ctx.Done():
+		unlockLater()
 		return false
 	}
 }

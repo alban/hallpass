@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/alban/hallpass/internal/tty"
@@ -19,8 +20,21 @@ const typeaheadGuard = 500 * time.Millisecond
 // Terminal asks in an overlay on the terminal hallpass relays (see package
 // tty).
 type Terminal struct {
-	t       *tty.Term
+	t       prompter
 	timeout time.Duration
+
+	// OnWeb, if set, opens the session's web UI: prompts offer [w], which
+	// keeps the request asked about.
+	OnWeb func()
+	// Preempt takes functions to run in place of the prompt shown, which
+	// comes back afterwards: the web UI's pairing confirmation, which must
+	// not wait for the request to be answered.
+	Preempt chan func()
+}
+
+// prompter is tty.Term's overlay.
+type prompter interface {
+	Prompt(lines []string, accept string, guard, timeout time.Duration, cancel <-chan struct{}, relabel <-chan []string) byte
 }
 
 // NewTerminal returns an asker drawing on t.
@@ -57,7 +71,7 @@ func (a *Terminal) Ask(ctx context.Context, r Request) Answer {
 		if s := r.AdvanceReason(); s != "" {
 			lines = append(lines, " "+ReasonLabel+": "+s)
 		}
-		keys = fmt.Sprintf(" %s grant %s  %s deny  %s dismiss", bold("[g]"), r.AdvanceFor(), bold("[d]"), bold("[Esc]"))
+		keys = fmt.Sprintf(" %s grant %s  %s deny", bold("[g]"), r.AdvanceFor(), bold("[d]"))
 		accept = "gGdD\x1b\x03"
 	} else {
 		keys = " " + bold("[o]") + " allow once"
@@ -67,22 +81,31 @@ func (a *Terminal) Ask(ctx context.Context, r Request) Answer {
 			keys += fmt.Sprintf("  %s for %v  %s always", bold("[t]"), TempGrant, bold("[a]"))
 			accept += "tTaA"
 		}
-		keys += fmt.Sprintf("  %s deny  %s never  %s dismiss", bold("[d]"), bold("[n]"), bold("[Esc]"))
+		keys += fmt.Sprintf("  %s deny  %s never", bold("[d]"), bold("[n]"))
 	}
+	if a.OnWeb != nil {
+		keys += "  " + bold("[w]") + " web UI"
+		accept += "wW"
+	}
+	keys += "  " + bold("[Esc]") + " dismiss"
 	if a.timeout > 0 {
 		keys += fmt.Sprintf("   (dismissed in %v)", a.timeout)
 	}
 	lines = append(lines, keys)
 	var relabel chan []string
+	var waiting atomic.Int64
+	waiting.Store(int64(r.Waiting))
 	if r.More != nil {
 		relabel = make(chan []string)
 		done := make(chan struct{})
 		defer close(done)
+		base := append([]string(nil), lines...)
 		go func() {
 			for {
 				select {
 				case n := <-r.More:
-					l := append([]string(nil), lines...)
+					waiting.Store(int64(n))
+					l := append([]string(nil), base...)
 					l[0] = head(n)
 					select {
 					case relabel <- l:
@@ -95,8 +118,52 @@ func (a *Terminal) Ask(ctx context.Context, r Request) Answer {
 			}
 		}()
 	}
-	start := time.Now()
-	switch a.t.Prompt(lines, accept, typeaheadGuard, a.timeout, ctx.Done(), relabel) {
+	// The time spent in preempting functions does not count.
+	var shown time.Duration
+	var key byte
+	for {
+		left := time.Duration(0)
+		if a.timeout > 0 {
+			if left = a.timeout - shown; left <= 0 {
+				return AnswerTimeout
+			}
+		}
+		stop, quit, watched := make(chan struct{}), make(chan struct{}), make(chan struct{})
+		var run func()
+		go func() {
+			defer close(watched)
+			select {
+			case run = <-a.Preempt:
+				close(stop)
+			case <-ctx.Done():
+				close(stop)
+			case <-quit:
+			}
+		}()
+		start := time.Now()
+		// Shown again after a preemption: with the latest count.
+		lines[0] = head(int(waiting.Load()))
+		key = a.t.Prompt(lines, accept, typeaheadGuard, left, stop, relabel)
+		shown += time.Since(start)
+		close(quit)
+		<-watched
+		if run != nil {
+			// Even if a key came at the same time: it waits for it.
+			run()
+		}
+		switch {
+		case key == 'w' || key == 'W':
+			go a.OnWeb()
+		case key == 0 && run != nil && ctx.Err() == nil:
+		default:
+			return a.answer(ctx, key, shown)
+		}
+	}
+}
+
+// answer maps the key pressed, 0 for none, to the answer.
+func (a *Terminal) answer(ctx context.Context, key byte, shown time.Duration) Answer {
+	switch key {
 	case 'g', 'G':
 		return AnswerGrant
 	case 'o', 'O':
@@ -110,7 +177,7 @@ func (a *Terminal) Ask(ctx context.Context, r Request) Answer {
 	case 'n', 'N':
 		return AnswerNever
 	case 0:
-		if a.timeout > 0 && ctx.Err() == nil && time.Since(start) >= a.timeout {
+		if a.timeout > 0 && ctx.Err() == nil && shown >= a.timeout {
 			return AnswerTimeout
 		}
 	}

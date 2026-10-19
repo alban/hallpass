@@ -76,6 +76,9 @@ type session struct {
 
 	// web is the session's own web UI, started on demand.
 	web sessionWeb
+	// preempt shows the pairing confirmation in place of the terminal
+	// prompt shown, if any (ui.Terminal.Preempt).
+	preempt chan func()
 	// ports denies the sandbox the web UIs' ports; nil when the network
 	// is not mediated.
 	ports *portGuard
@@ -138,6 +141,15 @@ func runSession(cfg sessionConfig) (int, error) {
 	defer s.closeWeb()
 	if d, ok := cfg.Asker.(*ui.Desktop); ok {
 		d.OnWeb = s.openWeb
+	}
+	if t, ok := cfg.Asker.(*ui.Terminal); ok {
+		s.preempt = make(chan func())
+		t.Preempt = s.preempt
+		if os.Getenv("WAYLAND_DISPLAY") != "" || os.Getenv("DISPLAY") != "" {
+			// A browser to open: [w] in the prompts. The Ctrl-] menu
+			// offers it anyway, and prints the address if xdg-open fails.
+			t.OnWeb = func() { s.openWeb("") }
+		}
 	}
 
 	spec := launch.ProcSpec{
