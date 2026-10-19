@@ -27,10 +27,16 @@ const (
 	OpTruncate
 	OpConnect // connect, and sendmsg/sendto with MSG_FASTOPEN
 	OpSend    // sendto, sendmsg, sendmmsg with a destination address
+	// OpExec runs the program at a path (execve, execveat). It is not in
+	// OpAll: a file rule (the project dir, --allow) does not let programs
+	// there run, and a file deny does not stop one from running.
+	OpExec
 
 	OpFiles = OpTruncate<<1 - 1
 	OpNet   = OpConnect | OpSend
-	OpAll   = OpFiles | OpNet
+	// OpAll is every file and network op: what a file or network rule,
+	// and an answer to a prompt about one, covers.
+	OpAll = OpFiles | OpNet
 )
 
 // String names op for people, the way prompts show it: "write", "create
@@ -58,6 +64,8 @@ func (op Op) String() string {
 		return "connect"
 	case op&OpSend != 0:
 		return "send"
+	case op&OpExec != 0:
+		return "exec"
 	}
 	return "?"
 }
@@ -154,7 +162,7 @@ type Rule struct {
 	Ops     Op // a rule with no op matches nothing
 	Object  ObjectMatch
 	Verdict Verdict
-	Label   string    // for Ask: shown in prompts, e.g. "SSH keys"
+	Label   string    // for Ask: shown in prompts, e.g. "SSH keys"; "@name" for an exec allow from a program group
 	Expires time.Time // zero: until removed
 	Set     string    // opaque, chosen by the client
 }
@@ -200,9 +208,15 @@ func (m ObjectMatch) IsNet() bool {
 }
 
 // PathMatch is a path, or with Tree a path and everything below it.
+//
+// An exec rule (Ops OpExec) is a PathMatch on the program's path.
 type PathMatch struct {
 	Path string // absolute and clean
 	Tree bool
+	// Args is reserved for exec rules matching the arguments too ("allow
+	// git log", docs/devel/plan-exec.md). It is not implemented: a rule
+	// with Args matches nothing.
+	Args []string
 }
 
 // ProcMatch is a /proc/<pid>/<Name> file of processes named Comm.
@@ -246,7 +260,7 @@ func Eval(rs []Rule, op Op, obj Object, now time.Time) (v Verdict, id uint64, ok
 // match reports whether m selects obj, and how deep (m.Depth).
 func (m ObjectMatch) match(obj Object) (depth int, ok bool) {
 	switch {
-	case obj.Path != nil && m.Path != nil:
+	case obj.Path != nil && m.Path != nil && len(m.Path.Args) == 0:
 		p := filepath.Clean(obj.Path.Path)
 		ok = p == m.Path.Path || (m.Path.Tree && Under(p, m.Path.Path))
 	case obj.Proc != nil && m.Proc != nil:

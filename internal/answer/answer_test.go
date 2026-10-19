@@ -46,7 +46,7 @@ func TestNetAnswers(t *testing.T) {
 	p := defaults.NewLexical("/root", "", nil, nil)
 	obj := rules.Object{Inet: &rules.InetObject{Proto: 6, Addr: netip.MustParseAddrPort("[::1]:443")}}
 	var d monitor.Decision
-	grant(p, &d, nil, obj, time.Time{})
+	grant(p, &d, nil, rules.OpAll, obj, time.Time{})
 	if len(d.AddRules) != 1 || d.AddRules[0].Object.NetString() != "[::1]:443" {
 		t.Fatalf("grant: %+v", d.AddRules)
 	}
@@ -63,21 +63,21 @@ func TestGrant(t *testing.T) {
 	p := defaults.NewLexical("/root", "", nil, nil)
 	obj := rules.Object{Path: &rules.PathObject{Path: "/opt/tool/lib/f"}}
 	var d monitor.Decision
-	grant(p, &d, nil, obj, time.Time{})
+	grant(p, &d, nil, rules.OpAll, obj, time.Time{})
 	if len(d.AddRules) != 1 || d.AddRules[0].Object.Path.Path != "/opt/tool" || !d.AddRules[0].Object.Path.Tree {
 		t.Fatalf("got %+v", d.AddRules)
 	}
 
 	// A permanent grant on the folder already covers a temp one.
-	rs := []rules.Rule{{ID: 3, Verdict: rules.Allow, Object: d.AddRules[0].Object}}
+	rs := []rules.Rule{{ID: 3, Ops: rules.OpAll, Verdict: rules.Allow, Object: d.AddRules[0].Object}}
 	d = monitor.Decision{}
-	grant(p, &d, rs, obj, time.Now().Add(time.Hour))
+	grant(p, &d, rs, rules.OpAll, obj, time.Now().Add(time.Hour))
 	if len(d.AddRules)+len(d.RemoveRules) != 0 {
 		t.Errorf("shrinking grant: %+v", d)
 	}
 	// A permanent grant replaces a temp one.
 	rs[0].Expires = time.Now().Add(time.Hour)
-	grant(p, &d, rs, obj, time.Time{})
+	grant(p, &d, rs, rules.OpAll, obj, time.Time{})
 	if len(d.RemoveRules) != 1 || d.RemoveRules[0] != 3 || len(d.AddRules) != 1 {
 		t.Errorf("got %+v", d)
 	}
@@ -132,12 +132,36 @@ func TestApplyGrant(t *testing.T) {
 			}
 			continue
 		}
-		if len(rs) != 1 || rs[0].Verdict != rules.Allow || rs[0].Ops != rules.OpAll || *rs[0].Object.Path != *tc.want {
+		if len(rs) != 1 || rs[0].Verdict != rules.Allow || rs[0].Ops != rules.OpAll || rs[0].Object.Path.Path != tc.want.Path || rs[0].Object.Path.Tree != tc.want.Tree {
 			t.Fatalf("%s: rules %+v", tc.name, rs)
 		}
 		if e := rs[0].Expires; (tc.adv.For == 0) != e.IsZero() || (!e.IsZero() && e.Before(before.Add(tc.adv.For))) {
 			t.Errorf("%s: expires %v", tc.name, e)
 		}
+	}
+}
+
+// TestExecAnswers: answers on an exec cover running that program only.
+func TestExecAnswers(t *testing.T) {
+	p := defaults.NewLexical("/root", "", nil, nil)
+	obj := rules.Object{Path: &rules.PathObject{Path: "/opt/tool/bin/run"}}
+	var d monitor.Decision
+	// A file grant on the folder does not cover running a program there.
+	rs := []rules.Rule{{ID: 3, Ops: rules.OpAll, Verdict: rules.Allow, Object: rules.ObjectMatch{Path: &rules.PathMatch{Path: "/opt/tool/bin/run"}}}}
+	grant(p, &d, rs, answerOps(rules.OpExec), obj, time.Time{})
+	if len(d.AddRules) != 1 || len(d.RemoveRules) != 0 {
+		t.Fatalf("got %+v", d)
+	}
+	r := d.AddRules[0]
+	if r.Ops != rules.OpExec || r.Object.Path.Path != "/opt/tool/bin/run" || r.Object.Path.Tree {
+		t.Errorf("exec grant: %+v %+v", r, r.Object.Path)
+	}
+	if answerOps(rules.OpWrite) != rules.OpAll {
+		t.Errorf("write answers: %v", answerOps(rules.OpWrite))
+	}
+	req := Request(p, &monitor.Request{Op: rules.OpExec, Objects: []rules.Object{obj}}, 0)
+	if req.Scope != "/opt/tool/bin/run" || req.Op != "exec" {
+		t.Errorf("request: %+v", req)
 	}
 }
 

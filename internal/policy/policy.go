@@ -10,11 +10,14 @@ package policy
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"path"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/alban/hallpass/internal/defaults"
+	"github.com/alban/hallpass/internal/programs"
 	"github.com/alban/hallpass/internal/rules"
 	"github.com/alban/hallpass/internal/seccomp"
 )
@@ -46,6 +49,16 @@ type Spec struct {
 	AllowNetwork []string `json:"allowNetwork,omitempty"`
 	DenyNetwork  []string `json:"denyNetwork,omitempty"`
 	AskNetwork   []string `json:"askNetwork,omitempty"`
+	// AllowExec and DenyExec are programs, by absolute path: "/usr/bin/make"
+	// is that program only, "/opt/tools/**" every program below
+	// /opt/tools. AllowExec also takes groups: "@shells", "@coreutils"
+	// (programs.Names), or one of Groups. They need exec in Mediate.
+	AllowExec []string `json:"allowExec,omitempty"`
+	DenyExec  []string `json:"denyExec,omitempty"`
+	// Groups are groups of programs, by name ("@tools"): a new group, or
+	// the replacement of the built-in group of the same name. Members are
+	// programs as in AllowExec, without groups. They need exec in Mediate.
+	Groups map[string][]string `json:"groups,omitempty"`
 }
 
 // Policy is a validated Spec.
@@ -57,6 +70,11 @@ type Policy struct {
 	// Mediate is the mediated syscall categories.
 	Mediate                               seccomp.Category
 	AllowNetwork, DenyNetwork, AskNetwork []rules.ObjectMatch
+	AllowExec, DenyExec                   []rules.PathMatch
+	// AllowGroups are the program groups of AllowExec, e.g. "@shells".
+	AllowGroups []string
+	// Groups are the policy's own groups, sorted by name (GroupDefs).
+	Groups []programs.Def
 }
 
 // FieldError is an invalid field of a Spec, named as in JSON. Sources
@@ -115,7 +133,88 @@ func (s Spec) Validate() (Policy, error) {
 			*f.out = append(*f.out, m)
 		}
 	}
+	if len(s.Groups) > 0 && p.Mediate&seccomp.Exec == 0 {
+		return Policy{}, &FieldError{"groups", errors.New("needs exec in mediate")}
+	}
+	for _, name := range slices.Sorted(maps.Keys(s.Groups)) {
+		if !programs.ValidName(name) {
+			return Policy{}, &FieldError{"groups", fmt.Errorf("%q: not a group name (@, then lowercase letters, digits or -, 32 bytes at most)", name)}
+		}
+		if len(s.Groups[name]) == 0 {
+			return Policy{}, &FieldError{"groups", fmt.Errorf("%s: no programs", name)}
+		}
+		ms, err := programPaths(s.Groups[name], nil, nil)
+		if err != nil {
+			return Policy{}, &FieldError{"groups", fmt.Errorf("%s: %w", name, err)}
+		}
+		d := programs.Def{Name: name}
+		for _, m := range ms {
+			if m.Tree {
+				d.Members = append(d.Members, strings.TrimSuffix(m.Path, "/")+"/**")
+			} else {
+				d.Members = append(d.Members, m.Path)
+			}
+		}
+		p.Groups = append(p.Groups, d)
+	}
+	known := p.GroupDefs()
+	for _, f := range []struct {
+		name   string
+		in     []string
+		out    *[]rules.PathMatch
+		groups *[]string
+	}{{"allowExec", s.AllowExec, &p.AllowExec, &p.AllowGroups}, {"denyExec", s.DenyExec, &p.DenyExec, nil}} {
+		if len(f.in) > 0 && p.Mediate&seccomp.Exec == 0 {
+			return Policy{}, &FieldError{f.name, errors.New("needs exec in mediate")}
+		}
+		if *f.out, err = programPaths(f.in, f.groups, known); err != nil {
+			return Policy{}, &FieldError{f.name, err}
+		}
+	}
 	return p, nil
+}
+
+// GroupDefs returns the program groups of p: the built-in ones, replaced
+// or completed by p's own.
+func (p Policy) GroupDefs() []programs.Def {
+	return programs.Merge(p.Groups)
+}
+
+// programPaths turns policy program paths into path matches: a path is
+// that program, a trailing /** every program below. With groups not nil,
+// the names of groups ("@shells", one of known) go to it.
+func programPaths(in []string, groups *[]string, known []programs.Def) ([]rules.PathMatch, error) {
+	var out []rules.PathMatch
+	for _, p := range in {
+		if strings.HasPrefix(p, "@") {
+			switch {
+			case groups == nil:
+				return nil, fmt.Errorf("%q: groups are for allowing only", p)
+			case !slices.ContainsFunc(known, func(d programs.Def) bool { return d.Name == p }):
+				names := make([]string, len(known))
+				for i, d := range known {
+					names[i] = d.Name
+				}
+				return nil, fmt.Errorf("%q: unknown group (known: %s)", p, strings.Join(names, ", "))
+			}
+			if !slices.Contains(*groups, p) {
+				*groups = append(*groups, p)
+			}
+			continue
+		}
+		root, tree := strings.CutSuffix(p, "/**")
+		if tree && root == "" {
+			root = "/"
+		}
+		if !path.IsAbs(root) {
+			return nil, fmt.Errorf("%q: not an absolute path", p)
+		}
+		if strings.ContainsAny(root, "*?[") {
+			return nil, fmt.Errorf("%q: only a trailing /** is supported", p)
+		}
+		out = append(out, rules.PathMatch{Path: path.Clean(root), Tree: tree})
+	}
+	return out, nil
 }
 
 // treeRoots turns policy paths into the roots of the trees they cover.
@@ -152,6 +251,12 @@ type Context struct {
 	// OwnListeners allows connections to the listeners started inside
 	// the sandbox, when network is mediated.
 	OwnListeners bool
+	// Execs are programs allowed to run without asking (absolute paths,
+	// exact), before the policy's: the command.
+	Execs []string
+	// Groups are the program groups, resolved as the sandbox finds them:
+	// for the policy's AllowGroups, and offered by prompts.
+	Groups []programs.Group
 	// Lexical: the paths are in another mount namespace (a container's),
 	// only cleaned and not symlink-resolved (defaults.NewLexical).
 	Lexical bool
@@ -177,6 +282,19 @@ func (p Policy) Defaults(c Context) *defaults.Defaults {
 	}
 	for _, m := range p.AskNetwork {
 		d.AskNet(m)
+	}
+	for _, e := range c.Execs {
+		d.AllowExec(e, false)
+	}
+	for _, m := range p.AllowExec {
+		d.AllowExec(m.Path, m.Tree)
+	}
+	d.SetGroups(c.Groups)
+	for _, g := range p.AllowGroups {
+		d.AllowGroup(g)
+	}
+	for _, m := range p.DenyExec {
+		d.DenyExec(m.Path, m.Tree)
 	}
 	return d
 }

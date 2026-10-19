@@ -119,10 +119,42 @@ func TestOpString(t *testing.T) {
 	for op, want := range map[Op]string{
 		OpWrite | OpCreate: "write", OpCreate: "create", OpMkdir: "create directory",
 		OpSymlink: "create symlink", OpDelete: "delete", OpLink: "link", OpRename: "rename", OpTruncate: "truncate",
-		OpConnect: "connect", OpSend: "send",
+		OpConnect: "connect", OpSend: "send", OpExec: "exec",
 	} {
 		if got := op.String(); got != want {
 			t.Errorf("%b: %q, want %q", op, got, want)
+		}
+	}
+}
+
+// TestEvalExec: exec rules decide execs only, and file rules do not decide
+// execs. A rule with Args (not implemented yet) matches nothing.
+func TestEvalExec(t *testing.T) {
+	if OpAll&OpExec != 0 {
+		t.Fatal("OpAll covers exec")
+	}
+	rs := []Rule{
+		{ID: 1, Ops: OpAll, Verdict: Allow, Object: ObjectMatch{Path: &PathMatch{Path: "/", Tree: true}}},
+		{ID: 2, Ops: OpExec, Verdict: Allow, Object: ObjectMatch{Path: &PathMatch{Path: "/usr/bin/ls"}}},
+		{ID: 3, Ops: OpExec, Verdict: Deny, Object: ObjectMatch{Path: &PathMatch{Path: "/opt/bad", Tree: true}}},
+		{ID: 4, Ops: OpExec, Verdict: Allow, Object: ObjectMatch{Path: &PathMatch{Path: "/usr/bin/git", Args: []string{"status"}}}},
+	}
+	for _, tc := range []struct {
+		op   Op
+		path string
+		v    Verdict
+		id   uint64
+		ok   bool
+	}{
+		{OpExec, "/usr/bin/ls", Allow, 2, true},
+		{OpExec, "/usr/bin/cat", 0, 0, false},
+		{OpExec, "/opt/bad/x", Deny, 3, true},
+		{OpExec, "/usr/bin/git", 0, 0, false},
+		{OpWrite, "/opt/bad/x", Allow, 1, true},
+	} {
+		v, id, ok := Eval(rs, tc.op, file(tc.path), time.Time{})
+		if v != tc.v || ok != tc.ok || (ok && id != tc.id) {
+			t.Errorf("%v %s: %v %d %v, want %v %d %v", tc.op, tc.path, v, id, ok, tc.v, tc.id, tc.ok)
 		}
 	}
 }

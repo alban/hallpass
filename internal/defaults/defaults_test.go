@@ -7,10 +7,12 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/alban/hallpass/internal/programs"
 	"github.com/alban/hallpass/internal/rules"
 )
 
@@ -197,5 +199,66 @@ func TestNet(t *testing.T) {
 	if !strings.Contains(s, "network: tcp:10.0.0.0/8:22\nAllowed") || !strings.Contains(s, "network: all\n") ||
 		!strings.Contains(s, "Asked, even inside what is allowed:\n  network: 10.0.0.1\n") {
 		t.Errorf("Describe:\n%s", s)
+	}
+}
+
+func TestExecRules(t *testing.T) {
+	d := NewLexical("/home/u", "/home/u/proj", nil, nil)
+	d.AllowExec("/usr/bin/ls", false)
+	d.AllowExec("/opt/tools", true)
+	d.DenyExec("/opt/tools/bad", false)
+	rs := d.Rules()
+	at := time.Now()
+	for path, want := range map[string]rules.Verdict{
+		"/usr/bin/ls": rules.Allow, "/opt/tools/x/y": rules.Allow, "/opt/tools/bad": rules.Deny,
+	} {
+		if v, _, ok := rules.Eval(rs, rules.OpExec, rules.Object{Path: &rules.PathObject{Path: path}}, at); !ok || v != want {
+			t.Errorf("exec %s: %v %v, want %v", path, v, ok, want)
+		}
+	}
+	// The workdir is writable, not executable.
+	if _, _, ok := rules.Eval(rs, rules.OpExec, rules.Object{Path: &rules.PathObject{Path: "/home/u/proj/run"}}, at); ok {
+		t.Error("exec in the workdir matched a rule")
+	}
+	s := strings.Join(d.Describe(rs), "\n")
+	if !strings.Contains(s, "Programs run without asking:\n  /usr/bin/ls\n  /opt/tools (and every program below)\n") || !strings.Contains(s, "  exec: /opt/tools/bad\n") {
+		t.Errorf("Describe:\n%s", s)
+	}
+
+	// A group: its programs are allowed, the summary names it with its
+	// count; a program already allowed (the command) stays listed.
+	d.AllowExec("/usr/bin/cmd", false)
+	d.SetGroups([]programs.Group{
+		{Name: "@coreutils", Members: []string{"/usr/bin/cat", "/usr/bin/cmd", "/usr/bin/cp", "/usr/bin/ls"}},
+		{Name: "@search", Members: []string{"/usr/bin/grep", "/usr/bin/cat"}},
+	})
+	d.AllowGroup("@coreutils")
+	d.AllowGroup("@coreutils")
+	d.AllowGroup("@nope")
+	rs = d.Rules()
+	_, _, _, run := d.Summary(rs)
+	if want := []string{"/usr/bin/ls", "/opt/tools (and every program below)", "/usr/bin/cmd", "@coreutils (cat, cmd, cp, … 4 programs)"}; !slices.Equal(run, want) {
+		t.Errorf("summary: %q, want %q", run, want)
+	}
+	n := 0
+	for _, r := range rs {
+		if r.Label == "@coreutils" {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Errorf("%d @coreutils rules, want 2 (cat, cp)", n)
+	}
+	if v, _, ok := rules.Eval(rs, rules.OpExec, rules.Object{Path: &rules.PathObject{Path: "/usr/bin/cp"}}, at); !ok || v != rules.Allow {
+		t.Errorf("cp: %v %v", v, ok)
+	}
+	if g, ok := d.Group("/usr/bin/cat"); !ok || g.Name != "@coreutils" {
+		t.Errorf("Group(cat) = %v, %v", g, ok)
+	}
+	if g, ok := d.Group("/usr/bin/grep"); !ok || g.Name != "@search" {
+		t.Errorf("Group(grep) = %v, %v", g, ok)
+	}
+	if _, ok := d.Group("/usr/bin/other"); ok {
+		t.Error("Group(other)")
 	}
 }

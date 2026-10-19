@@ -56,6 +56,7 @@ func Apply(m *monitor.Monitor, p Policy, req *monitor.Request, a ui.Answer, rs [
 	d := monitor.Decision{Client: who}
 	allow := false
 	obj := req.Objects[0]
+	ops := answerOps(req.Op)
 	switch a {
 	case ui.AnswerGrant:
 		allow = true
@@ -73,12 +74,12 @@ func Apply(m *monitor.Monitor, p Policy, req *monitor.Request, a ui.Answer, rs [
 		allow = true
 	case ui.AnswerAllowTemp:
 		allow = true
-		grant(p, &d, rs, obj, time.Now().Add(ui.TempGrant))
+		grant(p, &d, rs, ops, obj, time.Now().Add(ui.TempGrant))
 	case ui.AnswerAllowAlways:
 		allow = true
-		grant(p, &d, rs, obj, time.Time{})
+		grant(p, &d, rs, ops, obj, time.Time{})
 	case ui.AnswerNever:
-		d.AddRules = append(d.AddRules, rules.Rule{Ops: rules.OpAll, Verdict: rules.Deny, Object: exact(obj)})
+		d.AddRules = append(d.AddRules, rules.Rule{Ops: ops, Verdict: rules.Deny, Object: exact(obj)})
 	}
 	d.Verdicts = []monitor.Verdict{{Request: req.ID, Allow: allow}}
 	_, err := m.Apply(d)
@@ -105,12 +106,25 @@ func Apply(m *monitor.Monitor, p Policy, req *monitor.Request, a ui.Answer, rs [
 	return err
 }
 
-// grant adds to d the rule an "allow temp/always" answer gives obj: its
-// folder, or its kind of /proc file. A grant never shrinks: an existing
-// grant on the same scope lasting longer is kept.
-func grant(p Policy, d *monitor.Decision, rs []rules.Rule, obj rules.Object, expires time.Time) {
+// answerOps returns the ops the rules of an answer to a request about op
+// cover: an exec answer covers running the program only, a file or network
+// one every file and network op.
+func answerOps(op rules.Op) rules.Op {
+	if op&rules.OpExec != 0 {
+		return rules.OpExec
+	}
+	return rules.OpAll
+}
+
+// grant adds to d the rule an "allow temp/always" answer gives obj for
+// ops: its folder (the program itself for an exec), or its kind of /proc
+// file. A grant never shrinks: an existing grant on the same scope lasting
+// longer is kept.
+func grant(p Policy, d *monitor.Decision, rs []rules.Rule, ops rules.Op, obj rules.Object, expires time.Time) {
 	var m rules.ObjectMatch
 	switch {
+	case obj.Path != nil && ops == rules.OpExec:
+		m.Path = &rules.PathMatch{Path: obj.Path.Path}
 	case obj.Path != nil:
 		folder := p.FolderFor(obj.Path.Path)
 		if folder == "" {
@@ -126,7 +140,7 @@ func grant(p Policy, d *monitor.Decision, rs []rules.Rule, obj rules.Object, exp
 		return
 	}
 	for _, r := range rs {
-		if r.Set != "" || r.Verdict != rules.Allow || !sameMatch(r.Object, m) {
+		if r.Set != "" || r.Verdict != rules.Allow || r.Ops != ops || !sameMatch(r.Object, m) {
 			continue
 		}
 		if r.Expires.IsZero() || (!expires.IsZero() && !expires.After(r.Expires)) {
@@ -134,7 +148,7 @@ func grant(p Policy, d *monitor.Decision, rs []rules.Rule, obj rules.Object, exp
 		}
 		d.RemoveRules = append(d.RemoveRules, r.ID)
 	}
-	d.AddRules = append(d.AddRules, rules.Rule{Ops: rules.OpAll, Verdict: rules.Allow, Object: m, Expires: expires})
+	d.AddRules = append(d.AddRules, rules.Rule{Ops: ops, Verdict: rules.Allow, Object: m, Expires: expires})
 }
 
 // exact matches obj alone, for "never".
@@ -153,7 +167,7 @@ func exact(obj rules.Object) rules.ObjectMatch {
 func sameMatch(a, b rules.ObjectMatch) bool {
 	switch {
 	case a.Path != nil && b.Path != nil:
-		return *a.Path == *b.Path
+		return a.Path.Path == b.Path.Path && a.Path.Tree == b.Path.Tree && len(a.Path.Args)+len(b.Path.Args) == 0
 	case a.Proc != nil && b.Proc != nil:
 		return *a.Proc == *b.Proc
 	case a.IsNet() || b.IsNet():
@@ -190,6 +204,11 @@ func Request(p Policy, req *monitor.Request, waiting int) ui.Request {
 		if w := p.Warn(obj.Path.Path); w != "" {
 			r.Warn = w + " — secret store"
 		}
+	case obj.Path != nil && req.Op&rules.OpExec != 0:
+		// Answers cover this program, not its folder: a grant on
+		// /usr/bin would allow every program there.
+		r.Path = obj.Path.Path
+		r.Scope, r.Never = r.Path, "this program"
 	case obj.Path != nil:
 		r.Path = obj.Path.Path
 		r.Scope = p.FolderFor(r.Path)

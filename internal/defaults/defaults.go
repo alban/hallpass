@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/alban/hallpass/internal/programs"
 	"github.com/alban/hallpass/internal/rules"
 )
 
@@ -37,6 +38,12 @@ type Defaults struct {
 	// netAllow, netDeny and netAsk are network destinations
 	// (--allow-net, --deny-net, --ask-net).
 	netAllow, netDeny, netAsk []rules.ObjectMatch
+	// execAllow and execDeny are programs (--allow-exec, --deny-exec).
+	execAllow, execDeny []rules.PathMatch
+	// groups are the program groups, resolved (SetGroups); execGroups the
+	// names of those allowed (--allow-exec=@name).
+	groups     []programs.Group
+	execGroups []string
 }
 
 // warnLoc is a sensitive location: a write under path is still asked about,
@@ -112,6 +119,76 @@ func (d *Defaults) DenyNet(m rules.ObjectMatch) { d.netDeny = append(d.netDeny, 
 // AskNet asks about connections and sends to m, a network match, even
 // when a less specific allow covers them.
 func (d *Defaults) AskNet(m rules.ObjectMatch) { d.netAsk = append(d.netAsk, m) }
+
+// AllowExec lets the program at path run without asking, or with tree
+// every program below path. path is absolute; it is resolved like the
+// policy's paths.
+func (d *Defaults) AllowExec(path string, tree bool) {
+	d.execAllow = addProgram(d.execAllow, rules.PathMatch{Path: d.canon(path), Tree: tree})
+}
+
+// SetGroups sets the program groups, resolved as the sandbox finds them:
+// prompts offer a program's group (Group), AllowGroup allows one.
+func (d *Defaults) SetGroups(gs []programs.Group) {
+	d.groups = make([]programs.Group, len(gs))
+	for i, g := range gs {
+		d.groups[i] = programs.Group{Name: g.Name}
+		for _, m := range g.Members {
+			d.groups[i].Members = append(d.groups[i].Members, d.canon(m))
+		}
+	}
+}
+
+// AllowGroup lets the programs of group name (SetGroups) run without
+// asking.
+func (d *Defaults) AllowGroup(name string) {
+	for _, n := range d.execGroups {
+		if n == name {
+			return
+		}
+	}
+	d.execGroups = append(d.execGroups, name)
+}
+
+// group returns the group named name, resolved, and whether it is known.
+func (d *Defaults) group(name string) (programs.Group, bool) {
+	for _, g := range d.groups {
+		if g.Name == name {
+			return g, true
+		}
+	}
+	return programs.Group{Name: name}, false
+}
+
+// Group returns the first group program path belongs to, ok false for
+// none.
+func (d *Defaults) Group(path string) (g programs.Group, ok bool) {
+	for _, g := range d.groups {
+		for _, m := range g.Members {
+			if m == path {
+				return g, true
+			}
+		}
+	}
+	return programs.Group{}, false
+}
+
+// DenyExec denies running the program at path, or with tree every
+// program below path.
+func (d *Defaults) DenyExec(path string, tree bool) {
+	d.execDeny = addProgram(d.execDeny, rules.PathMatch{Path: d.canon(path), Tree: tree})
+}
+
+// addProgram appends m to l unless it is there already: several names
+// often resolve to one program (sh and dash).
+func addProgram(l []rules.PathMatch, m rules.PathMatch) []rules.PathMatch {
+	for _, o := range l {
+		if o.Path == m.Path && o.Tree == m.Tree {
+			return l
+		}
+	}
+	return append(l, m)
+}
 
 // sensitiveLabels maps a location under home to a human name for its secrets.
 // Writes there are asked about like anywhere else, but the prompt is flagged
@@ -215,14 +292,45 @@ func (d *Defaults) Rules() []rules.Rule {
 	for _, m := range d.netAsk {
 		rs = append(rs, rules.Rule{Ops: rules.OpNet, Object: m, Verdict: rules.Ask, Set: Set})
 	}
+	for _, p := range d.execDeny {
+		rs = append(rs, rules.Rule{Ops: rules.OpExec, Object: rules.ObjectMatch{Path: &p}, Verdict: rules.Deny, Set: Set})
+	}
+	for _, p := range d.execAllow {
+		rs = append(rs, rules.Rule{Ops: rules.OpExec, Object: rules.ObjectMatch{Path: &p}, Verdict: rules.Allow, Set: Set})
+	}
+	for _, name := range d.execGroups {
+		g, _ := d.group(name)
+		rs = append(rs, GroupRules(g, rs, Set)...)
+	}
 	return rs
 }
 
+// GroupRules returns the rules allowing the programs of group g, labelled
+// with its name, in set, but for the programs rs already allow for good.
+func GroupRules(g programs.Group, rs []rules.Rule, set string) []rules.Rule {
+	allowed := map[string]bool{}
+	for _, r := range rs {
+		if p := r.Object.Path; p != nil && r.Ops == rules.OpExec && r.Verdict == rules.Allow && !p.Tree && len(p.Args) == 0 && r.Expires.IsZero() {
+			allowed[p.Path] = true
+		}
+	}
+	var out []rules.Rule
+	for _, m := range g.Members {
+		if allowed[m] {
+			continue
+		}
+		allowed[m] = true
+		out = append(out, rules.Rule{Ops: rules.OpExec, Object: rules.ObjectMatch{Path: &rules.PathMatch{Path: m}}, Verdict: rules.Allow, Label: g.Name, Set: set})
+	}
+	return out
+}
+
 // Describe returns rs, one per line, for people: denials first (they
-// win), then what is writable without asking, and the exceptions asked
-// about. Everything else is asked.
+// win), then what is writable without asking, the exceptions asked
+// about, and the programs that run without asking. Everything else is
+// asked.
 func (d *Defaults) Describe(rs []rules.Rule) []string {
-	deny, allow, ask := d.Summary(rs)
+	deny, allow, ask, run := d.Summary(rs)
 	out := []string{"Denied (wins over allowed):"}
 	for _, s := range deny {
 		out = append(out, "  "+s)
@@ -234,6 +342,12 @@ func (d *Defaults) Describe(rs []rules.Rule) []string {
 	if len(ask) > 0 {
 		out = append(out, "Asked, even inside what is allowed:")
 		for _, s := range ask {
+			out = append(out, "  "+s)
+		}
+	}
+	if len(run) > 0 {
+		out = append(out, "Programs run without asking:")
+		for _, s := range run {
 			out = append(out, "  "+s)
 		}
 	}
@@ -255,11 +369,28 @@ func (d *Defaults) Short(p string) string {
 }
 
 // Summary returns the denied, the allowed and the asked items of rs,
-// described for people.
-func (d *Defaults) Summary(rs []rules.Rule) (deny, allow, ask []string) {
+// described for people; run is the programs allowed to run, a group
+// (rules labelled with its name) on one line with its member count.
+func (d *Defaults) Summary(rs []rules.Rule) (deny, allow, ask, run []string) {
+	groups := map[string]bool{}
 	for _, r := range rs {
 		var s string
 		switch o := r.Object; {
+		case o.Path != nil && r.Ops == rules.OpExec:
+			if strings.HasPrefix(r.Label, "@") && r.Verdict == rules.Allow {
+				if !groups[r.Label] {
+					groups[r.Label] = true
+					run = append(run, d.groupLine(r.Label, rs))
+				}
+				continue
+			}
+			s = d.Short(o.Path.Path)
+			if o.Path.Tree {
+				s += " (and every program below)"
+			}
+			if r.Verdict != rules.Allow {
+				s = "exec: " + s
+			}
 		case o.Path != nil:
 			s = d.Short(o.Path.Path)
 			if !o.Path.Tree {
@@ -280,7 +411,7 @@ func (d *Defaults) Summary(rs []rules.Rule) (deny, allow, ask []string) {
 		if r.Label != "" && r.Verdict == rules.Deny {
 			s += " (" + r.Label + ")"
 		}
-		if p := r.Object.Path; p != nil && r.Set == Set {
+		if p := r.Object.Path; p != nil && r.Set == Set && r.Ops != rules.OpExec {
 			if p.Path == d.workdir {
 				s += " (project)"
 			}
@@ -288,16 +419,32 @@ func (d *Defaults) Summary(rs []rules.Rule) (deny, allow, ask []string) {
 				s += " ($TMPDIR, removed at exit if empty)"
 			}
 		}
-		switch r.Verdict {
-		case rules.Deny:
+		switch {
+		case r.Verdict == rules.Deny:
 			deny = append(deny, s)
-		case rules.Allow:
+		case r.Verdict == rules.Allow && r.Ops == rules.OpExec:
+			run = append(run, s)
+		case r.Verdict == rules.Allow:
 			allow = append(allow, s)
-		case rules.Ask:
+		case r.Verdict == rules.Ask:
 			ask = append(ask, s)
 		}
 	}
-	return deny, allow, ask
+	return deny, allow, ask, run
+}
+
+// groupLine describes group name, allowed by rules labelled with it in rs.
+func (d *Defaults) groupLine(name string, rs []rules.Rule) string {
+	if g, ok := d.group(name); ok {
+		return g.String()
+	}
+	g := programs.Group{Name: name}
+	for _, r := range rs {
+		if r.Label == name && r.Ops == rules.OpExec && r.Object.Path != nil {
+			g.Members = append(g.Members, r.Object.Path.Path)
+		}
+	}
+	return g.String()
 }
 
 // FolderFor returns the folder offered by "Allow folder" for path, or "" when
