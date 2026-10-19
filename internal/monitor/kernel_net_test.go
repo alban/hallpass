@@ -23,10 +23,13 @@ func TestToLSMNet(t *testing.T) {
 		unsupp bool
 	}{
 		{spec: "all", v: rules.Allow, net: lsm.NetRules{Inet: []lsm.InetRule{{}}, AnyUnix: []lsm.UnixAnyRule{{}}}},
-		{spec: "tcp:10.0.0.0/8:443", v: rules.Deny, net: lsm.NetRules{Inet: []lsm.InetRule{{Prefix: netip.MustParsePrefix("10.0.0.0/8"), Proto: unix.IPPROTO_TCP, PortLo: 443, PortHi: 443, Deny: true}}}},
+		{spec: "tcp:10.0.0.0/8:443", v: rules.Deny, net: lsm.NetRules{Inet: []lsm.InetRule{{Prefix: netip.MustParsePrefix("10.0.0.0/8"), Proto: unix.IPPROTO_TCP, PortLo: 443, PortHi: 443, Deny: true, Depth: 424}}}},
 		{spec: "unix:@x*", v: rules.Allow, net: lsm.NetRules{Abstract: []lsm.AbstractRule{{Name: "x", Prefix: true}}}},
 		{spec: "unix:/run/**", v: rules.Allow, path: &lsm.Rule{Path: "/run", Tree: true, Net: true}},
-		{spec: "1.2.3.4", v: rules.Ask, unsupp: true},
+		{spec: "1.2.3.4", v: rules.Ask, net: lsm.NetRules{Inet: []lsm.InetRule{{Prefix: netip.MustParsePrefix("1.2.3.4/32"), Ask: true, Depth: 517}}}},
+		{spec: "all", v: rules.Ask, net: lsm.NetRules{Inet: []lsm.InetRule{{Ask: true}}, AnyUnix: []lsm.UnixAnyRule{{Ask: true}}}},
+		{spec: "unix:@x", v: rules.Ask, net: lsm.NetRules{Abstract: []lsm.AbstractRule{{Name: "x", Ask: true}}}},
+		{spec: "unix:/run/x", v: rules.Ask, path: &lsm.Rule{Path: "/run/x", Ask: true, Net: true}},
 		{spec: "1.2.3.4", v: rules.Allow, ops: rules.OpConnect, unsupp: true},
 	} {
 		r := netRule(t, tc.spec, tc.v)
@@ -59,6 +62,9 @@ func TestToLSMNet(t *testing.T) {
 	if _, _, err := toLSM(rules.Rule{Ops: rules.OpNet, Verdict: rules.Deny, Object: rules.ObjectMatch{OwnListener: true}}, &net); !errors.Is(err, ErrUnsupported) {
 		t.Errorf("deny own listeners: %v", err)
 	}
+	if _, _, err := toLSM(rules.Rule{Ops: rules.OpNet, Verdict: rules.Ask, Object: rules.ObjectMatch{OwnListener: true}}, &net); !errors.Is(err, ErrUnsupported) {
+		t.Errorf("ask own listeners: %v", err)
+	}
 }
 
 func equalNet(a, b lsm.NetRules) bool {
@@ -83,8 +89,8 @@ func equalNet(a, b lsm.NetRules) bool {
 	return true
 }
 
-// TestNetStrict: rules go to the kernel, and a "once" answer becomes a
-// grant of the address to the thread.
+// TestNetStrict: rules go to the kernel, ask rules too, and a "once"
+// answer becomes a grant of the address to the thread.
 func TestNetStrict(t *testing.T) {
 	k := &fakeKernel{}
 	fx := setup(t, k, false)
@@ -96,12 +102,18 @@ func TestNetStrict(t *testing.T) {
 		t.Errorf("kernel rules %+v", k.net)
 	}
 	k.mu.Unlock()
-	if _, err := fx.m.Apply(rulesDecision(netRule(t, "10.0.0.1", rules.Ask))); !errors.Is(err, ErrUnsupported) {
+	// The ask rule goes to the kernel too, and prompts over the allow.
+	if _, err := fx.m.Apply(rulesDecision(netRule(t, "192.0.2.5", rules.Ask))); err != nil {
 		t.Fatalf("ask rule: %v", err)
 	}
+	k.mu.Lock()
+	if len(k.net.Inet) != 2 || !k.net.Inet[1].Ask || k.net.Inet[1].Depth <= k.net.Inet[0].Depth {
+		t.Errorf("kernel rules %+v", k.net)
+	}
+	k.mu.Unlock()
 
 	tcp := sock(t, unix.AF_INET, unix.SOCK_STREAM)
-	id := fx.f.connect(tcp, sockaddrInet("203.0.113.5:22"))
+	id := fx.f.connect(tcp, sockaddrInet("192.0.2.5:443"))
 	req := fx.next(t, opened).Opened
 	if _, err := fx.m.Apply(Decision{Verdicts: []Verdict{{req.ID, true}}, Client: "test"}); err != nil {
 		t.Fatal(err)
@@ -109,7 +121,7 @@ func TestNetStrict(t *testing.T) {
 	fx.f.expect(t, id, 0)
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	want := lsm.InetDest{Addr: netip.MustParseAddrPort("203.0.113.5:22"), Proto: unix.IPPROTO_TCP}
+	want := lsm.InetDest{Addr: netip.MustParseAddrPort("192.0.2.5:443"), Proto: unix.IPPROTO_TCP}
 	if n := len(k.netGrants); n == 0 || len(k.netGrants[n-1].Inet) != 1 || k.netGrants[n-1].Inet[0] != want {
 		t.Fatalf("grants %+v", k.netGrants)
 	}

@@ -6,6 +6,7 @@ package monitor
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -680,10 +681,6 @@ func TestStrict(t *testing.T) {
 	if len(k.members) != 0 || k.syncs != 1 {
 		t.Fatalf("members %v syncs %d", k.members, k.syncs)
 	}
-	ask := tree(fx.dir, rules.Ask)
-	if _, err := fx.m.Apply(Decision{AddRules: []rules.Rule{ask}}); !errors.Is(err, ErrUnsupported) {
-		t.Fatalf("ask rule: %v", err)
-	}
 	ops := tree(fx.dir, rules.Allow)
 	ops.Ops = rules.OpWrite
 	if _, err := fx.m.Apply(Decision{AddRules: []rules.Rule{ops}}); !errors.Is(err, ErrUnsupported) {
@@ -715,6 +712,37 @@ func TestStrict(t *testing.T) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	if len(k.grants) != 1 || len(k.grants[0]) != 1 || k.grants[0][0] != a {
+		t.Fatalf("grants %v", k.grants)
+	}
+}
+
+// TestStrictAsk: an ask rule inside an allowed tree goes to the kernel,
+// and accesses it matches are prompted, a "once" answer granted.
+func TestStrictAsk(t *testing.T) {
+	k := &fakeKernel{}
+	fx := setup(t, k, false)
+	secret := filepath.Join(fx.dir, "secret")
+	if _, err := fx.m.Apply(Decision{AddRules: []rules.Rule{tree(fx.dir, rules.Allow), tree(secret, rules.Ask)}}); err != nil {
+		t.Fatal(err)
+	}
+	k.mu.Lock()
+	want := []lsm.Rule{{Path: fx.dir, Tree: true}, {Path: secret, Tree: true, Ask: true}}
+	if fmt.Sprint(k.paths) != fmt.Sprint(want) {
+		t.Errorf("kernel rules %+v, want %+v", k.paths, want)
+	}
+	k.mu.Unlock()
+
+	fx.f.expect(t, fx.f.mkdir(filepath.Join(fx.dir, "a")), 0)
+	b := filepath.Join(secret, "b")
+	id := fx.f.mkdir(b)
+	req := fx.next(t, opened).Opened
+	if _, err := fx.m.Apply(Decision{Verdicts: []Verdict{{req.ID, true}}, Client: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	fx.f.expect(t, id, 0)
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if len(k.grants) != 1 || len(k.grants[0]) != 1 || k.grants[0][0] != b {
 		t.Fatalf("grants %v", k.grants)
 	}
 }

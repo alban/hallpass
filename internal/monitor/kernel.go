@@ -11,43 +11,46 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// toLSM translates r for the kernel. The BPF programs have no operations,
-// no "ask" and see no unreadable paths: a file rule must cover every file
-// op, a network rule every network op. Network rules go to net, but for
-// unix socket paths (a Rule with Net).
+// toLSM translates r for the kernel. The BPF programs have no operations
+// and see no unreadable paths: a file rule must cover every file op, a
+// network rule every network op. An ask rule denies what it matches in
+// the kernel, but for more specific allows and the one-time grants of
+// prompts. Network rules go to net, but for unix socket paths (a Rule with
+// Net).
 func toLSM(r rules.Rule, net *lsm.NetRules) (*lsm.Rule, *lsm.ProcRule, error) {
-	deny := r.Verdict == rules.Deny
+	deny, ask := r.Verdict == rules.Deny, r.Verdict == rules.Ask
 	if o := r.Object; o.IsNet() {
-		if r.Verdict == rules.Ask || r.Ops&rules.OpNet != rules.OpNet {
+		if r.Ops&rules.OpNet != rules.OpNet {
 			return nil, nil, fmt.Errorf("%w: %+v", ErrUnsupported, r)
 		}
 		switch {
 		case o.AnyNet:
-			net.Inet = append(net.Inet, lsm.InetRule{Deny: deny, Expires: r.Expires})
-			net.AnyUnix = append(net.AnyUnix, lsm.UnixAnyRule{Deny: deny, Expires: r.Expires})
+			net.Inet = append(net.Inet, lsm.InetRule{Deny: deny, Ask: ask, Expires: r.Expires})
+			net.AnyUnix = append(net.AnyUnix, lsm.UnixAnyRule{Deny: deny, Ask: ask, Expires: r.Expires})
 		case o.OwnListener:
-			if deny {
+			if deny || ask {
 				return nil, nil, fmt.Errorf("%w: %+v", ErrUnsupported, r)
 			}
 			// Unlike other rules, it does not expire.
 			net.OwnListeners = true
 		case o.Inet != nil:
-			net.Inet = append(net.Inet, lsm.InetRule{Prefix: o.Inet.Prefix, Proto: o.Inet.Proto, PortLo: o.Inet.PortLo, PortHi: o.Inet.PortHi, Deny: deny, Expires: r.Expires})
+			net.Inet = append(net.Inet, lsm.InetRule{Prefix: o.Inet.Prefix, Proto: o.Inet.Proto, PortLo: o.Inet.PortLo, PortHi: o.Inet.PortHi,
+				Deny: deny, Ask: ask, Depth: uint16(o.Depth()), Expires: r.Expires})
 		case o.Unix.Abstract:
-			net.Abstract = append(net.Abstract, lsm.AbstractRule{Name: o.Unix.Name, Prefix: o.Unix.Prefix, Deny: deny, Expires: r.Expires})
+			net.Abstract = append(net.Abstract, lsm.AbstractRule{Name: o.Unix.Name, Prefix: o.Unix.Prefix, Deny: deny, Ask: ask, Expires: r.Expires})
 		default:
-			return &lsm.Rule{Path: o.Unix.Path, Tree: o.Unix.Prefix, Deny: deny, Net: true, Expires: r.Expires}, nil, nil
+			return &lsm.Rule{Path: o.Unix.Path, Tree: o.Unix.Prefix, Deny: deny, Ask: ask, Net: true, Expires: r.Expires}, nil, nil
 		}
 		return nil, nil, nil
 	}
-	if r.Verdict == rules.Ask || r.Object.Unknown || r.Ops&rules.OpFiles != rules.OpFiles {
+	if r.Object.Unknown || r.Ops&rules.OpFiles != rules.OpFiles {
 		return nil, nil, fmt.Errorf("%w: %+v", ErrUnsupported, r)
 	}
 	if p := r.Object.Proc; p != nil {
-		return nil, &lsm.ProcRule{Name: p.Name, Comm: p.Comm, Deny: deny, Expires: r.Expires}, nil
+		return nil, &lsm.ProcRule{Name: p.Name, Comm: p.Comm, Deny: deny, Ask: ask, Expires: r.Expires}, nil
 	}
 	p := r.Object.Path
-	return &lsm.Rule{Path: p.Path, Tree: p.Tree, Deny: deny, Expires: r.Expires}, nil, nil
+	return &lsm.Rule{Path: p.Path, Tree: p.Tree, Deny: deny, Ask: ask, Expires: r.Expires}, nil, nil
 }
 
 // syncLocked makes the kernel's rules rs. kmu must be held.
