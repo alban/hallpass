@@ -19,8 +19,8 @@ import (
 	"github.com/alban/hallpass/internal/defaults"
 	"github.com/alban/hallpass/internal/launch"
 	"github.com/alban/hallpass/internal/lsm"
+	"github.com/alban/hallpass/internal/policy"
 	"github.com/alban/hallpass/internal/privsep"
-	"github.com/alban/hallpass/internal/rules"
 	"github.com/alban/hallpass/internal/seccomp"
 	"github.com/alban/hallpass/internal/tty"
 	"github.com/alban/hallpass/internal/ui"
@@ -67,7 +67,6 @@ func main() {
 // options are the flags of a run.
 type options struct {
 	workdir     string
-	allow, deny listFlag
 	ask         string
 	timeout     time.Duration
 	allowUserns bool
@@ -77,10 +76,22 @@ type options struct {
 	noImplicit  bool
 	allowTTY    bool
 	wait        string
-	mediate     seccomp.Category
-	// allowNet and denyNet are --allow-net and --deny-net.
-	allowNet, denyNet []rules.ObjectMatch
-	args              []string // command to run
+	// policy is the policy the flags give (--allow, --deny, --mediate,
+	// --allow-net...).
+	policy policy.Policy
+	// deny is denied on top of policy: hallpass's own config and binary.
+	deny []string
+	args []string // command to run
+}
+
+// flagNames are the flags filling the fields of a policy.Spec.
+var flagNames = map[string]string{
+	"allow":        "--allow",
+	"deny":         "--deny",
+	"askTimeout":   "--timeout",
+	"mediate":      "--mediate",
+	"allowNetwork": "--allow-net",
+	"denyNetwork":  "--deny-net",
 }
 
 // parseFlags parses and checks argv. When it returns ok == false, the run
@@ -91,10 +102,11 @@ func parseFlags(argv []string, printPolicy bool) (o options, code int, ok bool) 
 		fmt.Fprint(fs.Output(), usageText)
 		fs.PrintDefaults()
 	}
+	var allow, deny listFlag
 	fs.StringVar(&o.workdir, "C", "", "project `dir`, writable without asking (default: current directory)")
 	fs.StringVar(&o.workdir, "workdir", "", "same as -C")
-	fs.Var(&o.allow, "allow", "`path` also writable without asking (repeatable)")
-	fs.Var(&o.deny, "deny", "`path` always denied (repeatable, wins over --allow)")
+	fs.Var(&allow, "allow", "`path` also writable without asking (repeatable)")
+	fs.Var(&deny, "deny", "`path` always denied (repeatable, wins over --allow)")
 	fs.BoolVar(&o.noImplicit, "no-implicit", false, "writable without asking: only the --allow paths (no project dir, $TMPDIR, devices or terminal)")
 	fs.BoolVar(&o.allowTTY, "allow-tty", true, "the session's own terminal (/dev/tty, its /dev/pts/N) is writable without asking; --no-implicit turns it off unless given explicitly")
 	fs.StringVar(&o.ask, "ask", "auto", "how to ask: auto | term | desktop | answer | deny | allow (allow and log: audit)")
@@ -115,24 +127,12 @@ func parseFlags(argv []string, printPolicy bool) (o options, code int, ok bool) 
 		return o, 2, false
 	}
 	var err error
-	if o.mediate, err = seccomp.ParseCategories(*mediate); err != nil {
-		return o, fail(fmt.Errorf("--mediate: %w", err)), false
-	}
-	for _, f := range []struct {
-		name string
-		in   listFlag
-		out  *[]rules.ObjectMatch
-	}{{"allow-net", allowNet, &o.allowNet}, {"deny-net", denyNet, &o.denyNet}} {
-		if len(f.in) > 0 && o.mediate&seccomp.Network == 0 {
-			return o, fail(fmt.Errorf("--%s needs network in --mediate", f.name)), false
+	if o.policy, err = o.spec(allow, deny, *mediate, allowNet, denyNet).Validate(); err != nil {
+		var fe *policy.FieldError
+		if errors.As(err, &fe) {
+			fe.Field = flagNames[fe.Field]
 		}
-		for _, s := range f.in {
-			m, err := rules.ParseNet(s)
-			if err != nil {
-				return o, fail(fmt.Errorf("--%s: %w", f.name, err)), false
-			}
-			*f.out = append(*f.out, m)
-		}
+		return o, fail(err), false
 	}
 	if o.noImplicit {
 		explicit := false
@@ -156,6 +156,31 @@ func parseFlags(argv []string, printPolicy bool) (o options, code int, ok bool) 
 		o.args = []string{sh}
 	}
 	return o, 0, true
+}
+
+// spec is the policy.Spec of the flags. Relative --allow and --deny paths
+// are relative to the current directory.
+func (o *options) spec(allow, deny []string, mediate string, allowNet, denyNet []string) policy.Spec {
+	abs := func(l []string) []string {
+		out := make([]string, 0, len(l))
+		for _, p := range l {
+			if a, err := filepath.Abs(p); err == nil {
+				p = a
+			}
+			out = append(out, p)
+		}
+		return out
+	}
+	ask := o.ask != "deny"
+	return policy.Spec{
+		Allow:        abs(allow),
+		Deny:         abs(deny),
+		Ask:          &ask,
+		AskTimeout:   o.timeout.String(),
+		Mediate:      strings.Split(mediate, ","),
+		AllowNetwork: allowNet,
+		DenyNetwork:  denyNet,
+	}
 }
 
 // runMain runs a sandboxed command, or with printPolicy prints the rules
@@ -229,7 +254,7 @@ func runMain(argv []string, printPolicy bool) int {
 		Env:         env,
 		WaitAll:     o.wait == "all",
 		Timeout:     o.timeout,
-		Mediate:     o.mediate,
+		Mediate:     o.policy.Mediate,
 	})
 	if pty != nil {
 		pty.Close() // restore the terminal before printing anything
@@ -243,8 +268,8 @@ func runMain(argv []string, printPolicy bool) int {
 	return code
 }
 
-// resolvePaths makes the workdir, --allow and --deny absolute, checks the
-// workdir, and adds the paths always denied.
+// resolvePaths makes the workdir absolute, checks it, and adds the paths
+// always denied.
 func (o *options) resolvePaths(home, cfgDir string) error {
 	var err error
 	if o.workdir == "" {
@@ -261,13 +286,6 @@ func (o *options) resolvePaths(home, cfgDir string) error {
 	if filepath.Clean(o.workdir) == filepath.Clean(home) || o.workdir == "/" {
 		if !o.noImplicit {
 			return fmt.Errorf("refusing to use %s as the workdir: everything under it would be writable", o.workdir)
-		}
-	}
-	for _, l := range []listFlag{o.allow, o.deny} {
-		for i, p := range l {
-			if l[i], err = filepath.Abs(p); err != nil {
-				return err
-			}
 		}
 	}
 
@@ -289,21 +307,13 @@ func (o *options) resolvePaths(home, cfgDir string) error {
 // buildPolicy returns the rules of o, before the session's own $TMPDIR and
 // terminal are known.
 func (o *options) buildPolicy(home string) *defaults.Defaults {
-	granted, allows := o.workdir, defaults.DefaultAllows()
-	if o.noImplicit {
-		granted, allows = "", nil
+	c := policy.Context{Home: home, Deny: o.deny}
+	if !o.noImplicit {
+		c.Workdir = o.workdir
+		c.Allow = defaults.DefaultAllows()
+		c.OwnListeners = o.policy.Mediate&seccomp.Network != 0
 	}
-	d := defaults.New(home, granted, append(allows, o.allow...), o.deny)
-	if !o.noImplicit && o.mediate&seccomp.Network != 0 {
-		d.AllowOwnListeners()
-	}
-	for _, m := range o.allowNet {
-		d.AllowNet(m)
-	}
-	for _, m := range o.denyNet {
-		d.DenyNet(m)
-	}
-	return d
+	return o.policy.Defaults(c)
 }
 
 // printRules prints engine's rules, with placeholders for the $TMPDIR and

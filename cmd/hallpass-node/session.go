@@ -194,6 +194,10 @@ func (s *session) opened(req *monitor.Request) {
 		s.dismiss(req.ID)
 		return
 	}
+	if s.policy.AskTimeout == 0 {
+		// Waits for an answer, however long.
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.timers[req.ID] = time.AfterFunc(s.policy.AskTimeout, func() { s.dismiss(req.ID) })

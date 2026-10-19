@@ -57,7 +57,7 @@ spec:
                 askTimeout:
                   description: >-
                     How long a request waits for an answer before it is
-                    denied (Go duration, default 5m).
+                    denied (Go duration, default 5m; 0 waits forever).
                   type: string
                 mediate:
                   description: >-

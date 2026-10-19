@@ -42,7 +42,7 @@ spec:
 - `ask` (default `true`): ask about the other writes. With `false`, they
   are denied at once.
 - `askTimeout` (default `5m`): a request with no answer by then is
-  denied.
+  denied. `0` waits forever, like `hallpass --timeout=0`.
 - `mediate` (default `[files, exec]`): the syscall categories mediated.
   `network` (experimental) asks about connections and sends, like
   `hallpass --mediate` ([Network](../workstation/usage.md#network-experimental)).

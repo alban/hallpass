@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/alban/hallpass/internal/policy"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -146,7 +147,7 @@ func (k *kube) Policy(name string) (*Policy, error) {
 	if !ok {
 		return nil, fmt.Errorf("HallpassPolicy %q: unexpected %T", name, obj)
 	}
-	var spec PolicySpec
+	var spec policy.Spec
 	raw, _ := u.Object["spec"].(map[string]any)
 	if raw == nil {
 		raw = map[string]any{}

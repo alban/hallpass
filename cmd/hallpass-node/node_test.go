@@ -19,6 +19,7 @@ import (
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
 
+	"github.com/alban/hallpass/internal/policy"
 	"github.com/alban/hallpass/internal/rules"
 	"github.com/alban/hallpass/internal/seccomp"
 	"github.com/alban/hallpass/internal/sessionapi"
@@ -26,7 +27,7 @@ import (
 
 func TestParsePolicy(t *testing.T) {
 	no := false
-	p, err := parsePolicy("agent", PolicySpec{
+	p, err := parsePolicy("agent", policy.Spec{
 		Allow:      []string{"/workspace/**", "/tmp", "/home/agent/.cache/"},
 		Deny:       []string{"/var/run/secrets/**"},
 		Ask:        &no,
@@ -35,28 +36,27 @@ func TestParsePolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := &Policy{
-		Name:       "agent",
+	want := &Policy{Name: "agent", Policy: policy.Policy{
 		Allow:      []string{"/workspace", "/tmp", "/home/agent/.cache"},
 		Deny:       []string{"/var/run/secrets"},
 		AskTimeout: 30 * time.Second,
 		Mediate:    seccomp.DefaultCategories,
-	}
+	}}
 	if !reflect.DeepEqual(p, want) {
 		t.Errorf("got %+v, want %+v", p, want)
 	}
 
-	p, err = parsePolicy("default", PolicySpec{})
-	if err != nil || !p.Ask || p.AskTimeout != defaultAskTimeout {
+	p, err = parsePolicy("default", policy.Spec{})
+	if err != nil || !p.Ask || p.AskTimeout != policy.DefaultAskTimeout {
 		t.Errorf("defaults: %+v, %v", p, err)
 	}
 
-	p, err = parsePolicy("net", PolicySpec{Mediate: []string{"files", "exec", "network"}, AllowNetwork: []string{"all"}, DenyNetwork: []string{"tcp:169.254.169.254"}})
+	p, err = parsePolicy("net", policy.Spec{Mediate: []string{"files", "exec", "network"}, AllowNetwork: []string{"all"}, DenyNetwork: []string{"tcp:169.254.169.254"}})
 	if err != nil || p.Mediate != seccomp.AllCategories || len(p.AllowNetwork) != 1 || !p.AllowNetwork[0].AnyNet || p.DenyNetwork[0].NetString() != "tcp:169.254.169.254" {
 		t.Errorf("network: %+v, %v", p, err)
 	}
 
-	for _, bad := range []PolicySpec{
+	for _, bad := range []policy.Spec{
 		{Allow: []string{"workspace/**"}},
 		{Allow: []string{"/work*/x"}},
 		{Deny: []string{"/a/**/b"}},
@@ -74,7 +74,7 @@ func TestParsePolicy(t *testing.T) {
 }
 
 func TestDefaultsFor(t *testing.T) {
-	p, _ := parsePolicy("agent", PolicySpec{Allow: []string{"/workspace/**"}, Deny: []string{"/workspace/.git/**"}})
+	p, _ := parsePolicy("agent", policy.Spec{Allow: []string{"/workspace/**"}, Deny: []string{"/workspace/.git/**"}})
 	rs := defaultsFor(p, "/home/agent", seccomp.DefaultCategories).Rules()
 	var allow, deny []string
 	for _, r := range rs {
@@ -97,7 +97,7 @@ func TestDefaultsFor(t *testing.T) {
 		t.Errorf("deny: %v", deny)
 	}
 
-	p, _ = parsePolicy("net", PolicySpec{Mediate: []string{"files", "network"}, AllowNetwork: []string{"unix:@x"}, DenyNetwork: []string{"tcp:*:22"}})
+	p, _ = parsePolicy("net", policy.Spec{Mediate: []string{"files", "network"}, AllowNetwork: []string{"unix:@x"}, DenyNetwork: []string{"tcp:*:22"}})
 	var nets []string
 	for _, r := range defaultsFor(p, "", p.Mediate).Rules() {
 		if r.Object.Path == nil {
@@ -133,7 +133,7 @@ func TestAdjust(t *testing.T) {
 	p := &plugin{
 		cluster: fakeCluster{
 			selected: map[string]bool{"agents": true, "other": false},
-			policies: map[string]*Policy{"agent": {Name: "agent", Ask: true}},
+			policies: map[string]*Policy{"agent": {Name: "agent", Policy: policy.Policy{Ask: true}}},
 		},
 		listenerPath: "/run/hallpass/agent.sock",
 		log:          slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -195,7 +195,7 @@ func TestAdjust(t *testing.T) {
 	}
 
 	// A policy mediating network.
-	p.cluster.(fakeCluster).policies["net"] = &Policy{Name: "net", Mediate: seccomp.AllCategories}
+	p.cluster.(fakeCluster).policies["net"] = &Policy{Name: "net", Policy: policy.Policy{Mediate: seccomp.AllCategories}}
 	if adj, err = p.adjust(pod("agents", "net"), ctr); err != nil {
 		t.Fatal(err)
 	}

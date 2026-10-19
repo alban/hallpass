@@ -22,6 +22,7 @@ import (
 	"github.com/alban/hallpass/internal/fdstore"
 	"github.com/alban/hallpass/internal/launch"
 	"github.com/alban/hallpass/internal/lsm"
+	"github.com/alban/hallpass/internal/policy"
 	"github.com/alban/hallpass/internal/sessionapi"
 )
 
@@ -43,7 +44,7 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-var testPolicy = &Policy{Name: "p", Ask: true, AskTimeout: time.Hour}
+var testPolicy = &Policy{Name: "p", Policy: policy.Policy{Ask: true, AskTimeout: time.Hour}}
 
 func testAgent(log *slog.Logger) *agent {
 	return newAgent(fakeCluster{policies: map[string]*Policy{"p": testPolicy}}, sessionapi.NewNode(), log, noRecorder{}, 8)
