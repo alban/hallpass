@@ -391,6 +391,149 @@ func TestEnforceNet(t *testing.T) {
 	time.Sleep(100 * time.Millisecond) // let the events be logged
 }
 
+// TestEnforceNetAsk checks ask rules on network destinations: they stop
+// the allows of less specific rules, a more specific allow wins over them.
+func TestEnforceNetAsk(t *testing.T) {
+	needRoot(t)
+	if err := Active(); err != nil {
+		skip(t, err)
+	}
+	dir := t.TempDir()
+	tcp := func(addr string) string {
+		ln, err := net.Listen("tcp4", addr+":0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { ln.Close() })
+		go func() {
+			for {
+				c, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				c.Close()
+			}
+		}()
+		return ln.Addr().String()
+	}
+	port := func(a string) uint16 { return netip.MustParseAddrPort(a).Port() }
+	asked, reallowed, other := tcp("127.0.0.1"), tcp("127.0.0.1"), tcp("127.0.0.2")
+	for _, d := range []string{"ok", "ask", "ask/pub"} {
+		if err := os.Mkdir(filepath.Join(dir, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		ln, err := net.Listen("unix", filepath.Join(dir, d, "s"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { ln.Close() })
+	}
+	abs := fmt.Sprintf("hallpass-test-%d-", os.Getpid())
+	for _, n := range []string{"ok", "no", "noyes"} {
+		ln, err := net.Listen("unix", "@"+abs+n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { ln.Close() })
+	}
+
+	l, err := Load(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	// s: rules on addresses; any: rules for every destination; tie: an
+	// ask and an allow for every unix socket.
+	s, any, tie := newSession(t, l), newSession(t, l), newSession(t, l)
+	for _, x := range []*Session{s, any, tie} {
+		if err := x.Mediate(true, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lo8, lo1 := netip.MustParsePrefix("127.0.0.0/8"), netip.MustParsePrefix("127.0.0.1/32")
+	// Depths as rules.ObjectMatch.Depth.
+	if err := s.Sync([]Rule{devNull,
+		{Path: dir, Tree: true, Net: true},
+		{Path: dir + "/ask", Tree: true, Net: true, Ask: true},
+		{Path: dir + "/ask/pub", Tree: true, Net: true},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SyncNet(NetRules{
+		Inet: []InetRule{
+			{Prefix: lo8, Depth: 421},
+			{Prefix: lo1, Ask: true, Depth: 517},
+			{Prefix: lo1, PortLo: port(reallowed), PortHi: port(reallowed), Proto: unix.IPPROTO_TCP, Depth: 520},
+		},
+		Abstract: []AbstractRule{
+			{Name: abs, Prefix: true},
+			{Name: abs + "no", Prefix: true, Ask: true},
+			{Name: abs + "noyes"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := any.Sync([]Rule{devNull, {Path: dir + "/ask", Tree: true, Net: true, Ask: true}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := any.SyncNet(NetRules{
+		Inet: []InetRule{
+			{},
+			{Ask: true},
+			{Prefix: lo1, PortLo: port(reallowed), PortHi: port(reallowed), Depth: 519},
+		},
+		Abstract: []AbstractRule{{Name: abs + "no", Prefix: true, Ask: true}},
+		AnyUnix:  []UnixAnyRule{{}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tie.Sync([]Rule{devNull, {Path: dir + "/ok", Tree: true, Net: true}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := tie.SyncNet(NetRules{
+		Abstract: []AbstractRule{{Name: abs + "ok"}},
+		AnyUnix:  []UnixAnyRule{{}, {Ask: true}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	go s.Events(func(e Event) { t.Logf("event: %+v %+v %+v", e, e.Inet, e.Unix) })
+
+	cases := []struct {
+		op               string
+		ok, anyOK, tieOK bool // in s, any, tie
+	}{
+		{"connect " + asked, false, false, false},
+		{"connect " + reallowed, true, true, false},
+		{"connect " + other, true, false, false},
+		{"unix " + dir + "/ok/s", true, true, true},
+		{"unix " + dir + "/ask/s", false, false, false},
+		{"unix " + dir + "/ask/pub/s", true, false, false},
+		{"unix @" + abs + "ok", true, true, true},
+		{"unix @" + abs + "no", false, false, false},
+		{"unix @" + abs + "noyes", true, false, false},
+	}
+	var ops []string
+	for _, c := range cases {
+		ops = append(ops, c.op)
+	}
+	for _, x := range []*Session{s, any, tie} {
+		got := netMember(t, x, ops...)
+		for i, c := range cases {
+			want := c.ok
+			switch x {
+			case any:
+				want = c.anyOK
+			case tie:
+				want = c.tieOK
+			}
+			if (got[i] == "ok") != want {
+				t.Errorf("session %d: %s: %s, want ok=%v", x.id, c.op, got[i], want)
+			}
+		}
+	}
+	time.Sleep(100 * time.Millisecond) // let the events be logged
+}
+
 func TestInetTrie(t *testing.T) {
 	exp := func(time.Time) uint64 { return 7 }
 	tr, err := inetTrie(3, []InetRule{

@@ -4,7 +4,9 @@
 package lsm
 
 import (
+	"fmt"
 	"math/rand/v2"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -218,6 +220,202 @@ func TestAskNodeLevels(t *testing.T) {
 		}
 		if got := desc&(bitAllow|bitDeny) == bitAllow; got != c.desc {
 			t.Errorf("%s: below allowed %v, want %v (%+v)", c.name, got, c.desc, v)
+		}
+	}
+}
+
+// netBits is net_bits.
+func netBits(deny, allow, ask int) int {
+	switch {
+	case allow > ask:
+		return deny | bitAllow
+	case ask >= 0:
+		return deny | bitAsk
+	}
+	return deny
+}
+
+// prefixOf reports whether the first bits of a and b are the same.
+func prefixOf(a, b []byte, bits int) bool {
+	for i := 0; i < bits; i++ {
+		if a[i/8]>>(7-i%8)&1 != b[i/8]>>(7-i%8)&1 {
+			return false
+		}
+	}
+	return true
+}
+
+// inetBits is the inet_rules lookup and inet_rules_of.
+func inetBits(trie map[hallpassInetKey]hallpassInetVal, a netip.Addr, proto, port uint16, now uint64) int {
+	addr := a.As16()
+	var best *hallpassInetKey
+	for k := range trie {
+		if prefixOf(k.Addr[:], addr[:], int(k.Prefixlen)-32) && (best == nil || k.Prefixlen > best.Prefixlen) {
+			best = &k
+		}
+	}
+	if best == nil {
+		return 0
+	}
+	deny, allow, ask := 0, -1, -1
+	for _, e := range trie[*best].E {
+		switch {
+		case e.Expiry == 0 && e.Deny == 0,
+			e.Proto != 0 && e.Proto != proto,
+			(e.PortLo != 0 || e.PortHi != 0) && (port < e.PortLo || port > e.PortHi):
+		case e.Deny != 0:
+			deny = bitDeny
+		case e.Expiry <= now:
+		case e.Ask != 0:
+			ask = max(ask, int(e.Depth))
+		default:
+			allow = max(allow, int(e.Depth))
+		}
+	}
+	return netBits(deny, allow, ask)
+}
+
+func asBytes(s []int8) []byte {
+	b := make([]byte, len(s))
+	for i, c := range s {
+		b[i] = byte(c)
+	}
+	return b
+}
+
+// abstractBits is the abstract_rules lookup and abstract_rules_of, then
+// the rules for every unix socket of check_unix.
+func abstractBits(trie map[hallpassAbstractKey]hallpassAbstractVal, cfg hallpassSessionCfg, name string, now uint64) int {
+	var key hallpassAbstractKey
+	copyName(key.Name[:], name)
+	var best *hallpassAbstractKey
+	for k := range trie {
+		bits := int(k.Prefixlen) - 32
+		if bits <= 8*len(name) && prefixOf(asBytes(k.Name[:]), asBytes(key.Name[:]), bits) && (best == nil || k.Prefixlen > best.Prefixlen) {
+			best = &k
+		}
+	}
+	b := 0
+	if best != nil {
+		deny, allow, ask := 0, -1, -1
+		for _, e := range trie[*best].E {
+			switch {
+			case e.Expiry == 0 && e.Deny == 0,
+				e.Exact != 0 && int(e.Len) != len(name):
+			case e.Deny != 0:
+				deny = bitDeny
+			case e.Expiry <= now:
+			case e.Ask != 0:
+				ask = max(ask, int(e.Len))
+			default:
+				allow = max(allow, int(e.Len))
+			}
+		}
+		b = netBits(deny, allow, ask)
+	}
+	if cfg.AnyUnixDeny != 0 {
+		b |= bitDeny
+	}
+	if b&bitAsk == 0 && cfg.AnyUnixAsk <= now && cfg.AnyUnixAllow > now {
+		b |= bitAllow
+	}
+	return b
+}
+
+// lsmNet is the monitor's translation of network rules (toLSM).
+func lsmNet(rs []rules.Rule) NetRules {
+	var n NetRules
+	for _, r := range rs {
+		deny, ask, o := r.Verdict == rules.Deny, r.Verdict == rules.Ask, r.Object
+		switch {
+		case o.AnyNet:
+			n.Inet = append(n.Inet, InetRule{Deny: deny, Ask: ask, Expires: r.Expires})
+			n.AnyUnix = append(n.AnyUnix, UnixAnyRule{Deny: deny, Ask: ask, Expires: r.Expires})
+		case o.Inet != nil:
+			n.Inet = append(n.Inet, InetRule{Prefix: o.Inet.Prefix, Proto: o.Inet.Proto, PortLo: o.Inet.PortLo, PortHi: o.Inet.PortHi, Deny: deny, Ask: ask, Depth: uint16(o.Depth()), Expires: r.Expires})
+		case o.Unix != nil:
+			n.Abstract = append(n.Abstract, AbstractRule{Name: o.Unix.Name, Prefix: o.Unix.Prefix, Deny: deny, Ask: ask, Expires: r.Expires})
+		}
+	}
+	return n
+}
+
+// TestAskNetMatchEval: for random sets of inet and abstract unix rules,
+// the kernel allows what Eval allows, and nothing else.
+func TestAskNetMatchEval(t *testing.T) {
+	var inet []rules.ObjectMatch
+	for _, s := range []string{"", "0.0.0.0/0", "::/0", "::ffff:0:0/96", "10.0.0.0/8", "10.0.0.1/32", "2001:db8::/32", "2001:db8::1/128"} {
+		var p netip.Prefix
+		if s != "" {
+			p = netip.MustParsePrefix(s)
+		}
+		inet = append(inet,
+			rules.ObjectMatch{Inet: &rules.InetMatch{Prefix: p}},
+			rules.ObjectMatch{Inet: &rules.InetMatch{Prefix: p, PortLo: 22, PortHi: 22}},
+			rules.ObjectMatch{Inet: &rules.InetMatch{Prefix: p, Proto: 6}},
+			rules.ObjectMatch{Inet: &rules.InetMatch{Prefix: p, Proto: 17, PortLo: 20, PortHi: 30}})
+	}
+	var abs []rules.ObjectMatch
+	for _, n := range []string{"", "a", "ab", "abc", "b"} {
+		for _, p := range []bool{false, true} {
+			abs = append(abs, rules.ObjectMatch{Unix: &rules.UnixMatch{Abstract: true, Name: n, Prefix: p}})
+		}
+	}
+	anyNet := rules.ObjectMatch{AnyNet: true}
+	inet, abs = append(inet, anyNet), append(abs, anyNet)
+
+	type dest struct {
+		addr  string
+		proto uint16
+	}
+	dests := []dest{{"10.0.0.1:22", 6}, {"10.0.0.1:25", 17}, {"10.0.0.1:80", 6}, {"10.0.0.2:22", 17}, {"192.168.1.1:22", 6},
+		{"[2001:db8::1]:22", 6}, {"[2001:db8::1]:443", 17}, {"[2001:db8::2]:25", 17}, {"[::1]:22", 6}}
+	names := []string{"", "a", "ab", "abc", "abcd", "b", "x"}
+
+	rnd := rand.New(rand.NewPCG(3, 4))
+	now := time.Now()
+	soon := now.Add(time.Hour)
+	for i := range 5000 {
+		for _, cands := range [][]rules.ObjectMatch{inet, abs} {
+			var rs []rules.Rule
+			for _, o := range pick(rnd, cands, 1+rnd.IntN(6)) {
+				r := rules.Rule{Ops: rules.OpNet, Object: o, Verdict: verdicts()[rnd.IntN(3)]}
+				if rnd.IntN(4) == 0 {
+					r.Expires = soon
+				}
+				rs = append(rs, r)
+			}
+			n := lsmNet(rs)
+			expiry := expiryClock()
+			mono := monotonic()
+			it, err := inetTrie(1, n.Inet, expiry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			at, err := abstractTrie(1, n.Abstract, expiry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var cfg hallpassSessionCfg
+			cfg.setAnyUnix(n.AnyUnix, expiry)
+			check := func(what string, obj rules.Object, b int) {
+				ev, _, ok := rules.Eval(rs, rules.OpConnect, obj, now)
+				want := ok && ev == rules.Allow
+				if got := b&(bitAllow|bitDeny) == bitAllow; got != want {
+					t.Fatalf("%d: rules %s: %q allowed %v, want %v (Eval %v %v)", i, describe(rs), what, got, want, ev, ok)
+				}
+			}
+			if cands[0].Inet != nil {
+				for _, d := range dests {
+					ap := netip.MustParseAddrPort(d.addr)
+					check(fmt.Sprint(d), rules.Object{Inet: &rules.InetObject{Proto: d.proto, Addr: ap}},
+						inetBits(it, ap.Addr(), d.proto, ap.Port(), mono))
+				}
+				continue
+			}
+			for _, name := range names {
+				check("@"+name, rules.Object{Unix: &rules.UnixObject{Abstract: true, Name: name}}, abstractBits(at, cfg, name, mono))
+			}
 		}
 	}
 }

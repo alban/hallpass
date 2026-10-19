@@ -28,7 +28,8 @@ type hallpassAbstractVal struct {
 		Deny   uint8
 		Exact  uint8
 		Len    uint8
-		Pad    [5]uint8
+		Ask    uint8
+		Pad    [4]uint8
 	}
 }
 
@@ -100,8 +101,10 @@ type hallpassInetVal struct {
 		PortLo uint16
 		PortHi uint16
 		Proto  uint16
+		Depth  uint16
 		Deny   uint8
-		Pad    uint8
+		Ask    uint8
+		Pad    [6]uint8
 	}
 }
 
@@ -169,6 +172,7 @@ type hallpassSessionCfg struct {
 	AnyUnixAllow uint64
 	AnyUnixDeny  uint8
 	Pad          [7]uint8
+	AnyUnixAsk   uint64
 }
 
 // Names of all BPF objects in the ELF.

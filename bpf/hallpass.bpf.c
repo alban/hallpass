@@ -271,6 +271,7 @@ struct session_cfg {
 	__u64 any_unix_allow; /* expiry of an allow rule for every unix socket */
 	__u8 any_unix_deny;
 	__u8 pad[7];
+	__u64 any_unix_ask; /* expiry of an ask rule for every unix socket */
 };
 
 struct {
@@ -295,12 +296,19 @@ struct inet_key {
 	__u8 addr[16];
 };
 
+/*
+ * An entry allows, asks or denies. The deepest matching allow or ask
+ * decides, the ask on a tie (as the supervisor's rules); depth orders the
+ * entries that way, the more specific the deeper.
+ */
 struct inet_entry {
-	__u64 expiry; /* allow until then; 0: none */
+	__u64 expiry; /* allow or ask until then; 0: none */
 	__u16 port_lo, port_hi; /* 0, 0: any port */
 	__u16 proto;		/* 0: any */
+	__u16 depth;
 	__u8 deny;
-	__u8 pad;
+	__u8 ask;
+	__u8 pad[6];
 };
 
 struct inet_val {
@@ -326,8 +334,9 @@ struct abstract_entry {
 	__u64 expiry;
 	__u8 deny;
 	__u8 exact; /* the name only, not longer ones */
-	__u8 len;   /* of the rule's name */
-	__u8 pad[5];
+	__u8 len;   /* of the rule's name, its depth as for inet_entry */
+	__u8 ask;
+	__u8 pad[4];
 };
 
 struct abstract_val {
@@ -854,9 +863,22 @@ static __always_inline bool own_tcp_listener(struct sock *sk, struct inet_dest *
 	return any;
 }
 
+/*
+ * WALK_* bits of the deepest matching allow or ask (allow_depth and
+ * ask_depth: the deepest so far, -1 for none), and of any deny.
+ */
+static __always_inline int net_bits(int deny, int allow_depth, int ask_depth)
+{
+	if (allow_depth > ask_depth)
+		deny |= WALK_ALLOW;
+	else if (ask_depth >= 0)
+		deny |= WALK_ASK;
+	return deny;
+}
+
 static __always_inline int inet_rules_of(struct inet_val *v, struct inet_dest *d, __u64 now)
 {
-	int ret = 0;
+	int deny = 0, allow = -1, ask = -1;
 
 	if (!v)
 		return 0;
@@ -870,11 +892,15 @@ static __always_inline int inet_rules_of(struct inet_val *v, struct inet_dest *d
 		if ((e->port_lo || e->port_hi) && (d->port < e->port_lo || d->port > e->port_hi))
 			continue;
 		if (e->deny)
-			ret |= WALK_DENY;
-		else if (live(e->expiry, now))
-			ret |= WALK_ALLOW;
+			deny = WALK_DENY;
+		else if (!live(e->expiry, now))
+			continue;
+		else if (e->ask)
+			ask = e->depth > ask ? e->depth : ask;
+		else
+			allow = e->depth > allow ? e->depth : allow;
 	}
-	return ret;
+	return net_bits(deny, allow, ask);
 }
 
 static __always_inline bool inet_granted(struct hp_grant *g, struct inet_dest *d)
@@ -953,7 +979,7 @@ static __always_inline struct hp_sock *sock_info(struct sock *sk)
 
 static __always_inline int abstract_rules_of(struct abstract_val *v, __u32 len, __u64 now)
 {
-	int ret = 0;
+	int deny = 0, allow = -1, ask = -1;
 
 	if (!v)
 		return 0;
@@ -965,11 +991,15 @@ static __always_inline int abstract_rules_of(struct abstract_val *v, __u32 len, 
 		if (e->exact && e->len != len)
 			continue;
 		if (e->deny)
-			ret |= WALK_DENY;
-		else if (live(e->expiry, now))
-			ret |= WALK_ALLOW;
+			deny = WALK_DENY;
+		else if (!live(e->expiry, now))
+			continue;
+		else if (e->ask)
+			ask = e->len > ask ? e->len : ask;
+		else
+			allow = e->len > allow ? e->len : allow;
 	}
-	return ret;
+	return net_bits(deny, allow, ask);
 }
 
 static __always_inline bool abstract_granted(struct hp_grant *g, struct abstract_key *k, __u32 len)
@@ -1036,9 +1066,13 @@ static __always_inline int check_unix(__u32 op, struct sock *self, struct sock *
 			bits |= WALK_ALLOW;
 	}
 	if (cfg) {
+		__u64 now = bpf_ktime_get_ns();
+
 		if (cfg->any_unix_deny)
 			bits |= WALK_DENY;
-		if (live(cfg->any_unix_allow, bpf_ktime_get_ns()))
+		/* The shallowest rules: any address or name rule beats them. */
+		if (!(bits & WALK_ASK) && !live(cfg->any_unix_ask, now) &&
+		    live(cfg->any_unix_allow, now))
 			bits |= WALK_ALLOW;
 	}
 	if (me && them && me->allowed_peer == them->id)

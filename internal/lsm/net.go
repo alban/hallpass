@@ -49,27 +49,37 @@ func (g NetGrant) fill(v *hallpassHpGrant) {
 	}
 }
 
-// InetRule allows or denies IPv4 and IPv6 destinations.
+// InetRule allows, asks or denies IPv4 and IPv6 destinations. The deepest
+// matching allow or ask decides, the ask on a tie: an ask stops the allows
+// of shallower rules.
 type InetRule struct {
 	Prefix         netip.Prefix // invalid (zero): any address
 	Proto          uint16       // 0: any
 	PortLo, PortHi uint16       // both 0: any port
 	Deny           bool
-	Expires        time.Time
+	Ask            bool
+	// Depth orders allows and asks: the more specific, the deeper
+	// (rules.ObjectMatch.Depth).
+	Depth   uint16
+	Expires time.Time
 }
 
-// AbstractRule allows or denies abstract unix socket names: Name, or with
-// Prefix every name starting with it.
+// AbstractRule allows, asks or denies abstract unix socket names: Name,
+// or with Prefix every name starting with it. The longest name decides
+// between allows and asks, the ask on a tie.
 type AbstractRule struct {
 	Name    string
 	Prefix  bool
 	Deny    bool
+	Ask     bool
 	Expires time.Time
 }
 
-// UnixAnyRule allows or denies every unix socket.
+// UnixAnyRule allows, asks or denies every unix socket. Rules on an
+// address or a name beat its allows and asks.
 type UnixAnyRule struct {
 	Deny    bool
+	Ask     bool
 	Expires time.Time
 }
 
@@ -120,17 +130,11 @@ func (s *Session) SyncNet(net NetRules) error {
 	s.abs = abs
 
 	cfg := s.cfg
-	cfg.Flags, cfg.AnyUnixAllow, cfg.AnyUnixDeny = 0, 0, 0
+	cfg.Flags = 0
 	if net.OwnListeners {
 		cfg.Flags |= ownListeners
 	}
-	for _, r := range net.AnyUnix {
-		if r.Deny {
-			cfg.AnyUnixDeny = 1
-		} else {
-			cfg.AnyUnixAllow = max(cfg.AnyUnixAllow, expiry(r.Expires))
-		}
-	}
+	cfg.setAnyUnix(net.AnyUnix, expiry)
 	if cfg != s.cfg {
 		if cfg.Mediate == 0 {
 			// No entry yet: the default, files.
@@ -144,10 +148,26 @@ func (s *Session) SyncNet(net NetRules) error {
 	return nil
 }
 
+// setAnyUnix sets the rules for every unix socket of cfg to rs.
+func (cfg *hallpassSessionCfg) setAnyUnix(rs []UnixAnyRule, expiry func(time.Time) uint64) {
+	cfg.AnyUnixAllow, cfg.AnyUnixAsk, cfg.AnyUnixDeny = 0, 0, 0
+	for _, r := range rs {
+		switch {
+		case r.Deny:
+			cfg.AnyUnixDeny = 1
+		case r.Ask:
+			cfg.AnyUnixAsk = max(cfg.AnyUnixAsk, expiry(r.Expires))
+		default:
+			cfg.AnyUnixAllow = max(cfg.AnyUnixAllow, expiry(r.Expires))
+		}
+	}
+}
+
 type entryInet struct {
 	expiry        uint64
 	lo, hi, proto uint16
-	deny          bool
+	depth         uint16
+	deny, ask     bool
 }
 
 // inetTrie computes the inet_rules entries of rules: one key per prefix,
@@ -173,6 +193,8 @@ func inetTrie(session uint32, rules []InetRule, expiry func(time.Time) uint64) (
 			e.deny = true
 		} else if e.expiry = expiry(r.Expires); e.expiry == 0 {
 			continue
+		} else {
+			e.ask, e.depth = r.Ask, r.Depth
 		}
 		k := root
 		if !r.Prefix.IsValid() {
@@ -233,14 +255,19 @@ func inetTrie(session uint32, rules []InetRule, expiry func(time.Time) uint64) (
 		if len(es) == 0 && k == root {
 			continue
 		}
+		es = flattenInet(es)
 		if len(es) > netEntries {
 			return nil, fmt.Errorf("strict mode: more than %d network rules match %s", netEntries, p)
 		}
 		var v hallpassInetVal
 		for i, e := range es {
 			v.E[i].Expiry, v.E[i].PortLo, v.E[i].PortHi, v.E[i].Proto = e.expiry, e.lo, e.hi, e.proto
+			v.E[i].Depth = e.depth
 			if e.deny {
 				v.E[i].Deny = 1
+			}
+			if e.ask {
+				v.E[i].Ask = 1
 			}
 		}
 		out[k] = v
@@ -249,20 +276,50 @@ func inetTrie(session uint32, rules []InetRule, expiry func(time.Time) uint64) (
 }
 
 // mergeInet adds e to es, merging it with a rule on the same ports and
-// protocol.
+// protocol, of the same kind, that is as deep and lasts as long, or that
+// e is.
 func mergeInet(es []entryInet, e entryInet) []entryInet {
 	for i, o := range es {
-		if o.lo == e.lo && o.hi == e.hi && o.proto == e.proto && o.deny == e.deny {
-			es[i].expiry = max(o.expiry, e.expiry)
+		if o.lo != e.lo || o.hi != e.hi || o.proto != e.proto || o.deny != e.deny || o.ask != e.ask {
+			continue
+		}
+		switch {
+		case e.deny || o.depth >= e.depth && o.expiry >= e.expiry:
+			return es
+		case e.depth >= o.depth && e.expiry >= o.expiry:
+			es[i] = e
 			return es
 		}
 	}
 	return append(es, e)
 }
 
+// flattenInet merges the allows on the same ports and protocol when no
+// ask needs their depths: one that lasts the longest is enough.
+func flattenInet(es []entryInet) []entryInet {
+	for _, e := range es {
+		if e.ask {
+			return es
+		}
+	}
+	var out []entryInet
+next:
+	for _, e := range es {
+		for i, o := range out {
+			if o.lo == e.lo && o.hi == e.hi && o.proto == e.proto && o.deny == e.deny {
+				out[i].expiry, out[i].depth = max(o.expiry, e.expiry), max(o.depth, e.depth)
+				continue next
+			}
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
 type entryAbs struct {
 	expiry uint64
 	deny   bool
+	ask    bool
 	exact  bool
 	len    uint8
 }
@@ -281,6 +338,8 @@ func abstractTrie(session uint32, rules []AbstractRule, expiry func(time.Time) u
 			e.deny = true
 		} else if e.expiry = expiry(r.Expires); e.expiry == 0 {
 			continue
+		} else {
+			e.ask = r.Ask
 		}
 		own[r.Name] = mergeAbs(own[r.Name], e)
 	}
@@ -311,6 +370,9 @@ func abstractTrie(session uint32, rules []AbstractRule, expiry func(time.Time) u
 			if e.exact {
 				v.E[i].Exact = 1
 			}
+			if e.ask {
+				v.E[i].Ask = 1
+			}
 		}
 		out[k] = v
 	}
@@ -319,7 +381,7 @@ func abstractTrie(session uint32, rules []AbstractRule, expiry func(time.Time) u
 
 func mergeAbs(es []entryAbs, e entryAbs) []entryAbs {
 	for i, o := range es {
-		if o.deny == e.deny && o.exact == e.exact && o.len == e.len {
+		if o.deny == e.deny && o.ask == e.ask && o.exact == e.exact && o.len == e.len {
 			es[i].expiry = max(o.expiry, e.expiry)
 			return es
 		}
