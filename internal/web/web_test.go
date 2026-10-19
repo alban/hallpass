@@ -426,6 +426,29 @@ func TestSession(t *testing.T) {
 	if resp := c.do("POST", "/api/pair", ""); resp.StatusCode != http.StatusForbidden {
 		t.Errorf("second pairing with one AllowPairing: %s", resp.Status)
 	}
+	// A tab that borrowed the credential closes the pairing window.
+	s.AllowPairing()
+	if resp := (client{t: t, url: c.url}).do("POST", "/api/pair/close", ""); resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("close pairing without credential: %s", resp.Status)
+	}
+	if resp := c.do("POST", "/api/pair/close", ""); resp.StatusCode != http.StatusNoContent {
+		t.Errorf("close pairing: %s", resp.Status)
+	}
+	if resp := c.do("POST", "/api/pair", ""); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("pairing after /api/pair/close: %s", resp.Status)
+	}
+	scope := func(url string) string {
+		t.Helper()
+		resp := (client{t: t, url: url}).do("GET", "/api/scope", "")
+		b, _ := io.ReadAll(resp.Body)
+		return strings.TrimSpace(string(b))
+	}
+	if got := scope(c.url); got != `{"session":`+pid+`}` {
+		t.Errorf("session scope %s", got)
+	}
+	if got := scope(serve(t, New()).url); got != `{}` {
+		t.Errorf("hallpass web scope %s", got)
+	}
 
 	resp := c.do("GET", "/api/sessions", "")
 	var infos []struct{ Pid int }

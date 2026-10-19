@@ -1,7 +1,8 @@
 body { font: 14px/1.4 system-ui, sans-serif; margin: 0; color: #222; background: #fafafa; }
 [hidden] { display: none !important; }
 header { display: flex; flex-wrap: wrap; align-items: center; gap: 1em; padding: .5em 1em; background: #fff; border-bottom: 1px solid #ddd; }
-h1 { font-size: 1.2em; margin: 0; }
+h1 { font-size: 1.2em; margin: 0; display: flex; align-items: center; gap: .4em; }
+h1 .logo { height: 1.6em; width: auto; }
 nav button { font: inherit; border: 1px solid #ccc; background: #f4f4f4; padding: .3em .8em; border-radius: 4px; cursor: pointer; }
 nav button.active { background: #333; color: #fff; border-color: #333; }
 .experimental { margin: 0; color: #a15c00; font-size: .9em; }

@@ -160,6 +160,27 @@ func (s *Server) AllowPairing() {
 	s.pairUntil = time.Now().Add(s.pairTimeout)
 }
 
+// closePairing ends the pairing window AllowPairing opened: a page that got
+// the credential from another tab of the same browser (see app.js) does not
+// pair, and the window must not stay open to the sandbox.
+func (s *Server) closePairing(w http.ResponseWriter, _ *http.Request) {
+	s.mu.Lock()
+	s.pairUntil = time.Time{}
+	s.mu.Unlock()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// scope tells the page, before pairing, what the server serves, for its
+// title: one session (its pid, which the sandbox knows anyway), a node's
+// sessions, or this user's.
+func (s *Server) scope(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(struct {
+		Session int  `json:"session,omitempty"`
+		Node    bool `json:"node,omitempty"`
+	}{s.only, s.node != nil})
+}
+
 func randomHex(n int) string {
 	b := make([]byte, n)
 	if _, err := rand.Read(b); err != nil {
@@ -202,6 +223,8 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/pair", s.pair)
 	mux.HandleFunc("POST /api/pair/wait", s.pairWait)
+	mux.HandleFunc("GET /api/scope", s.scope)
+	mux.Handle("POST /api/pair/close", s.auth(s.closePairing))
 	mux.HandleFunc("GET /favicon.svg", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "image/svg+xml")
 		_, _ = w.Write(hallpass.Logo)
@@ -279,7 +302,7 @@ func (s *Server) pair(w http.ResponseWriter, r *http.Request) {
 	if s.only != 0 {
 		if time.Now().After(s.pairUntil) {
 			s.mu.Unlock()
-			http.Error(w, "Not expecting a browser: open the web UI from the session (Ctrl-] then w, or click its notification) to pair.", http.StatusForbidden)
+			http.Error(w, "Not expecting a browser: open the web UI from the session (Ctrl-] then w, or Open web UI in its notification) to pair.", http.StatusForbidden)
 			return
 		}
 		s.pairUntil = time.Time{}

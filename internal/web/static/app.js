@@ -139,8 +139,9 @@ function addActivity(entry) {
 
 // The credential, given by hallpass once the user confirmed the pairing. It
 // lives in this variable only, never in a cookie or in storage, which the
-// browser may write to its profile, where the sandbox could read it.
-// Reloading the page means pairing again.
+// browser may write to its profile, where the sandbox could read it. Other
+// tabs of the same server get it from a paired one (see borrowCredential);
+// without one, reloading the page means pairing again.
 let credential = null;
 // onlySession is the session's key when the page was opened from a session,
 // whose server shows only it; null for hallpass web.
@@ -313,10 +314,79 @@ async function pair() {
   refreshSessions();
 }
 
-// start pairs: each page load or new tab pairs again, since nothing
-// survives the page.
-function start() {
+// start borrows the credential of another tab of this server if there is
+// one, and pairs otherwise.
+async function start() {
+  setTitle();
+  pairState = "pairing"; // no "Pair again" meanwhile
+  showPairing("Looking for a paired tab…");
+  const got = await borrowCredential();
+  pairState = "unpaired";
+  if (got) {
+    credential = got.credential;
+    const r = await fetch("/api/sessions", { headers: { Authorization: "Bearer " + credential } }).catch(() => null);
+    if (r && r.ok) {
+      onlySession = got.session || null;
+      pairState = "paired";
+      showPaired();
+      // The session opened a pairing window for this page, which it does
+      // not need any more.
+      api("/api/pair/close", { method: "POST" }).catch(() => {});
+      refreshSessions();
+      return;
+    }
+    credential = null;
+  }
   pair();
+}
+
+// Tabs of the same server (same origin: BroadcastChannel crosses no other)
+// share its credential: a new tab asks the paired ones instead of pairing
+// again. Pages of other origins, and so other servers, cannot listen.
+const channel = "BroadcastChannel" in window ? new BroadcastChannel("hallpass-credential") : null;
+if (channel) {
+  channel.addEventListener("message", (ev) => {
+    if (ev.data && ev.data.type === "want" && pairState === "paired") {
+      channel.postMessage({ type: "credential", credential, session: onlySession });
+    }
+  });
+}
+
+// borrowCredential asks the other tabs for the credential. Paired tabs
+// answer at once; the wait only bounds how long the page looks for them.
+function borrowCredential() {
+  return new Promise((resolve) => {
+    if (!channel) return resolve(null);
+    const done = (v) => {
+      clearTimeout(timer);
+      channel.removeEventListener("message", onMessage);
+      resolve(v);
+    };
+    const onMessage = (ev) => {
+      if (ev.data && ev.data.type === "credential" && typeof ev.data.credential === "string") done(ev.data);
+    };
+    const timer = setTimeout(() => done(null), 300);
+    channel.addEventListener("message", onMessage);
+    channel.postMessage({ type: "want" });
+  });
+}
+
+// setTitle names the page after what its server serves: one session (the
+// web UI a session opens) or all of them (hallpass web).
+async function setTitle() {
+  let title = "hallpass web: all sessions";
+  try {
+    const r = await fetch("/api/scope");
+    if (r.ok) {
+      const s = await r.json();
+      if (s.session) title = "hallpass: session " + s.session;
+      else if (s.node) title = "hallpass web: node sessions";
+    }
+  } catch (e) {
+    // Keep the default.
+  }
+  document.title = title;
+  document.getElementById("title").textContent = title;
 }
 
 async function refreshSessions() {

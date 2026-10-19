@@ -57,6 +57,15 @@ either. The server is restricted to the session:
   request's notification is hidden while the confirmation shows.
 - Nothing is printed in the terminal, where a line would stay after the
   pairing; only an `xdg-open` failure prints the URL.
+- Once paired, the page closes the pairing window
+  (`POST /api/pair/close`): the sandbox cannot use the rest of it.
+- Another "Open web UI" opens a new tab, which takes the credential of a
+  paired tab of the same server instead of pairing again (see
+  [Security](#security)).
+
+The titles say which server a page belongs to: "hallpass: session PID"
+for a session, "hallpass web: all sessions" (or "node sessions" in
+`hallpass-node`) for `hallpass web`.
 
 The server dials the session's own socket, like any client; the peer
 check passes since the session is not under a seccomp filter. Pairing,
@@ -139,6 +148,10 @@ Shaped for the UI, not for the monitor, and free to change with it:
 - `POST /api/pair/wait`: `{id}`; waits for the user's answer, and returns
   `{credential}` if they confirmed. The page sends it as `Authorization:
   Bearer <credential>` on the requests below.
+- `POST /api/pair/close` (authenticated): ends the session server's
+  pairing window early, once the page is paired.
+- `GET /api/scope`: which server this is, for the page's title, before
+  pairing: `{"session": pid}`, `{"node": true}` or `{}` (all sessions).
 - `GET /` and static assets: one page, embedded (`go:embed`), no build
   step. They hold no secret, and are served before pairing, to pair.
 - `GET /favicon.svg`: the logo.
@@ -203,8 +216,12 @@ Measures:
   482 913? [y/n]". Once confirmed, the page gets a credential (random per
   `hallpass web` process) that it keeps in a JavaScript variable only and
   sends as an `Authorization` header: no cookie, no storage, nothing the
-  browser writes to its profile. Reloading the page or opening a new tab
-  means pairing again. The URL holds no secret, so `--open` can pass it to
+  browser writes to its profile. A new tab asks the paired tabs of the
+  same origin for it (`BroadcastChannel`, which never leaves the browser
+  nor crosses origins; each server has its own port, so its own origin),
+  and checks it with `GET /api/sessions` before using it. With no paired
+  tab open, or after a reload of the last one, the page pairs again. The
+  URL holds no secret, so `--open` can pass it to
   `xdg-open`. The code only needs to be authentic, not secret: the sandbox
   can neither read nor answer `hallpass web`'s terminal. The risk is a
   sandboxed process starting its own pairing just before the browser, and
