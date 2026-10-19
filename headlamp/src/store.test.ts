@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { ClusterStore, ConnectFn, Deps, Link, maxBackoff, pendingCount } from './store';
-import { answerAllowed, ruleObject, sessionName } from './types';
+import { answerAllowed, answersFor, grantForText, ruleObject, sessionName } from './types';
 
 // A fake wasm client and port-forward: each open() creates a connection
 // the test drives.
@@ -172,6 +172,19 @@ describe('types', () => {
     expect(answerAllowed('temp', {})).toBe(false);
     expect(answerAllowed('always', { scope: '' })).toBe(false);
     expect(answerAllowed('always', { scope: '/etc' })).toBe(true);
+    expect(answerAllowed('grant', { scope: '/etc' })).toBe(false);
+  });
+
+  it('answers requests made in advance with grant or deny', () => {
+    const p = { advance: true, scope: '/etc', grantFor: '600s' };
+    expect(answersFor(p)).toEqual(['grant', 'deny']);
+    expect(answersFor({})).toContain('once');
+    expect(answerAllowed('grant', p)).toBe(true);
+    expect(answerAllowed('once', p)).toBe(false);
+    expect(answerAllowed('always', p)).toBe(false);
+    expect(grantForText(p.grantFor)).toBe('for 10m');
+    expect(grantForText('5400s')).toBe('for 1h30m');
+    expect(grantForText(undefined)).toBe('for the rest of the session');
   });
 
   it('names sessions', () => {

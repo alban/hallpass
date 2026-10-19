@@ -27,6 +27,10 @@ export interface Prompt {
   warn?: string;
   note?: string;
   detail?: string; // qualifies path, e.g. "udp"
+  // A request made in advance: answered with grant or deny.
+  advance?: boolean;
+  reason?: string; // written by the workload: show it as its claim
+  grantFor?: string; // protojson Duration, e.g. "600s"; unset: the session
 }
 
 export interface PendingRequest {
@@ -74,14 +78,42 @@ export interface AgentState extends Agent {
   sessions: Session[];
 }
 
-export type Answer = 'once' | 'temp' | 'always' | 'deny' | 'never';
+export type Answer = 'once' | 'temp' | 'always' | 'deny' | 'never' | 'grant';
 
 export const answers: Answer[] = ['once', 'temp', 'always', 'deny', 'never'];
 
+// The answers to a request made in advance.
+export const advanceAnswers: Answer[] = ['grant', 'deny'];
+
+// The answers shown for a prompt.
+export function answersFor(prompt?: Prompt): Answer[] {
+  return prompt?.advance ? advanceAnswers : answers;
+}
+
 // Whether an answer applies to a prompt: temp and always cover the
-// prompt's scope, and some requests have none.
+// prompt's scope, and some requests have none; grant is for requests made
+// in advance, which take only grant and deny.
 export function answerAllowed(answer: Answer, prompt?: Prompt): boolean {
+  if (prompt?.advance) {
+    return advanceAnswers.includes(answer);
+  }
+  if (answer === 'grant') {
+    return false;
+  }
   return (answer !== 'temp' && answer !== 'always') || !!prompt?.scope;
+}
+
+// grantForText formats Prompt.grantFor like the terminal: "for 10m", or
+// "for the rest of the session".
+export function grantForText(d?: string): string {
+  const s = d ? Math.round(parseFloat(d)) : 0;
+  if (!s) {
+    return 'for the rest of the session';
+  }
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  return 'for ' + (h ? `${h}h` : '') + (m ? `${m}m` : '') + (sec ? `${sec}s` : '');
 }
 
 export function sessionName(s: Session): string {

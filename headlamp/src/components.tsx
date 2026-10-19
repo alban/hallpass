@@ -21,7 +21,8 @@ import {
   AgentState,
   Answer,
   answerAllowed,
-  answers,
+  answersFor,
+  grantForText,
   PendingRequest,
   ruleObject,
   Session,
@@ -34,6 +35,7 @@ const answerHelp: Record<Answer, string> = {
   always: 'Allow the scope, and remember it in the session',
   deny: 'Deny this request only',
   never: 'Deny, and remember it in the session',
+  grant: 'Grant what the program asks for in advance, for the time it asks',
 };
 
 function AnswerButtons(props: {
@@ -59,7 +61,7 @@ function AnswerButtons(props: {
   };
   return (
     <ButtonGroup size="small" variant="outlined" disabled={busy}>
-      {answers.map(a => (
+      {answersFor(request.prompt).map(a => (
         <Tooltip key={a} title={answerHelp[a]}>
           <span>
             <Button
@@ -126,7 +128,15 @@ function PendingTable(props: {
           },
         ]
       : []),
-    { label: 'Operation', getter: (r: PendingRow) => r.request.prompt?.op || r.request.syscall },
+    {
+      label: 'Operation',
+      getter: (r: PendingRow) =>
+        r.request.prompt?.advance
+          ? `${r.request.prompt.op || 'write'}, asked in advance ${grantForText(
+              r.request.prompt.grantFor
+            )}`
+          : r.request.prompt?.op || r.request.syscall,
+    },
     {
       label: 'Path',
       getter: (r: PendingRow) => (
@@ -140,6 +150,11 @@ function PendingTable(props: {
             </>
           )}
           {r.request.prompt?.note && ` (${r.request.prompt.note})`}
+          {r.request.prompt?.reason && (
+            <Typography variant="body2" color="text.secondary">
+              reason given by the program (unverified): <q>{r.request.prompt.reason}</q>
+            </Typography>
+          )}
         </>
       ),
     },
