@@ -70,10 +70,10 @@ func TestEscTrackerSplit(t *testing.T) {
 
 func TestEscTrackerAbsolute(t *testing.T) {
 	for _, tc := range []struct {
-		in                          string
-		margins                     bool
-		absolute, restore           string
-		row                         int // originRow(9)
+		in                string
+		margins           bool
+		absolute, restore string
+		row               int // originRow(9)
 	}{
 		{"", true, "", "", 10},
 		{"\x1b[?6h", true, "\x1b[?6l", "\x1b[?6h", 10},
