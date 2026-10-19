@@ -55,9 +55,9 @@ func openatHelper() int {
 
 // toctou runs the openat helper on path under hallpass, with a write to
 // path asked about. Once asked, which is after hallpass has read the path,
-// it calls swap with the helper's pid, then answers "once". It returns the
-// helper's output.
-func toctou(t *testing.T, e env, mode, path string, swap func(pid uint32) error) string {
+// it calls swap with the session and the helper's pid, then answers
+// "once". It returns the helper's output.
+func toctou(t *testing.T, e env, mode, path string, swap func(p prompter, pid uint32) error) string {
 	t.Helper()
 	self, err := os.Executable()
 	if err != nil {
@@ -76,7 +76,7 @@ func toctou(t *testing.T, e env, mode, path string, swap func(pid uint32) error)
 		err = fmt.Errorf("prompt %v, want %s", req.Prompt, path)
 	}
 	if err == nil {
-		err = swap(req.Prompt.GetPid())
+		err = swap(p, req.Prompt.GetPid())
 	}
 	if err != nil {
 		c.Process.Kill()
@@ -88,6 +88,17 @@ func toctou(t *testing.T, e env, mode, path string, swap func(pid uint32) error)
 		t.Fatalf("hallpass: %v\n%s", err, out.String())
 	}
 	return out.String()
+}
+
+// swapPath rewrites the path the openat helper of pid is opening.
+func swapPath(pid uint32, path string) error {
+	f, err := os.OpenFile(fmt.Sprintf("/proc/%d/fd/%d", pid, toctouFD), os.O_RDWR, 0)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.WriteAt(append([]byte(path), 0), 0)
+	return err
 }
 
 // checkTOCTOU checks the outcome of a path swapped for ~/.ssh/id while
@@ -138,17 +149,11 @@ func TestTOCTOUMemory(t *testing.T) {
 			t.Fatal(err)
 		}
 		// Unchanged, "once" lets the helper open the file asked about.
-		if out := toctou(t, e, mode, allowed, func(uint32) error { return nil }); !strings.Contains(out, "open=ok\n") {
+		if out := toctou(t, e, mode, allowed, func(prompter, uint32) error { return nil }); !strings.Contains(out, "open=ok\n") {
 			t.Fatalf("unchanged path:\n%s", out)
 		}
-		out := toctou(t, e, mode, allowed, func(pid uint32) error {
-			f, err := os.OpenFile(fmt.Sprintf("/proc/%d/fd/%d", pid, toctouFD), os.O_RDWR, 0)
-			if err != nil {
-				return err
-			}
-			defer f.Close()
-			_, err = f.WriteAt(append([]byte(e.home+"/.ssh/id"), 0), 0)
-			return err
+		out := toctou(t, e, mode, allowed, func(_ prompter, pid uint32) error {
+			return swapPath(pid, e.home+"/.ssh/id")
 		})
 		checkTOCTOU(t, e, mode, out)
 		if b, _ := os.ReadFile(allowed); string(b) != "toctou\n" {
@@ -187,7 +192,7 @@ func TestTOCTOUSymlink(t *testing.T) {
 				if err := os.WriteFile(d+"/id", nil, 0o600); err != nil {
 					t.Fatal(err)
 				}
-				out := toctou(t, e, mode, d+"/id", func(uint32) error { return s.swap(d) })
+				out := toctou(t, e, mode, d+"/id", func(prompter, uint32) error { return s.swap(d) })
 				checkTOCTOU(t, e, mode, out)
 			})
 		})
