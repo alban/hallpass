@@ -243,58 +243,75 @@ func Eval(rs []Rule, op Op, obj Object, now time.Time) (v Verdict, id uint64, ok
 	return v, id, ok
 }
 
-// match reports whether m selects obj, and how deep (longer paths are
-// deeper).
+// match reports whether m selects obj, and how deep (m.Depth).
 func (m ObjectMatch) match(obj Object) (depth int, ok bool) {
 	switch {
 	case obj.Path != nil && m.Path != nil:
 		p := filepath.Clean(obj.Path.Path)
-		if p == m.Path.Path || (m.Path.Tree && Under(p, m.Path.Path)) {
-			return len(m.Path.Path), true
-		}
+		ok = p == m.Path.Path || (m.Path.Tree && Under(p, m.Path.Path))
 	case obj.Proc != nil && m.Proc != nil:
 		comm := ""
 		if len(obj.Proc.Target.Chain) > 0 {
 			comm = obj.Proc.Target.Chain[0].Comm
 		}
-		if m.Proc.Name == obj.Proc.Name && m.Proc.Comm == comm {
-			return 0, true
-		}
+		ok = m.Proc.Name == obj.Proc.Name && m.Proc.Comm == comm
 	case obj.Unknown != nil && m.Unknown:
-		return 0, true
+		ok = true
 	case obj.IsNet() && m.AnyNet:
-		return 0, true
+		ok = true
 	case obj.IsNet() && m.OwnListener:
-		if (obj.Inet != nil && obj.Inet.OwnListener) || (obj.Unix != nil && obj.Unix.OwnListener) {
-			return ownListenerDepth, true
-		}
+		ok = (obj.Inet != nil && obj.Inet.OwnListener) || (obj.Unix != nil && obj.Unix.OwnListener)
 	case obj.Inet != nil && m.Inet != nil:
-		return m.Inet.match(obj.Inet)
+		ok = m.Inet.match(obj.Inet)
 	case obj.Unix != nil && m.Unix != nil:
-		return m.Unix.match(obj.Unix)
+		ok = m.Unix.match(obj.Unix)
 	}
-	return 0, false
+	if !ok {
+		return 0, false
+	}
+	return m.Depth(), true
+}
+
+// Depth is how specific m is, the same for every object it selects: when
+// no Deny matches, the deepest Allow or Ask decides. Longer paths and
+// names are deeper; for inet, longer prefixes (IPv4 ones as IPv4-mapped
+// IPv6 ones), then a port range, then a protocol. Every network
+// destination (AnyNet) is the shallowest.
+func (m ObjectMatch) Depth() int {
+	switch {
+	case m.Path != nil:
+		return len(m.Path.Path)
+	case m.OwnListener:
+		return ownListenerDepth
+	case m.Inet != nil:
+		return m.Inet.depth()
+	case m.Unix != nil && m.Unix.Abstract:
+		return len(m.Unix.Name) + 1
+	case m.Unix != nil:
+		return len(m.Unix.Path)
+	}
+	return 0
 }
 
 // ownListenerDepth is deeper than any address rule: an Ask on an address
 // does not override it, a Deny still does.
 const ownListenerDepth = 1 << 20
 
-func (m *InetMatch) match(o *InetObject) (int, bool) {
+func (m *InetMatch) match(o *InetObject) bool {
 	if m.Proto != 0 && m.Proto != o.Proto {
-		return 0, false
+		return false
 	}
 	if m.PortLo != 0 || m.PortHi != 0 {
 		if p := o.Addr.Port(); p < m.PortLo || p > m.PortHi {
-			return 0, false
+			return false
 		}
 	}
+	return !m.Prefix.IsValid() || m.Prefix.Contains(o.Addr.Addr().Unmap())
+}
+
+func (m *InetMatch) depth() int {
 	d := 1
 	if m.Prefix.IsValid() {
-		a := o.Addr.Addr().Unmap()
-		if !m.Prefix.Contains(a) {
-			return 0, false
-		}
 		bits := m.Prefix.Bits()
 		if m.Prefix.Addr().Is4() {
 			bits += 96
@@ -307,24 +324,18 @@ func (m *InetMatch) match(o *InetObject) (int, bool) {
 	if m.Proto != 0 {
 		d++
 	}
-	return d, true
+	return d
 }
 
-func (m *UnixMatch) match(o *UnixObject) (int, bool) {
+func (m *UnixMatch) match(o *UnixObject) bool {
 	if m.Abstract != o.Abstract {
-		return 0, false
+		return false
 	}
 	if m.Abstract {
-		if o.Name == m.Name || (m.Prefix && strings.HasPrefix(o.Name, m.Name)) {
-			return len(m.Name) + 1, true
-		}
-		return 0, false
+		return o.Name == m.Name || (m.Prefix && strings.HasPrefix(o.Name, m.Name))
 	}
 	p := filepath.Clean(o.Path)
-	if p == m.Path || (m.Prefix && Under(p, m.Path)) {
-		return len(m.Path), true
-	}
-	return 0, false
+	return p == m.Path || (m.Prefix && Under(p, m.Path))
 }
 
 // Under reports whether path is prefix or lies beneath it, on a component
