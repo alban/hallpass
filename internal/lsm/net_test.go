@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -316,6 +317,8 @@ func TestEnforceNet(t *testing.T) {
 			{Prefix: netip.MustParsePrefix("127.0.0.1/32"), Proto: unix.IPPROTO_UDP, PortLo: uint16(other), PortHi: uint16(other), Expires: time.Now().Add(-time.Second)},
 			// An answer: any protocol.
 			{Prefix: netip.MustParsePrefix("127.0.0.1/32"), PortLo: uint16(anyProto), PortHi: uint16(anyProto), Expires: time.Now().Add(time.Hour)},
+			// IPv6 only: the IPv4 rules above still apply.
+			{Prefix: netip.MustParsePrefix("::/0"), Deny: true},
 		},
 		Abstract: []AbstractRule{
 			{Name: abs + "o", Prefix: true},
@@ -423,6 +426,47 @@ func TestInetTrie(t *testing.T) {
 	}
 	if _, err := inetTrie(3, many, exp); err == nil {
 		t.Error("too many rules accepted")
+	}
+}
+
+// TestInetTrieV6 checks that IPv6 prefixes do not match IPv4 addresses,
+// stored as IPv4-mapped ones in the same trie.
+func TestInetTrieV6(t *testing.T) {
+	exp := func(time.Time) uint64 { return 7 }
+	tr, err := inetTrie(3, []InetRule{
+		{PortLo: 53, PortHi: 53},
+		{Prefix: netip.MustParsePrefix("::/0"), Deny: true},
+		{Prefix: netip.MustParsePrefix("10.0.0.0/8")},
+	}, exp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type entry struct {
+		deny     bool
+		lo       uint16
+		expiring bool
+	}
+	got := map[string][]entry{}
+	for k, v := range tr {
+		p := netip.PrefixFrom(netip.AddrFrom16(k.Addr), int(k.Prefixlen)-32)
+		for _, e := range v.E {
+			if e.Expiry != 0 || e.Deny != 0 {
+				got[p.String()] = append(got[p.String()], entry{e.Deny != 0, e.PortLo, e.Expiry != 0})
+			}
+		}
+		if _, ok := got[p.String()]; !ok {
+			got[p.String()] = nil
+		}
+	}
+	slices.SortFunc(got["::/0"], func(a, b entry) int { return int(a.lo) - int(b.lo) })
+	slices.SortFunc(got["::ffff:10.0.0.0/104"], func(a, b entry) int { return int(a.lo) - int(b.lo) })
+	want := map[string][]entry{
+		"::/0":                {{deny: true}, {lo: 53, expiring: true}},
+		"::ffff:0.0.0.0/96":   {{lo: 53, expiring: true}},
+		"::ffff:10.0.0.0/104": {{expiring: true}, {lo: 53, expiring: true}},
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("entries:\n%v\nwant\n%v", got, want)
 	}
 }
 

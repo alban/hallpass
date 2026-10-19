@@ -152,9 +152,21 @@ type entryInet struct {
 
 // inetTrie computes the inet_rules entries of rules: one key per prefix,
 // with the rules of that prefix and of the shorter ones containing it.
+//
+// IPv4 prefixes are stored as IPv4-mapped IPv6 ones (::ffff:a.b.c.d), in
+// the same trie. An IPv6 prefix does not contain IPv4 addresses (as in
+// lite mode, netip.Prefix.Contains): IPv4 keys do not inherit IPv6 rules,
+// and a ::ffff:0:0/96 key, with the rules for any address only, keeps
+// IPv4 lookups off IPv6 prefixes as short as /96 or less. ::/0 shares its
+// key with the rules for any address; the keys below inherit them apart.
 func inetTrie(session uint32, rules []InetRule, expiry func(time.Time) uint64) (map[hallpassInetKey]hallpassInetVal, error) {
-	own := map[hallpassInetKey][]entryInet{}
-	pfx := map[hallpassInetKey]netip.Prefix{}
+	root := hallpassInetKey{Prefixlen: 32, Session: session}
+	own := map[hallpassInetKey][]entryInet{root: nil}
+	pfx := map[hallpassInetKey]netip.Prefix{root: {}}
+	v4 := map[hallpassInetKey]bool{}
+	var anyAddr, anyV6 []entryInet
+	mapped := netip.PrefixFrom(netip.AddrFrom16(netip.IPv4Unspecified().As16()), 96)
+	shadow := false
 	for _, r := range rules {
 		e := entryInet{proto: r.Proto, lo: r.PortLo, hi: r.PortHi}
 		if r.Deny {
@@ -162,33 +174,60 @@ func inetTrie(session uint32, rules []InetRule, expiry func(time.Time) uint64) (
 		} else if e.expiry = expiry(r.Expires); e.expiry == 0 {
 			continue
 		}
-		k := hallpassInetKey{Prefixlen: 32, Session: session}
-		var p netip.Prefix
-		if r.Prefix.IsValid() {
+		k := root
+		if !r.Prefix.IsValid() {
+			anyAddr = mergeInet(anyAddr, e)
+		} else {
 			bits := r.Prefix.Bits()
 			a := r.Prefix.Masked().Addr()
 			if a.Is4() {
 				bits += 96
+			} else if bits <= 96 && r.Prefix.Masked().Contains(mapped.Addr()) {
+				shadow = true
 			}
-			p = netip.PrefixFrom(netip.AddrFrom16(a.As16()), bits)
+			p := netip.PrefixFrom(netip.AddrFrom16(a.As16()), bits)
 			k.Prefixlen += uint32(bits)
 			k.Addr = p.Addr().As16()
+			if bits == 0 {
+				anyV6 = mergeInet(anyV6, e)
+			} else {
+				pfx[k] = p
+				v4[k] = a.Is4()
+			}
 		}
 		own[k] = mergeInet(own[k], e)
-		pfx[k] = p
+	}
+	if shadow {
+		k := hallpassInetKey{Prefixlen: 32 + 96, Session: session, Addr: mapped.Addr().As16()}
+		if _, ok := pfx[k]; !ok {
+			pfx[k], v4[k] = mapped, true
+		}
 	}
 	out := map[hallpassInetKey]hallpassInetVal{}
 	for k, p := range pfx {
 		es := append([]entryInet(nil), own[k]...)
+		if k != root {
+			for _, e := range anyAddr {
+				es = mergeInet(es, e)
+			}
+			if !v4[k] {
+				for _, e := range anyV6 {
+					es = mergeInet(es, e)
+				}
+			}
+		}
 		for k2, p2 := range pfx {
-			if k2 == k || k2.Prefixlen >= k.Prefixlen {
+			if k2 == k || k2 == root || k2.Prefixlen >= k.Prefixlen {
 				continue
 			}
-			if !p2.IsValid() || p2.Contains(p.Addr()) {
+			if v4[k] == v4[k2] && p2.Contains(p.Addr()) {
 				for _, e := range own[k2] {
 					es = mergeInet(es, e)
 				}
 			}
+		}
+		if len(es) == 0 && k == root {
+			continue
 		}
 		if len(es) > netEntries {
 			return nil, fmt.Errorf("strict mode: more than %d network rules match %s", netEntries, p)
