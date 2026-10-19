@@ -36,9 +36,9 @@ func (f fakeSession) Answer(id uint64, answer, client string) error {
 }
 
 type client struct {
-	t      *testing.T
-	url    string
-	cookie *http.Cookie
+	t    *testing.T
+	url  string
+	cred string
 }
 
 func (c client) do(method, path, body string, hdr ...string) *http.Response {
@@ -50,15 +50,15 @@ func (c client) do(method, path, body string, hdr ...string) *http.Response {
 	if method == http.MethodPost {
 		req.Header.Set("Origin", c.url)
 	}
+	if c.cred != "" {
+		req.Header.Set("Authorization", "Bearer "+c.cred)
+	}
 	for i := 0; i+1 < len(hdr); i += 2 {
 		if hdr[i] == "Host" {
 			req.Host = hdr[i+1]
 		} else {
 			req.Header.Set(hdr[i], hdr[i+1])
 		}
-	}
-	if c.cookie != nil {
-		req.AddCookie(c.cookie)
 	}
 	resp, err := (&http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}).Do(req)
 	if err != nil {
@@ -137,13 +137,14 @@ func pair(t *testing.T, s *Server, c client) client {
 	}
 	u.answers <- true
 	resp := c.do("POST", "/api/pair/wait", `{"id":"`+id+`"}`)
-	if resp.StatusCode != http.StatusNoContent || len(resp.Cookies()) != 1 {
-		t.Fatalf("pair: %s", resp.Status)
+	var paired struct{ Credential string }
+	if err := json.NewDecoder(resp.Body).Decode(&paired); err != nil || resp.StatusCode != http.StatusOK || len(paired.Credential) < 32 {
+		t.Fatalf("pair: %s %v", resp.Status, err)
 	}
-	c.cookie = resp.Cookies()[0]
-	if !c.cookie.HttpOnly || c.cookie.SameSite != http.SameSiteStrictMode {
-		t.Errorf("cookie %v: want HttpOnly, SameSite=Strict", c.cookie)
+	if len(resp.Cookies()) != 0 {
+		t.Errorf("cookies %v: the credential must stay in the page's memory", resp.Cookies())
 	}
+	c.cred = paired.Credential
 	if resp := c.do("POST", "/api/pair/wait", `{"id":"`+id+`"}`); resp.StatusCode != http.StatusNotFound {
 		t.Errorf("pairing reused: %s", resp.Status)
 	}
@@ -183,6 +184,17 @@ func TestPairing(t *testing.T) {
 	c = pair(t, s, c)
 	if resp := c.do("GET", "/api/sessions", ""); resp.StatusCode != http.StatusOK {
 		t.Errorf("paired: %s", resp.Status)
+	}
+	bad := c
+	bad.cred = strings.Repeat("0", len(c.cred))
+	if resp := bad.do("GET", "/api/sessions", ""); resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("bad credential: %s", resp.Status)
+	}
+	if resp := c.do("GET", "/api/sessions", "", "Authorization", c.cred); resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("credential without Bearer: %s", resp.Status)
+	}
+	if New().credential == s.credential {
+		t.Error("same credential in two servers")
 	}
 }
 

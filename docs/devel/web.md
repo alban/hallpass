@@ -80,15 +80,18 @@ Shaped for the UI, not for the monitor, and free to change with it:
 - `POST /api/pair`: starts pairing this browser; returns `{id, code}`.
   `hallpass web` asks the user to confirm the code (see
   [Security](#security)).
-- `POST /api/pair/wait`: `{id}`; waits for the user's answer, and sets the
-  cookie if they confirmed.
+- `POST /api/pair/wait`: `{id}`; waits for the user's answer, and returns
+  `{credential}` if they confirmed. The page sends it as `Authorization:
+  Bearer <credential>` on the requests below.
 - `GET /` and static assets: one page, embedded (`go:embed`), no build
   step. They hold no secret, and are served before pairing, to pair.
 - `GET /favicon.svg`: the logo.
 - `GET /api/sessions`: the sessions and their `Info`.
 - `GET /api/sessions/{pid}/snapshot`: pending requests and rules.
 - `GET /api/sessions/{pid}/events`: server-sent events; first the
-  snapshot, then the events (Opened, Closed, Rules, Decided).
+  snapshot, then the events (Opened, Closed, Rules, Decided). The page
+  reads them with `fetch`, not `EventSource`, which cannot send the
+  `Authorization` header.
 - `POST /api/sessions/{pid}/answer`: `{request, answer}` with the same
   answers as the terminal (once, temp, always, never, deny).
 - `POST /api/sessions/{pid}/rules`: remove a rule, or a set.
@@ -137,9 +140,11 @@ Measures:
   no-store`. The page renders all session data as text, never as HTML.
 - **Pairing code**: the page shows a short code ("Pairing code: 482 913"),
   and `hallpass web` asks on its own terminal "Pair the browser showing
-  482 913? [y/n]". Once confirmed, the browser gets a session cookie
-  (`HttpOnly`, `SameSite=Strict`, no expiry, random per `hallpass web`
-  process). The URL holds no secret, so `--open` can pass it to
+  482 913? [y/n]". Once confirmed, the page gets a credential (random per
+  `hallpass web` process) that it keeps in a JavaScript variable only and
+  sends as an `Authorization` header: no cookie, no storage, nothing the
+  browser writes to its profile. Reloading the page or opening a new tab
+  means pairing again. The URL holds no secret, so `--open` can pass it to
   `xdg-open`. The code only needs to be authentic, not secret: the sandbox
   can neither read nor answer `hallpass web`'s terminal. The risk is a
   sandboxed process starting its own pairing just before the browser, and
@@ -215,17 +220,18 @@ loopback, which no workload reaches, so no denial is needed there; a
 local `hallpass web --node` through a port-forward registers the
 forwarded port.
 
-**Known hole without network mediation**: pairing does not stop the
-sandbox from reading the cookie: it cannot see the code's confirmation
-(asked on the web process's terminal), but it can read the cookie from
-the browser profile (plaintext
-in Firefox's `cookies.sqlite`; Chrome encrypts it with the keyring), then
-connect to 127.0.0.1 and approve its own requests. This is weaker than
-the terminal answer socket, which rejects peers with a seccomp filter.
-It takes a deliberately malicious agent, not an accident, so `hallpass
-web` ships as experimental and says so in `--help` and its banner: the
-connection is only blocked when the network is mediated, which is not
-the default.
+**Known hole without network mediation**: the sandbox can still connect
+to 127.0.0.1. It cannot get the credential from the browser profile (it
+is never written there) nor answer the pairing (asked on `hallpass web`'s
+terminal), but it can start its own pairing and hope the user confirms
+its code instead of the browser's; the rules above make that a visible
+warning rather than a silent race. Where Yama's `ptrace_scope` is 0, the
+sandbox (same user) could also read the credential from the browser's
+memory. This is weaker than the terminal answer socket, which rejects
+peers with a seccomp filter. It takes a deliberately malicious agent, not
+an accident, so `hallpass web` ships as experimental and says so in
+`--help` and its banner: the connection is only blocked when the network
+is mediated, which is not the default.
 
 A per-connection peer check (find the client socket with
 `NETLINK_SOCK_DIAG`, scan `/proc/*/fd` for its inode, reject if a holder

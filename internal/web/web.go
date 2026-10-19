@@ -45,8 +45,6 @@ var static embed.FS
 // Client is `hallpass web`'s name in monitor.Reason.Client.
 const Client = "hallpass web"
 
-const cookieName = "hallpass-web"
-
 // PairTimeout is how long a pairing waits for the user's confirmation.
 const PairTimeout = 60 * time.Second
 
@@ -69,7 +67,7 @@ type Server struct {
 	node     pb.SessionClient
 	nodeConn *grpc.ClientConn
 
-	cookie      string // random per process
+	credential  string // random per process; given to paired browsers
 	pairTimeout time.Duration
 
 	mu       sync.Mutex
@@ -104,7 +102,7 @@ type session struct {
 func New() *Server {
 	return &Server{
 		SocketDir:   sessionapi.SocketDir(),
-		cookie:      randomHex(32),
+		credential:  randomHex(32),
 		pairTimeout: PairTimeout,
 		sessions:    map[int]*session{},
 	}
@@ -283,7 +281,7 @@ func (s *Server) warn(msg string) {
 }
 
 // pairWait waits for the outcome of the browser's pairing, and gives it
-// the session cookie if the user confirmed it. The browser going away
+// the credential if the user confirmed it. The browser going away
 // cancels the pairing.
 func (s *Server) pairWait(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -314,17 +312,17 @@ func (s *Server) pairWait(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, p.err.Error(), http.StatusForbidden)
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name: cookieName, Value: s.cookie, Path: "/",
-		HttpOnly: true, SameSite: http.SameSiteStrictMode,
-	})
-	w.WriteHeader(http.StatusNoContent)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"credential": s.credential})
 }
 
+// auth checks the credential, which the page keeps in memory only and
+// sends as "Authorization: Bearer ...". Not a cookie: browsers write
+// those to their profile, which the sandbox may read.
 func (s *Server) auth(h http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c, err := r.Cookie(cookieName)
-		if err != nil || subtle.ConstantTimeCompare([]byte(c.Value), []byte(s.cookie)) != 1 {
+		got, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if !ok || subtle.ConstantTimeCompare([]byte(got), []byte(s.credential)) != 1 {
 			http.Error(w, "Not paired: reload the page to pair.", http.StatusUnauthorized)
 			return
 		}

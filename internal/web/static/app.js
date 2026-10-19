@@ -137,52 +137,113 @@ function addActivity(entry) {
   if (activity.length > maxActivity) activity.splice(0, activity.length - maxActivity);
 }
 
+// The credential, given by hallpass once the user confirmed the pairing. It
+// lives in this variable only, never in a cookie or in storage, which the
+// browser may write to its profile, where the sandbox could read it.
+// Reloading the page means pairing again.
+let credential = null;
+
+// api fetches path with the credential. A 401 means the credential is not
+// valid any more (hallpass restarted): pair again.
+async function api(path, opts = {}) {
+  const r = await fetch(path, { ...opts, headers: { ...(opts.headers || {}), Authorization: "Bearer " + credential } });
+  if (r.status === 401 && pairState === "paired") unpaired("Not paired any more (hallpass restarted?).");
+  return r;
+}
+
+class HTTPError extends Error {
+  constructor(status, message) { super(message); this.status = status; }
+}
+
+// sse reads the server-sent events at path, calling onEvent(type, data) for
+// each, until the stream ends. Unlike EventSource, fetch can send the
+// credential. It throws an HTTPError if the server refuses.
+async function sse(path, signal, onEvent) {
+  const r = await api(path, { signal });
+  if (!r.ok) throw new HTTPError(r.status, (await r.text()).trim() || r.statusText);
+  const reader = r.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buf = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) return;
+    buf += value;
+    let i;
+    while ((i = buf.indexOf("\n\n")) >= 0) {
+      const block = buf.slice(0, i);
+      buf = buf.slice(i + 2);
+      let type = "message";
+      const data = [];
+      for (const line of block.split("\n")) {
+        if (line.startsWith(":")) continue; // comment: heartbeat
+        const c = line.indexOf(":");
+        const field = c < 0 ? line : line.slice(0, c);
+        const v = c < 0 ? "" : line.slice(c + 1).replace(/^ /, "");
+        if (field === "event") type = v;
+        else if (field === "data") data.push(v);
+      }
+      if (data.length) onEvent(type, data.join("\n"));
+    }
+  }
+}
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
 async function refreshRules(pid) {
   const s = sessions.get(pid);
   if (!s) return;
-  const r = await fetch(`/api/sessions/${encodeURIComponent(pid)}/snapshot`);
+  const r = await api(`/api/sessions/${encodeURIComponent(pid)}/snapshot`);
   if (!r.ok) return;
   const snap = await r.json();
   s.rules = snap.rules || [];
   markDirty();
 }
 
+function onBatch(pid, s, batch) {
+  if (batch.snapshot) {
+    // First batch of a (re)connection: start over.
+    s.pending.clear();
+    for (const r of batch.snapshot.pending || []) s.pending.set(r.id, r);
+    s.rules = batch.snapshot.rules || [];
+    pendingChanged = true;
+  }
+  for (const e of batch.events || []) {
+    if (e.opened) { s.pending.set(e.opened.id, e.opened); pendingChanged = true; }
+    else if (e.closed) { pendingChanged = s.pending.delete(e.closed.id) || pendingChanged; }
+    else if (e.rules) refreshRules(pid);
+    else if (e.decided) addActivity({ pid, d: e.decided });
+    else if (e.warning) addActivity({ pid, text: "warning: " + e.warning });
+    else if (e.dropped) addActivity({ pid, text: e.dropped + " events dropped (too slow)" });
+  }
+  markDirty();
+}
+
+// openSession follows the session's events until it ends, reconnecting
+// like EventSource would: after a network error or a stream cut short, but
+// not after the server refused or said "end".
 function openSession(info) {
   const pid = sessionKey(info);
-  const s = { info, pending: new Map(), rules: [], ended: false };
+  const s = { info, pending: new Map(), rules: [], ended: false, abort: new AbortController() };
   sessions.set(pid, s);
-  s.src = new EventSource(`/api/sessions/${encodeURIComponent(pid)}/events`);
-  s.src.onmessage = ev => {
-    const batch = JSON.parse(ev.data);
-    if (batch.snapshot) {
-      // First batch of a (re)connection: start over.
-      s.pending.clear();
-      for (const r of batch.snapshot.pending || []) s.pending.set(r.id, r);
-      s.rules = batch.snapshot.rules || [];
-      pendingChanged = true;
+  (async () => {
+    while (!s.ended) {
+      try {
+        await sse(`/api/sessions/${encodeURIComponent(pid)}/events`, s.abort.signal, (type, data) => {
+          if (type === "end") endSession(pid);
+          else if (!s.ended) onBatch(pid, s, JSON.parse(data));
+        });
+      } catch (e) {
+        if (e instanceof HTTPError) { endSession(pid); return; }
+      }
+      if (!s.ended) await sleep(2000);
     }
-    for (const e of batch.events || []) {
-      if (e.opened) { s.pending.set(e.opened.id, e.opened); pendingChanged = true; }
-      else if (e.closed) { pendingChanged = s.pending.delete(e.closed.id) || pendingChanged; }
-      else if (e.rules) refreshRules(pid);
-      else if (e.decided) addActivity({ pid, d: e.decided });
-      else if (e.warning) addActivity({ pid, text: "warning: " + e.warning });
-      else if (e.dropped) addActivity({ pid, text: e.dropped + " events dropped (too slow)" });
-    }
-    markDirty();
-  };
-  s.src.addEventListener("end", () => endSession(pid));
-  s.src.onerror = () => {
-    // EventSource retries by itself, unless the server refused.
-    if (s.src.readyState === EventSource.CLOSED) endSession(pid);
-  };
+  })();
 }
 
 function endSession(pid) {
   const s = sessions.get(pid);
   if (!s || s.ended) return;
   s.ended = true;
-  s.src.close();
+  s.abort.abort();
   if (s.pending.size) pendingChanged = true;
   s.pending.clear();
   markDirty();
@@ -210,6 +271,7 @@ function showPaired() {
 
 function unpaired(text) {
   pairState = "unpaired";
+  credential = null;
   for (const pid of sessions.keys()) endSession(pid);
   sessions.clear();
   showPairing(text);
@@ -231,6 +293,7 @@ async function pair() {
       body: JSON.stringify({ id }),
     });
     if (!r.ok) throw new Error((await r.text()).trim() || r.statusText);
+    credential = (await r.json()).credential;
   } catch (e) {
     pairState = "unpaired";
     showPairing(e.message);
@@ -241,19 +304,9 @@ async function pair() {
   refreshSessions();
 }
 
-// start pairs, unless this browser still has the cookie.
-async function start() {
-  try {
-    const r = await fetch("/api/sessions");
-    if (r.ok) {
-      pairState = "paired";
-      showPaired();
-      refreshSessions();
-      return;
-    }
-  } catch (e) {
-    // Pair anyway: it says what goes wrong.
-  }
+// start pairs: each page load or new tab pairs again, since nothing
+// survives the page.
+function start() {
   pair();
 }
 
@@ -261,12 +314,8 @@ async function refreshSessions() {
   if (pairState !== "paired") return;
   let r;
   try {
-    r = await fetch("/api/sessions");
+    r = await api("/api/sessions");
   } catch (e) {
-    return;
-  }
-  if (r.status === 401) {
-    unpaired("Not paired any more (hallpass web restarted?).");
     return;
   }
   if (!r.ok) return;
@@ -283,7 +332,7 @@ async function refreshSessions() {
 }
 
 async function post(url, body) {
-  const r = await fetch(url, {
+  const r = await api(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
