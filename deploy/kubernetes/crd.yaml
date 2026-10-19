@@ -51,8 +51,8 @@ spec:
                     pattern: '^/[^*?\[]*(/\*\*)?$'
                 ask:
                   description: >-
-                    Ask about writes no rule decides (default true). false
-                    denies them at once.
+                    Ask about writes and programs no rule decides (default
+                    true). false denies them at once.
                   type: boolean
                 askTimeout:
                   description: >-
@@ -95,9 +95,53 @@ spec:
                   type: array
                   items:
                     type: string
+                allowExec:
+                  description: >-
+                    Container programs run without asking, besides the
+                    container's command (its args[0]): "/usr/bin/make" (that
+                    program), "/opt/tools/**" (every program below
+                    /opt/tools), or a built-in group of programs, resolved in
+                    the container: "@shells", "@coreutils", "@search", "@git",
+                    "@busybox", or one of groups. Needs exec in mediate.
+                  type: array
+                  items:
+                    type: string
+                    pattern: '^(/[^*?\[]*(/\*\*)?|@[a-z][a-z0-9-]*)$'
+                denyExec:
+                  description: >-
+                    Container programs never run, even if allowed. Same
+                    syntax as allowExec, without groups.
+                  type: array
+                  items:
+                    type: string
+                    pattern: '^/[^*?\[]*(/\*\*)?$'
+                groups:
+                  description: >-
+                    Groups of container programs, by name ("@tools"): a new
+                    group, or the replacement of the built-in group of the
+                    same name. Programs as in denyExec. A prompt about a
+                    program of a group offers the group; allowExec names
+                    it. Needs exec in mediate.
+                  type: object
+                  maxProperties: 64
+                  additionalProperties:
+                    type: array
+                    minItems: 1
+                    items:
+                      type: string
+                      pattern: '^/[^*?\[]*(/\*\*)?$'
+                  x-kubernetes-validations:
+                    - rule: self.all(k, k.matches('^@[a-z][a-z0-9-]{0,30}$'))
+                      message: >-
+                        group names are @, a lowercase letter, then
+                        lowercase letters, digits or -
               x-kubernetes-validations:
                 - rule: >-
                     (!has(self.allowNetwork) && !has(self.denyNetwork) &&
                     !has(self.askNetwork)) ||
                     (has(self.mediate) && 'network' in self.mediate)
                   message: allowNetwork, denyNetwork and askNetwork need network in mediate
+                - rule: >-
+                    (!has(self.allowExec) && !has(self.denyExec) && !has(self.groups)) ||
+                    !has(self.mediate) || 'exec' in self.mediate
+                  message: allowExec, denyExec and groups need exec in mediate

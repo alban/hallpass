@@ -53,7 +53,10 @@ type Config struct {
 	ProcRoot bool
 	// Mediate is the syscall categories mediated (--mediate, a policy's
 	// mediate); 0: all of them. A request made in advance for another
-	// category fails with ENOSYS: nothing would enforce its grant.
+	// category fails with ENOSYS: nothing would enforce its grant. With
+	// seccomp.Exec, execve and execveat are decided by the rules with
+	// OpExec, and asked about when none does; without it, they are let
+	// through (in strict mode, the thread is still made a member).
 	Mediate seccomp.Category
 }
 
@@ -128,7 +131,9 @@ type Reason struct {
 	// "own-proc" (the workload writes its own /proc files), "restarted"
 	// (restart cache), "bpf" (strict: other mount namespace or unreadable
 	// path, continued for BPF to decide), "unresolvable" (the path could
-	// not be resolved: denied).
+	// not be resolved: denied), "exec-retry" (a verdict denied the same
+	// program to the same thread just before: execvp trying the next
+	// $PATH directory).
 	Builtin string
 	Died    bool // the requesting task died
 }

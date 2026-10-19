@@ -57,8 +57,9 @@ type Category uint32
 
 const (
 	Files Category = 1 << iota
-	// Exec is reserved for checks on executed programs; execve is
-	// notified whatever the categories (see commonRules).
+	// Exec checks the programs executed. execve is notified whatever the
+	// categories (see commonRules): the monitor checks the program only
+	// when Exec is mediated.
 	Exec
 	Network
 
@@ -147,9 +148,11 @@ func commonRules(allowUserns bool) []Rule {
 		{Nr: unix.SYS_RENAMEAT, Name: "renameat", Kind: Notify, Op: "rename", Paths: []PathArg{{0, 1}, {2, 3}}},
 		{Nr: unix.SYS_RENAMEAT2, Name: "renameat2", Kind: Notify, Op: "rename", Paths: []PathArg{{0, 1}, {2, 3}}},
 		{Nr: unix.SYS_TRUNCATE, Name: "truncate", Kind: Notify, Op: "truncate", Paths: []PathArg{{-1, 0}}},
-		// Always continued for now: notifying them lets a launcher that
-		// does not wait for the monitor (runc) hold the first exec until
-		// the monitor is attached.
+		// Notified whatever the categories: in strict mode, the monitor
+		// makes the thread a member first; this also lets a launcher
+		// that does not wait for the monitor (runc) hold the first exec
+		// until the monitor is attached. With exec mediated, the
+		// program is checked too.
 		{Nr: unix.SYS_EXECVE, Name: "execve", Kind: Notify, Op: "exec", Paths: []PathArg{{-1, 0}}},
 		{Nr: unix.SYS_EXECVEAT, Name: "execveat", Kind: Notify, Op: "exec", Paths: []PathArg{{0, 1}}},
 

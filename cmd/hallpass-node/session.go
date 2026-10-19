@@ -86,7 +86,7 @@ func newSession(id string, pid int, md metadata, p *Policy, rs []rules.Rule, ks 
 		}
 		return nil, err
 	}
-	d := defaultsFor(p, md.Home, cats)
+	d := defaultsFor(p, md, cats, pid)
 	if rs == nil {
 		rs = d.Rules()
 	}

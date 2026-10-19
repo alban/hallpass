@@ -6,13 +6,19 @@
 # "../hostname" (/etc/hostname, denied). Lite mode checks the path before
 # the kernel reads it again, so the race can win; strict mode checks the
 # file the kernel opens, so it must not. The pod runs it once, and the test
-# again with kubectl exec.
+# again with kubectl exec. race runs from /etc/ws, and the pod and the
+# test run cat, chmod and sleep (busybox applets, hard links in this image):
+# allowExec, by a group of the policy's own, since exec is mediated and ask
+# is false.
 apiVersion: hallpass.io/v1alpha1
 kind: HallpassPolicy
 metadata:
   name: e2e-race
 spec:
   allow: [/etc/ws/**]
+  groups:
+    "@race-tools": [/bin/cat, /bin/chmod, /bin/sleep]
+  allowExec: [/etc/ws/**, "@race-tools"]
   ask: false
 ---
 apiVersion: v1

@@ -654,10 +654,10 @@ func TestOpenat2(t *testing.T) {
 }
 
 func TestExecContinued(t *testing.T) {
-	// No rule at all: an exec is continued anyway, even in strict mode,
-	// once its task is a member.
+	// Exec not mediated: an exec is continued, even in strict mode, once
+	// its task is a member.
 	k := &fakeKernel{}
-	fx := setup(t, k, true)
+	fx := setupConfig(t, Config{Kernel: k, Mediate: seccomp.Files}, true)
 	id := fx.f.send(unix.SYS_EXECVE, map[int]string{0: "/usr/bin/true"}, nil)
 	fx.f.expect(t, id, 0)
 	k.mu.Lock()

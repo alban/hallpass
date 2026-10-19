@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -82,6 +83,33 @@ func newEnv(t *testing.T) env {
 }
 
 func (e env) cmd(script string, flags ...string) *exec.Cmd {
+	return e.rawCmd(script, append(testExecs(flags), flags...)...)
+}
+
+// testExecs returns the flags allowing the programs the tests run that are
+// not the command: this test binary (helpers), the common tools by group,
+// and some others. None when flags do not mediate exec.
+func testExecs(flags []string) []string {
+	for _, f := range flags {
+		if m, ok := strings.CutPrefix(f, "--mediate="); ok && !slices.Contains(strings.Split(m, ","), "exec") {
+			return nil
+		}
+	}
+	self, err := os.Executable()
+	if err != nil {
+		panic(err)
+	}
+	out := []string{"--allow-exec=" + self, "--allow-exec=@shells,@coreutils,@search,@git"}
+	for _, name := range []string{"python3", "tar", "unshare"} {
+		if p, err := exec.LookPath(name); err == nil {
+			out = append(out, "--allow-exec="+p)
+		}
+	}
+	return out
+}
+
+// rawCmd is cmd without the exec allows of testExecs.
+func (e env) rawCmd(script string, flags ...string) *exec.Cmd {
 	args := append(append([]string{}, flags...), "-C", e.proj, "--", "/bin/sh", "-c", script)
 	c := exec.Command(hallpassBin, args...)
 	c.Env = append(os.Environ(), "HOME="+e.home, "XDG_RUNTIME_DIR="+e.runtime, "DBUS_SESSION_BUS_ADDRESS=")

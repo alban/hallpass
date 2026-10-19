@@ -505,7 +505,9 @@ type Reason struct {
 	// "own-proc" (the workload writes its own /proc files), "restarted"
 	// (restart cache), "bpf" (strict: other mount namespace or
 	// unreadable path, continued for BPF to decide), "unresolvable" (the
-	// path could not be resolved: denied), "execve" (always continued)
+	// path could not be resolved: denied), "execve" (continued: exec not
+	// mediated), "exec-retry" (a verdict denied the same program to the
+	// same thread just before: execvp trying the next $PATH directory)
 	Died bool // the requesting task died
 }
 
@@ -559,7 +561,10 @@ const (
   the same op and objects are one `Request`. Two processes writing the
   same file get two: the prompt names one process, so an answer must not
   release another. A syscall restarted after a signal is answered from a
-  restart cache without a new `Request`.
+  restart cache without a new `Request`. An exec denied by a verdict
+  denies the same program to the same thread for a moment too: `execvp`
+  tries each `$PATH` directory, and `/bin/curl` is `/usr/bin/curl` on
+  most distributions, which would ask the same question twice.
 - **Serialization** is the UX's: the monitor does not hold requests back
   while one is being answered. After each `Apply` it closes the pending
   requests the new rules decide, so an "allow folder" answer settles the
@@ -648,18 +653,20 @@ So the profile a runc/NRI integration injects must notify on `execve` and
 returned: no untrusted code runs before the process is a BPF member.
 `ContainerProcessState.Pid` is the host pid, as `Attach` needs.
 
-hallpass's own filter notifies on `execve` and `execveat` too, and the
-monitor always continues them (`Reason.Builtin` "execve"): what to check
-on exec is not designed yet. This exercises the path runc needs, and
-could later replace the launcher's pause before exec. It costs one
+hallpass's own filter notifies on `execve` and `execveat` too. With
+exec in `Config.Mediate` (the default), the monitor decides
+them with the `OpExec` rules: the program's path is read and resolved
+like a file's, plus the `#!` interpreters as the kernel will run them,
+and an undecided one is asked about (see
+[Programs](../design.md#programs)). Without it, the monitor continues
+them (`Reason.Builtin` "execve"). Either way, in strict mode the
+process is made a BPF member first. It costs one
 notification round trip per exec: about 0.2 ms on the arm64 test VM,
-where a fork and exec of `/bin/true` takes 1.1 ms. Continuing is safe
-since the monitor does not decide on the arguments. hallpass's `--log`
-leaves execs out until they are mediated. Go programs are multithreaded
+where a fork and exec of `/bin/true` takes 1.1 ms. Go programs are multithreaded
 and get SIGURG for preemption: `WAIT_KILLABLE_RECV` makes a received
 notification immune to it; before it is received, the signal restarts
-the syscall with a new notification (`-ERESTARTSYS`), harmless since
-execve is always continued. `TestGoExec` covers a Go program exec'ing
+the syscall with a new notification (`-ERESTARTSYS`), which is decided
+again. `TestGoExec` covers a Go program exec'ing
 others from many goroutines while others spin, and `syscall.Exec` from a
 multithreaded Go program; mediation must still hold after both.
 

@@ -84,7 +84,7 @@ func helperAgent() {
 		fail(err)
 	}
 	// "always" grants $HOME/one to A: not B, in $HOME/two.
-	md, _ := json.Marshal(metadata{Policy: "p", Home: home})
+	md, _ := json.Marshal(metadata{Policy: "p", Home: home, Command: "/bin/sh"})
 	st := &specs.ContainerProcessState{Pid: proc.Pid, State: specs.State{ID: "c1"}, Metadata: string(md)}
 	if err := a.attach(st, fd); err != nil {
 		fail(err)

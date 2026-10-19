@@ -4,8 +4,12 @@
 package monitor
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -274,6 +278,10 @@ func (m *Monitor) decide(l *listener, n seccomp.Notif, sc seccomp.Rule, op rules
 		return
 	}
 	key := restartKey(n, paths)
+	if op == rules.OpExec && !unknown && m.restarted(execRetryKey(n, paths)) {
+		m.deny(l, n, sc, op, objects(items), only(len(items), undecided[0], Reason{Builtin: "exec-retry"}))
+		return
+	}
 	if !unknown && m.restarted(key) {
 		for _, i := range undecided {
 			items[i].decided, items[i].why = true, Reason{Builtin: "restarted"}
@@ -299,6 +307,9 @@ func (m *Monitor) ask(l *listener, n seccomp.Notif, sc seccomp.Rule, op rules.Op
 			decided, why = r.allow, r.why
 		}
 		if !decided {
+			if op == rules.OpExec && why.Rule == 0 && !unknown {
+				m.deniedExec(n, items)
+			}
 			m.deny(l, n, sc, op, objects(items), only(len(items), i, why))
 			return
 		}
@@ -472,17 +483,18 @@ func (m *Monitor) toBPF(l *listener, n seccomp.Notif, sc seccomp.Rule, op rules.
 	_ = l.n.Continue(n.ID)
 }
 
-// report emits a Decided event, if a subscriber wants them.
-// exec continues an execve or execveat: what to check on exec is not
-// designed yet. Its path is read for Decided events, best effort, and for
-// advance requests (AdvanceDir), which are answered and never continued:
-// it returns ask for those waiting for a verdict.
+// exec decides an execve or execveat, or returns ask, which asks a human
+// and must run in its own goroutine. Advance requests (AdvanceDir) are
+// answered and never continued.
 //
 // In strict mode, the calling thread is first made a member of the
 // session: it may be one the sandbox started before it was marked (the
 // container runtime's init), or a thread that is not the one marked, whose
 // execve would otherwise leave the sandbox. It stays blocked meanwhile, so
 // the new program never runs unmarked.
+//
+// Without exec mediated (Config.Mediate), the exec is continued; its path
+// is read for Decided events only, best effort.
 func (m *Monitor) exec(l *listener, n seccomp.Notif, sc seccomp.Rule) (ask func()) {
 	raw, rerr := procfs.ReadCString(n.PID, n.Args[sc.Paths[0].Path])
 	if strings.HasPrefix(raw, AdvanceDir) {
@@ -496,6 +508,9 @@ func (m *Monitor) exec(l *listener, n seccomp.Notif, sc seccomp.Rule) (ask func(
 			_ = l.n.Deny(n.ID, int32(unix.EPERM))
 			return nil
 		}
+	}
+	if m.mediate&seccomp.Exec != 0 {
+		return m.execProgram(l, n, sc)
 	}
 	m.mu.Lock()
 	want := m.decided > 0
@@ -513,6 +528,127 @@ func (m *Monitor) exec(l *listener, n seccomp.Notif, sc seccomp.Rule) (ask func(
 	return nil
 }
 
+// maxInterpreters is how many #! interpreters deep the kernel goes
+// (BINPRM_MAX_RECURSION), after the script itself.
+const maxInterpreters = 4
+
+// execProgram decides the program of an exec with the OpExec rules: its
+// path is read and resolved like a file's, and for a script, the #!
+// interpreters too, as the kernel runs them. A path that is not an
+// executable file is continued: the kernel fails the exec itself (execvp
+// tries every $PATH directory). In strict mode, the kernel checks the
+// files it executes (bprm_check_security), so a program the monitor cannot
+// see is left to it, and an answer is a one-time grant.
+func (m *Monitor) execProgram(l *listener, n seccomp.Notif, sc seccomp.Rule) (ask func()) {
+	if m.kernel != nil {
+		ref := 0
+		if m.procRoot {
+			ref = l.root
+		}
+		if same, err := procfs.SameView(n.PID, ref); err == nil && !same {
+			m.toBPF(l, n, sc, rules.OpExec)
+			return nil
+		}
+	}
+	unknown := func(err error) func() {
+		if m.kernel != nil {
+			m.toBPF(l, n, sc, rules.OpExec)
+			return nil
+		}
+		return m.decide(l, n, sc, rules.OpExec, []item{{obj: rules.Object{Unknown: err}}})
+	}
+	root := "/"
+	if m.procRoot {
+		root = procfs.ProcRoot(n.PID)
+	}
+	pa := sc.Paths[0]
+	raw, err := procfs.ReadCString(n.PID, n.Args[pa.Path])
+	if err != nil {
+		return unknown(err)
+	}
+	dirfd := int64(procfs.AtFDCWD)
+	if pa.DirFD >= 0 {
+		dirfd = procfs.DirFDArg(n.Args[pa.DirFD])
+	}
+	if raw == "" {
+		if sc.Name == "execveat" && n.Args[4]&unix.AT_EMPTY_PATH != 0 {
+			// The program is the file dirfd is open on, e.g. a memfd:
+			// it has no path to check.
+			return unknown(errors.New("execveat of a file descriptor"))
+		}
+		m.continueExec(l, n, sc)
+		return nil
+	}
+	t, err := procfs.Resolve(n.PID, root, dirfd, raw, true)
+	if err != nil {
+		obj := rules.Object{Path: &rules.PathObject{Path: raw}}
+		m.deny(l, n, sc, rules.OpExec, []rules.Object{obj}, []Reason{{Builtin: "unresolvable"}})
+		return nil
+	}
+	if t.Special != "" {
+		return unknown(fmt.Errorf("not a file: %s", t.Special))
+	}
+	if !executable(filepath.Join(root, t.Path)) {
+		m.continueExec(l, n, sc)
+		return nil
+	}
+	items := []item{{path: t.Path, obj: rules.Object{Path: &rules.PathObject{Path: t.Path}}}}
+	for p := t.Path; len(items) <= maxInterpreters; {
+		interp := interpreter(filepath.Join(root, p))
+		if interp == "" {
+			break
+		}
+		it, err := procfs.Resolve(n.PID, root, procfs.AtFDCWD, interp, true)
+		if err != nil || it.Special != "" || !executable(filepath.Join(root, it.Path)) {
+			// The kernel fails the exec.
+			break
+		}
+		p = it.Path
+		items = append(items, item{path: p, obj: rules.Object{Path: &rules.PathObject{Path: p}}})
+	}
+	return m.decide(l, n, sc, rules.OpExec, items)
+}
+
+// continueExec continues an exec the kernel fails by itself.
+func (m *Monitor) continueExec(l *listener, n seccomp.Notif, sc seccomp.Rule) {
+	if err := l.n.Continue(n.ID); err != nil && !errors.Is(err, unix.ENOENT) {
+		m.warn(fmt.Sprintf("continue %s: %v", sc.Name, err))
+	}
+}
+
+// executable reports whether path is a regular file with an execute bit,
+// which the kernel may run.
+func executable(path string) bool {
+	st, err := os.Stat(path)
+	return err == nil && st.Mode().IsRegular() && st.Mode().Perm()&0o111 != 0
+}
+
+// interpreter returns the #! interpreter of the script at path, "" if it
+// is not a script.
+func interpreter(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	// The kernel reads the first BINPRM_BUF_SIZE bytes.
+	var b [256]byte
+	k, _ := io.ReadFull(f, b[:])
+	line, ok := bytes.CutPrefix(b[:k], []byte("#!"))
+	if !ok {
+		return ""
+	}
+	if i := bytes.IndexByte(line, '\n'); i >= 0 {
+		line = line[:i]
+	}
+	fields := strings.Fields(string(line))
+	if len(fields) == 0 {
+		return ""
+	}
+	return fields[0]
+}
+
+// report emits a Decided event, if a subscriber wants them.
 func (m *Monitor) report(n seccomp.Notif, syscall string, op rules.Op, objs []rules.Object, allowed bool, why []Reason) {
 	m.mu.Lock()
 	want := m.decided > 0
@@ -614,6 +750,26 @@ func (m *Monitor) restarted(key string) bool {
 func (m *Monitor) allowedOnce(key string) {
 	m.mu.Lock()
 	m.restart[key] = m.now().Add(restartTTL)
+	m.mu.Unlock()
+}
+
+// execRetryKey identifies the programs of a thread's exec. It is not the
+// syscall: execvp tries each $PATH directory in turn, and /bin/curl is
+// often /usr/bin/curl.
+func execRetryKey(n seccomp.Notif, paths []string) string {
+	return fmt.Sprintf("exec %d %q", n.PID, paths)
+}
+
+// deniedExec records that a verdict denied the exec of items: the same
+// thread trying the same program again right after (the next $PATH
+// directory) is denied without asking twice.
+func (m *Monitor) deniedExec(n seccomp.Notif, items []item) {
+	paths := make([]string, len(items))
+	for i, it := range items {
+		paths[i] = it.path
+	}
+	m.mu.Lock()
+	m.restart[execRetryKey(n, paths)] = m.now().Add(restartTTL)
 	m.mu.Unlock()
 }
 

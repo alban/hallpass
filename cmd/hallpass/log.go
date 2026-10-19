@@ -68,7 +68,7 @@ func decidedEntry(d *monitor.Decided, audit bool) logEntry {
 		return e
 	}
 
-	asked, unknown, restarted := false, false, false
+	asked, unknown, restarted, retried := false, false, false, false
 	for i, why := range d.Why {
 		switch why.Builtin {
 		case "bpf":
@@ -76,6 +76,8 @@ func decidedEntry(d *monitor.Decided, audit bool) logEntry {
 			return e
 		case "unresolvable":
 			e.Reason = "unresolvable path"
+		case "exec-retry":
+			asked, retried = true, true
 		case "restarted":
 			asked, restarted = true, true
 		}
@@ -115,6 +117,9 @@ func decidedEntry(d *monitor.Decided, audit bool) logEntry {
 		}
 		if restarted {
 			e.Reason += ": restarted"
+		}
+		if retried {
+			e.Reason += ": denied just before"
 		}
 	}
 	return e

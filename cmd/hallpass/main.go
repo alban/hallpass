@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"github.com/alban/hallpass/internal/lsm"
 	"github.com/alban/hallpass/internal/policy"
 	"github.com/alban/hallpass/internal/privsep"
+	"github.com/alban/hallpass/internal/programs"
 	"github.com/alban/hallpass/internal/seccomp"
 	"github.com/alban/hallpass/internal/sessionapi"
 	"github.com/alban/hallpass/internal/tty"
@@ -94,6 +96,9 @@ var flagNames = map[string]string{
 	"allowNetwork": "--allow-net",
 	"denyNetwork":  "--deny-net",
 	"askNetwork":   "--ask-net",
+	"allowExec":    "--allow-exec",
+	"denyExec":     "--deny-exec",
+	"groups":       "--group",
 }
 
 // parseFlags parses and checks argv. When it returns ok == false, the run
@@ -109,7 +114,7 @@ func parseFlags(argv []string, printPolicy bool) (o options, code int, ok bool) 
 	fs.StringVar(&o.workdir, "workdir", "", "same as -C")
 	fs.Var(&allow, "allow", "`path` also writable without asking (repeatable)")
 	fs.Var(&deny, "deny", "`path` always denied (repeatable, wins over --allow)")
-	fs.BoolVar(&o.noImplicit, "no-implicit", false, "writable without asking: only the --allow paths (no project dir, $TMPDIR, devices or terminal)")
+	fs.BoolVar(&o.noImplicit, "no-implicit", false, "allowed without asking: only the --allow paths and --allow-exec programs (no project dir, $TMPDIR, devices or terminal; the command still runs)")
 	fs.BoolVar(&o.allowTTY, "allow-tty", true, "the session's own terminal (/dev/tty, its /dev/pts/N) is writable without asking; --no-implicit turns it off unless given explicitly")
 	fs.StringVar(&o.ask, "ask", "auto", "how to ask: auto | term | desktop | answer | deny | allow (allow and log: audit)")
 	fs.DurationVar(&o.timeout, "timeout", 30*time.Second, "deny unanswered prompts after `duration` (0: wait forever)")
@@ -123,6 +128,11 @@ func parseFlags(argv []string, printPolicy bool) (o options, code int, ok bool) 
 	fs.Var(&allowNet, "allow-net", "network `destination` allowed without asking (repeatable; needs --mediate with network): all, [tcp:|udp:]ADDR[/N][:PORT[-PORT]] (ADDR * for any, IPv6 in brackets), unix:/path, unix:/dir/**, unix:@name, unix:@prefix*")
 	fs.Var(&denyNet, "deny-net", "network `destination` always denied (repeatable, same syntax, wins over --allow-net)")
 	fs.Var(&askNet, "ask-net", "network `destination` asked about even inside a less specific --allow-net (repeatable, same syntax; a more specific --allow-net still allows)")
+	var allowExec, denyExec listFlag
+	fs.Var(&allowExec, "allow-exec", "`program` allowed to run without asking (repeatable, comma-separated): a name looked up in $PATH, a path, dir/** for every program below dir, or a group of programs: "+strings.Join(programs.Names(), ", "))
+	fs.Var(&denyExec, "deny-exec", "`program` never allowed to run (repeatable, comma-separated, same syntax but no groups, wins over --allow-exec)")
+	var groupFlags listFlag
+	fs.Var(&groupFlags, "group", "`@name=program,...`: a group of programs, offered in prompts and allowed by --allow-exec=@name (repeatable; programs as in --allow-exec, without groups); replaces the built-in group of the same name")
 	if err := fs.Parse(argv); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return o, 0, false
@@ -130,7 +140,12 @@ func parseFlags(argv []string, printPolicy bool) (o options, code int, ok bool) 
 		return o, 2, false
 	}
 	var err error
-	if o.policy, err = o.spec(allow, deny, *mediate, allowNet, denyNet, askNet).Validate(); err != nil {
+	spec := o.spec(allow, deny, *mediate, allowNet, denyNet, askNet)
+	spec.AllowExec, spec.DenyExec = programPaths(allowExec), programPaths(denyExec)
+	if spec.Groups, err = groupSpecs(groupFlags); err != nil {
+		return o, fail(err), false
+	}
+	if o.policy, err = spec.Validate(); err != nil {
 		var fe *policy.FieldError
 		if errors.As(err, &fe) {
 			fe.Field = flagNames[fe.Field]
@@ -185,6 +200,52 @@ func (o *options) spec(allow, deny []string, mediate string, allowNet, denyNet, 
 		DenyNetwork:  denyNet,
 		AskNetwork:   askNet,
 	}
+}
+
+// programPaths turns --allow-exec and --deny-exec values, each a
+// comma-separated list, into absolute paths: a name without a slash is
+// looked up in $PATH (kept as is when it is not found, for Validate to
+// refuse), a relative path is relative to the current directory, a
+// @group is kept as is.
+func programPaths(l []string) []string {
+	out := make([]string, 0, len(l))
+	for _, v := range l {
+		for _, p := range strings.Split(v, ",") {
+			if p == "" {
+				continue
+			}
+			if !strings.Contains(p, "/") && !strings.HasPrefix(p, "@") {
+				if lp, err := exec.LookPath(p); err == nil {
+					p = lp
+				}
+			}
+			if strings.Contains(p, "/") {
+				if a, err := filepath.Abs(p); err == nil {
+					p = a
+				}
+			}
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// groupSpecs turns --group values, "@name=program,...", into a policy's
+// groups; the programs as with programPaths. A group given twice gets
+// the programs of both.
+func groupSpecs(l []string) (map[string][]string, error) {
+	if len(l) == 0 {
+		return nil, nil
+	}
+	out := map[string][]string{}
+	for _, v := range l {
+		name, progs, ok := strings.Cut(v, "=")
+		if !ok {
+			return nil, fmt.Errorf("--group: %q: want @name=program,...", v)
+		}
+		out[name] = append(out[name], programPaths([]string{progs})...)
+	}
+	return out, nil
 }
 
 // runMain runs a sandboxed command, or with printPolicy prints the rules
@@ -312,12 +373,40 @@ func (o *options) resolvePaths(home, cfgDir string) error {
 // terminal are known.
 func (o *options) buildPolicy(home string) *defaults.Defaults {
 	c := policy.Context{Home: home, Deny: o.deny}
+	if o.policy.Mediate&seccomp.Exec != 0 {
+		// The command is named on the command line: it is explicit, kept
+		// with --no-implicit. Groups are allowed only when asked for, by
+		// --allow-exec=@name or a "group" answer.
+		c.Execs = lookPrograms(o.workdir, o.args[:1])
+		c.Groups = programs.Finder{Path: os.Getenv("PATH"), Resolve: filepath.EvalSymlinks}.Groups(o.policy.GroupDefs())
+	}
 	if !o.noImplicit {
 		c.Workdir = o.workdir
 		c.Allow = defaults.DefaultAllows()
 		c.OwnListeners = o.policy.Mediate&seccomp.Network != 0
 	}
 	return o.policy.Defaults(c)
+}
+
+// lookPrograms returns the absolute paths of the programs names, as the
+// sandbox finds them: names without a slash in $PATH, relative paths
+// from dir. Programs not found are left out.
+func lookPrograms(dir string, names []string) []string {
+	var out []string
+	for _, n := range names {
+		p := n
+		if !strings.Contains(n, "/") {
+			var err error
+			if p, err = exec.LookPath(n); err != nil {
+				continue
+			}
+		}
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(dir, p)
+		}
+		out = append(out, p)
+	}
+	return out
 }
 
 // printRules prints engine's rules, with placeholders for the $TMPDIR and

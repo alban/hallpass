@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"testing"
@@ -75,7 +76,7 @@ func TestParsePolicy(t *testing.T) {
 
 func TestDefaultsFor(t *testing.T) {
 	p, _ := parsePolicy("agent", policy.Spec{Allow: []string{"/workspace/**"}, Deny: []string{"/workspace/.git/**"}})
-	rs := defaultsFor(p, "/home/agent", seccomp.DefaultCategories).Rules()
+	rs := defaultsFor(p, metadata{Home: "/home/agent"}, seccomp.DefaultCategories, 0).Rules()
 	var allow, deny []string
 	for _, r := range rs {
 		if r.Object.Path == nil {
@@ -99,13 +100,49 @@ func TestDefaultsFor(t *testing.T) {
 
 	p, _ = parsePolicy("net", policy.Spec{Mediate: []string{"files", "network"}, AllowNetwork: []string{"unix:@x"}, DenyNetwork: []string{"tcp:*:22"}, AskNetwork: []string{"unix:@xy"}})
 	var nets []string
-	for _, r := range defaultsFor(p, "", p.Mediate).Rules() {
+	for _, r := range defaultsFor(p, metadata{}, p.Mediate, 0).Rules() {
 		if r.Object.Path == nil {
 			nets = append(nets, r.Verdict.String()+" "+r.Object.NetString())
 		}
 	}
 	if want := []string{"allow own-listeners", "deny tcp:*:22", "allow unix:@x", "ask unix:@xy"}; !slices.Equal(nets, want) {
 		t.Errorf("network rules %q, want %q", nets, want)
+	}
+}
+
+// TestDefaultsForExec: in a container (here, this process's root), its
+// command runs without asking, the groups of allowExec too, nothing else.
+func TestDefaultsForExec(t *testing.T) {
+	ls, err := filepath.EvalSymlinks("/bin/ls")
+	if err != nil {
+		t.Skip(err)
+	}
+	md := metadata{Command: "sh", Path: os.Getenv("PATH")}
+	execs := func(spec policy.Spec) map[string]string {
+		p, err := parsePolicy("exec", spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]string{}
+		for _, r := range defaultsFor(p, md, seccomp.DefaultCategories, os.Getpid()).Rules() {
+			if r.Ops == rules.OpExec && r.Verdict == rules.Allow {
+				out[r.Object.Path.Path] = r.Label
+			}
+		}
+		return out
+	}
+	sh, _ := filepath.EvalSymlinks("/bin/sh")
+	got := execs(policy.Spec{})
+	if _, ok := got[sh]; len(got) != 1 || !ok {
+		t.Errorf("command only: %v, want %s", got, sh)
+	}
+	if got := execs(policy.Spec{AllowExec: []string{"@coreutils"}}); got[ls] != "@coreutils" {
+		t.Errorf("@coreutils: %s not in %v", ls, got)
+	}
+	// A policy's group, resolved in the container too.
+	got = execs(policy.Spec{Groups: map[string][]string{"@mine": {"/bin/ls"}}, AllowExec: []string{"@mine"}})
+	if len(got) != 2 || got[ls] != "@mine" {
+		t.Errorf("@mine: %v, want %s", got, ls)
 	}
 }
 
@@ -178,7 +215,7 @@ func TestAdjust(t *testing.T) {
 	if err := json.Unmarshal([]byte(s.ListenerMetadata), &md); err != nil {
 		t.Fatal(err)
 	}
-	if want := (metadata{Namespace: "agents", Pod: "p", PodUID: "uid", Container: "c", Policy: "agent", Home: "/home/agent", Mediate: "files,exec"}); md != want {
+	if want := (metadata{Namespace: "agents", Pod: "p", PodUID: "uid", Container: "c", Policy: "agent", Home: "/home/agent", Path: "/bin", Mediate: "files,exec"}); md != want {
 		t.Errorf("metadata %+v, want %+v", md, want)
 	}
 	notify := false

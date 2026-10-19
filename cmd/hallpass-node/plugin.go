@@ -30,6 +30,10 @@ type metadata struct {
 	Container string `json:"container"`
 	Policy    string `json:"policy"`
 	Home      string `json:"home,omitempty"`
+	// Command is the program the container starts (its args[0]) and
+	// Path its $PATH, to allow that program to run (exec mediation).
+	Command string `json:"command,omitempty"`
+	Path    string `json:"path,omitempty"`
 	// Mediate is the categories the filter notifies (seccomp.Category
 	// String); "": seccomp.DefaultCategories.
 	Mediate string `json:"mediate,omitempty"`
@@ -98,6 +102,10 @@ func (p *plugin) adjust(pod *api.PodSandbox, ctr *api.Container) (*api.Container
 	if cats == 0 {
 		cats = seccomp.DefaultCategories
 	}
+	var command string
+	if args := ctr.GetArgs(); len(args) > 0 {
+		command = args[0]
+	}
 	md, err := json.Marshal(metadata{
 		Namespace: pod.GetNamespace(),
 		Pod:       pod.GetName(),
@@ -105,6 +113,8 @@ func (p *plugin) adjust(pod *api.PodSandbox, ctr *api.Container) (*api.Container
 		Container: ctr.GetName(),
 		Policy:    name,
 		Home:      envHome(ctr.GetEnv()),
+		Command:   command,
+		Path:      envVar(ctr.GetEnv(), "PATH"),
 		Mediate:   cats.String(),
 	})
 	if err != nil {
@@ -124,9 +134,12 @@ func (p *plugin) adjust(pod *api.PodSandbox, ctr *api.Container) (*api.Container
 }
 
 // envHome returns $HOME from a container's environment.
-func envHome(env []string) string {
+func envHome(env []string) string { return envVar(env, "HOME") }
+
+// envVar returns variable name from a container's environment.
+func envVar(env []string, name string) string {
 	for _, kv := range env {
-		if v, ok := strings.CutPrefix(kv, "HOME="); ok {
+		if v, ok := strings.CutPrefix(kv, name+"="); ok {
 			return v
 		}
 	}

@@ -64,7 +64,7 @@ func TestStartedEvent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	md, _ := json.Marshal(metadata{Policy: "p", Pod: "pod1", Container: "c", Home: t.TempDir()})
+	md, _ := json.Marshal(metadata{Policy: "p", Pod: "pod1", Container: "c", Home: t.TempDir(), Command: "/bin/true"})
 	st := &specs.ContainerProcessState{Pid: proc.Pid, State: specs.State{ID: "c1"}, Metadata: string(md)}
 	if err := a.attach(st, fd); err != nil {
 		t.Fatal(err)
