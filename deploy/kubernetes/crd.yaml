@@ -86,8 +86,18 @@ spec:
                   type: array
                   items:
                     type: string
+                askNetwork:
+                  description: >-
+                    Network destinations asked about even inside a less
+                    specific allowNetwork entry (e.g. 10.0.0.1:22 in an
+                    allowed 10.0.0.0/8); a more specific allowNetwork
+                    entry still allows. Same syntax as allowNetwork.
+                  type: array
+                  items:
+                    type: string
               x-kubernetes-validations:
                 - rule: >-
-                    (!has(self.allowNetwork) && !has(self.denyNetwork)) ||
+                    (!has(self.allowNetwork) && !has(self.denyNetwork) &&
+                    !has(self.askNetwork)) ||
                     (has(self.mediate) && 'network' in self.mediate)
-                  message: allowNetwork and denyNetwork need network in mediate
+                  message: allowNetwork, denyNetwork and askNetwork need network in mediate

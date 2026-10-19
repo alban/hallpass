@@ -175,14 +175,16 @@ func TestNet(t *testing.T) {
 	d := newTest()
 	all, _ := rules.ParseNet("all")
 	ssh, _ := rules.ParseNet("tcp:10.0.0.0/8:22")
+	box, _ := rules.ParseNet("10.0.0.1")
 	d.AllowNet(all)
 	d.DenyNet(ssh)
+	d.AskNet(box)
 	rs := d.Rules()
 	at := time.Now()
 	for _, tc := range []struct {
 		addr string
 		want rules.Verdict
-	}{{"10.1.2.3:22", rules.Deny}, {"10.1.2.3:80", rules.Allow}, {"[::1]:22", rules.Allow}} {
+	}{{"10.1.2.3:22", rules.Deny}, {"10.1.2.3:80", rules.Allow}, {"[::1]:22", rules.Allow}, {"10.0.0.1:80", rules.Ask}, {"10.0.0.1:22", rules.Deny}} {
 		obj := rules.Object{Inet: &rules.InetObject{Proto: 6, Addr: netip.MustParseAddrPort(tc.addr)}}
 		if v, _, ok := rules.Eval(rs, rules.OpConnect, obj, at); !ok || v != tc.want {
 			t.Errorf("%s: %v %v, want %v", tc.addr, v, ok, tc.want)
@@ -192,7 +194,8 @@ func TestNet(t *testing.T) {
 		t.Error("allow-net all allows files")
 	}
 	s := strings.Join(d.Describe(rs), "\n")
-	if !strings.Contains(s, "network: tcp:10.0.0.0/8:22\nAllowed") || !strings.Contains(s, "network: all\n") {
+	if !strings.Contains(s, "network: tcp:10.0.0.0/8:22\nAllowed") || !strings.Contains(s, "network: all\n") ||
+		!strings.Contains(s, "Asked, even inside what is allowed:\n  network: 10.0.0.1\n") {
 		t.Errorf("Describe:\n%s", s)
 	}
 }

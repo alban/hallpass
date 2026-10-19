@@ -191,11 +191,14 @@ func (s *session) menu() {
 		mode = "strict"
 	}
 	_, rs, _ := s.m.Snapshot()
-	deny, allow := s.cfg.Defaults.Summary(rs)
+	deny, allow, ask := s.cfg.Defaults.Summary(rs)
 	w := s.cfg.TTY.Width() - 1
 	lines := []string{fmt.Sprintf(" hallpass, %s mode: the rules of this session", mode)}
 	lines = append(lines, wrapList(" Denied:   ", deny, w)...)
 	lines = append(lines, wrapList(" Writable: ", allow, w)...)
+	if len(ask) > 0 {
+		lines = append(lines, wrapList(" Asked:    ", ask, w)...)
+	}
 	if s.wait.active.Load() {
 		lines = append(lines, " The command exited; its background processes are still supervised.   [s] stop waiting")
 	}

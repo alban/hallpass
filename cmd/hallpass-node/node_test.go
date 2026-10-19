@@ -97,14 +97,14 @@ func TestDefaultsFor(t *testing.T) {
 		t.Errorf("deny: %v", deny)
 	}
 
-	p, _ = parsePolicy("net", policy.Spec{Mediate: []string{"files", "network"}, AllowNetwork: []string{"unix:@x"}, DenyNetwork: []string{"tcp:*:22"}})
+	p, _ = parsePolicy("net", policy.Spec{Mediate: []string{"files", "network"}, AllowNetwork: []string{"unix:@x"}, DenyNetwork: []string{"tcp:*:22"}, AskNetwork: []string{"unix:@xy"}})
 	var nets []string
 	for _, r := range defaultsFor(p, "", p.Mediate).Rules() {
 		if r.Object.Path == nil {
 			nets = append(nets, r.Verdict.String()+" "+r.Object.NetString())
 		}
 	}
-	if want := []string{"allow own-listeners", "deny tcp:*:22", "allow unix:@x"}; !slices.Equal(nets, want) {
+	if want := []string{"allow own-listeners", "deny tcp:*:22", "allow unix:@x", "ask unix:@xy"}; !slices.Equal(nets, want) {
 		t.Errorf("network rules %q, want %q", nets, want)
 	}
 }

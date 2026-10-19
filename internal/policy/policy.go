@@ -40,9 +40,12 @@ type Spec struct {
 	Mediate []string `json:"mediate,omitempty"`
 	// AllowNetwork and DenyNetwork are network destinations
 	// (rules.ParseNet syntax: "all", "tcp:10.0.0.0/8:443",
-	// "unix:@name"...). They need network in Mediate.
+	// "unix:@name"...). They need network in Mediate. AskNetwork are
+	// destinations asked about even when a less specific allow covers
+	// them (10.0.0.1:22 inside an allowed 10.0.0.0/8).
 	AllowNetwork []string `json:"allowNetwork,omitempty"`
 	DenyNetwork  []string `json:"denyNetwork,omitempty"`
+	AskNetwork   []string `json:"askNetwork,omitempty"`
 }
 
 // Policy is a validated Spec.
@@ -52,8 +55,8 @@ type Policy struct {
 	Ask        bool
 	AskTimeout time.Duration // 0: wait forever
 	// Mediate is the mediated syscall categories.
-	Mediate                   seccomp.Category
-	AllowNetwork, DenyNetwork []rules.ObjectMatch
+	Mediate                               seccomp.Category
+	AllowNetwork, DenyNetwork, AskNetwork []rules.ObjectMatch
 }
 
 // FieldError is an invalid field of a Spec, named as in JSON. Sources
@@ -99,7 +102,7 @@ func (s Spec) Validate() (Policy, error) {
 		name string
 		in   []string
 		out  *[]rules.ObjectMatch
-	}{{"allowNetwork", s.AllowNetwork, &p.AllowNetwork}, {"denyNetwork", s.DenyNetwork, &p.DenyNetwork}} {
+	}{{"allowNetwork", s.AllowNetwork, &p.AllowNetwork}, {"denyNetwork", s.DenyNetwork, &p.DenyNetwork}, {"askNetwork", s.AskNetwork, &p.AskNetwork}} {
 		if len(f.in) > 0 && p.Mediate&seccomp.Network == 0 {
 			// A deny that does nothing must not look like it works.
 			return Policy{}, &FieldError{f.name, errors.New("needs network in mediate")}
@@ -171,6 +174,9 @@ func (p Policy) Defaults(c Context) *defaults.Defaults {
 	}
 	for _, m := range p.DenyNetwork {
 		d.DenyNet(m)
+	}
+	for _, m := range p.AskNetwork {
+		d.AskNet(m)
 	}
 	return d
 }

@@ -34,9 +34,9 @@ type Defaults struct {
 	// ownListeners allows connections to listeners started inside the
 	// sandbox.
 	ownListeners bool
-	// netAllow and netDeny are network destinations (--allow-net,
-	// --deny-net).
-	netAllow, netDeny []rules.ObjectMatch
+	// netAllow, netDeny and netAsk are network destinations
+	// (--allow-net, --deny-net, --ask-net).
+	netAllow, netDeny, netAsk []rules.ObjectMatch
 }
 
 // warnLoc is a sensitive location: a write under path is still asked about,
@@ -108,6 +108,10 @@ func (d *Defaults) AllowNet(m rules.ObjectMatch) { d.netAllow = append(d.netAllo
 
 // DenyNet denies connections and sends to m, a network match.
 func (d *Defaults) DenyNet(m rules.ObjectMatch) { d.netDeny = append(d.netDeny, m) }
+
+// AskNet asks about connections and sends to m, a network match, even
+// when a less specific allow covers them.
+func (d *Defaults) AskNet(m rules.ObjectMatch) { d.netAsk = append(d.netAsk, m) }
 
 // sensitiveLabels maps a location under home to a human name for its secrets.
 // Writes there are asked about like anywhere else, but the prompt is flagged
@@ -208,13 +212,17 @@ func (d *Defaults) Rules() []rules.Rule {
 	for _, m := range d.netAllow {
 		rs = append(rs, rules.Rule{Ops: rules.OpNet, Object: m, Verdict: rules.Allow, Set: Set})
 	}
+	for _, m := range d.netAsk {
+		rs = append(rs, rules.Rule{Ops: rules.OpNet, Object: m, Verdict: rules.Ask, Set: Set})
+	}
 	return rs
 }
 
 // Describe returns rs, one per line, for people: denials first (they
-// win), then what is writable without asking. Everything else is asked.
+// win), then what is writable without asking, and the exceptions asked
+// about. Everything else is asked.
 func (d *Defaults) Describe(rs []rules.Rule) []string {
-	deny, allow := d.Summary(rs)
+	deny, allow, ask := d.Summary(rs)
 	out := []string{"Denied (wins over allowed):"}
 	for _, s := range deny {
 		out = append(out, "  "+s)
@@ -222,6 +230,12 @@ func (d *Defaults) Describe(rs []rules.Rule) []string {
 	out = append(out, "Allowed without asking:")
 	for _, s := range allow {
 		out = append(out, "  "+s)
+	}
+	if len(ask) > 0 {
+		out = append(out, "Asked, even inside what is allowed:")
+		for _, s := range ask {
+			out = append(out, "  "+s)
+		}
 	}
 	if len(d.warn) > 0 {
 		out = append(out, "Asked, and flagged as a secret store:")
@@ -240,9 +254,9 @@ func (d *Defaults) Short(p string) string {
 	return p
 }
 
-// Summary returns the denied and the allowed items of rs, described for
-// people.
-func (d *Defaults) Summary(rs []rules.Rule) (deny, allow []string) {
+// Summary returns the denied, the allowed and the asked items of rs,
+// described for people.
+func (d *Defaults) Summary(rs []rules.Rule) (deny, allow, ask []string) {
 	for _, r := range rs {
 		var s string
 		switch o := r.Object; {
@@ -279,9 +293,11 @@ func (d *Defaults) Summary(rs []rules.Rule) (deny, allow []string) {
 			deny = append(deny, s)
 		case rules.Allow:
 			allow = append(allow, s)
+		case rules.Ask:
+			ask = append(ask, s)
 		}
 	}
-	return deny, allow
+	return deny, allow, ask
 }
 
 // FolderFor returns the folder offered by "Allow folder" for path, or "" when

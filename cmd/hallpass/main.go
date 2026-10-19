@@ -93,6 +93,7 @@ var flagNames = map[string]string{
 	"mediate":      "--mediate",
 	"allowNetwork": "--allow-net",
 	"denyNetwork":  "--deny-net",
+	"askNetwork":   "--ask-net",
 }
 
 // parseFlags parses and checks argv. When it returns ok == false, the run
@@ -118,9 +119,10 @@ func parseFlags(argv []string, printPolicy bool) (o options, code int, ok bool) 
 	fs.StringVar(&o.escalate, "escalate", "", "strict mode, when not root: how to run the loader as root: "+strings.Join(privsep.Tools, " | ")+" (default: the saved choice, else ask on a terminal, else auto)")
 	fs.StringVar(&o.wait, "wait", "main", "exit when the main process exits (main), or keep supervising its background processes until they all exit (all)")
 	mediate := fs.String("mediate", seccomp.DefaultCategories.String(), "comma-separated `categories` of syscalls to mediate: files, exec, network (network is experimental)")
-	var allowNet, denyNet listFlag
+	var allowNet, denyNet, askNet listFlag
 	fs.Var(&allowNet, "allow-net", "network `destination` allowed without asking (repeatable; needs --mediate with network): all, [tcp:|udp:]ADDR[/N][:PORT[-PORT]] (ADDR * for any, IPv6 in brackets), unix:/path, unix:/dir/**, unix:@name, unix:@prefix*")
 	fs.Var(&denyNet, "deny-net", "network `destination` always denied (repeatable, same syntax, wins over --allow-net)")
+	fs.Var(&askNet, "ask-net", "network `destination` asked about even inside a less specific --allow-net (repeatable, same syntax; a more specific --allow-net still allows)")
 	if err := fs.Parse(argv); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return o, 0, false
@@ -128,7 +130,7 @@ func parseFlags(argv []string, printPolicy bool) (o options, code int, ok bool) 
 		return o, 2, false
 	}
 	var err error
-	if o.policy, err = o.spec(allow, deny, *mediate, allowNet, denyNet).Validate(); err != nil {
+	if o.policy, err = o.spec(allow, deny, *mediate, allowNet, denyNet, askNet).Validate(); err != nil {
 		var fe *policy.FieldError
 		if errors.As(err, &fe) {
 			fe.Field = flagNames[fe.Field]
@@ -161,7 +163,7 @@ func parseFlags(argv []string, printPolicy bool) (o options, code int, ok bool) 
 
 // spec is the policy.Spec of the flags. Relative --allow and --deny paths
 // are relative to the current directory.
-func (o *options) spec(allow, deny []string, mediate string, allowNet, denyNet []string) policy.Spec {
+func (o *options) spec(allow, deny []string, mediate string, allowNet, denyNet, askNet []string) policy.Spec {
 	abs := func(l []string) []string {
 		out := make([]string, 0, len(l))
 		for _, p := range l {
@@ -181,6 +183,7 @@ func (o *options) spec(allow, deny []string, mediate string, allowNet, denyNet [
 		Mediate:      strings.Split(mediate, ","),
 		AllowNetwork: allowNet,
 		DenyNetwork:  denyNet,
+		AskNetwork:   askNet,
 	}
 }
 

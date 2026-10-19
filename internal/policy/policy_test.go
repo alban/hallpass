@@ -61,6 +61,8 @@ func TestValidate(t *testing.T) {
 		{Spec{Mediate: []string{""}}, "mediate"},
 		{Spec{AllowNetwork: []string{"all"}}, "allowNetwork"},
 		{Spec{Mediate: []string{"network"}, DenyNetwork: []string{"tcp:nowhere"}}, "denyNetwork"},
+		{Spec{AskNetwork: []string{"tcp:*:22"}}, "askNetwork"},
+		{Spec{Mediate: []string{"network"}, AskNetwork: []string{"tcp:nowhere"}}, "askNetwork"},
 	} {
 		_, err := tc.spec.Validate()
 		var fe *FieldError
@@ -77,6 +79,7 @@ func TestDefaults(t *testing.T) {
 		Mediate:      []string{"files", "network"},
 		AllowNetwork: []string{"unix:@x"},
 		DenyNetwork:  []string{"tcp:*:22"},
+		AskNetwork:   []string{"tcp:10.0.0.1"},
 	}.Validate()
 	if err != nil {
 		t.Fatal(err)
@@ -102,7 +105,7 @@ func TestDefaults(t *testing.T) {
 			nets = append(nets, r.Verdict.String()+" "+r.Object.NetString())
 		}
 	}
-	if want := []string{"allow own-listeners", "deny tcp:*:22", "allow unix:@x"}; !reflect.DeepEqual(nets, want) {
+	if want := []string{"allow own-listeners", "deny tcp:*:22", "allow unix:@x", "ask tcp:10.0.0.1"}; !reflect.DeepEqual(nets, want) {
 		t.Errorf("network rules %q, want %q", nets, want)
 	}
 }
