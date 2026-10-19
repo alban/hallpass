@@ -90,6 +90,9 @@ type Request struct {
 	Objects []rules.Object // one for now: rename and link make one request per object
 	Subject rules.Subject
 	Facts   []Fact
+	// Advance is set for a request the workload made in advance (see
+	// AdvanceDir): only a verdict closes it, rules do not.
+	Advance *Advance
 }
 
 // Closed reports the end of a request.
@@ -142,6 +145,9 @@ type Decision struct {
 	RemoveSets   []string
 	IfGeneration uint64
 	Client       string // reported in Reason.Client
+	// TimedOut: the verdicts deny requests nobody answered in time. An
+	// advance request then fails with ETIMEDOUT rather than EPERM.
+	TimedOut bool
 }
 
 // Verdict allows or denies one request, once. In strict mode, an allow is
@@ -408,6 +414,7 @@ func (m *Monitor) Apply(d Decision) (uint64, error) {
 	for _, v := range d.Verdicts {
 		// Its task may have died while the kernel was synced.
 		if r := m.pending[v.Request]; r != nil {
+			r.timedOut = d.TimedOut && !v.Allow
 			m.closeLocked(r, v.Allow, Reason{Client: d.Client})
 		}
 	}

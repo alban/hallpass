@@ -45,6 +45,8 @@ type Target struct {
 }
 
 // ReadCString reads a NUL-terminated string from the target's memory at addr.
+// A string not terminated within PATH_MAX bytes fails with an error wrapping
+// unix.ENAMETOOLONG, and the bytes read are returned with it.
 func ReadCString(pid uint32, addr uint64) (string, error) {
 	f, err := os.Open(fmt.Sprintf("/proc/%d/mem", pid))
 	if err != nil {
@@ -60,7 +62,7 @@ func ReadCString(pid uint32, addr uint64) (string, error) {
 	if i := strings.IndexByte(string(buf[:n]), 0); i >= 0 {
 		return string(buf[:i]), nil
 	}
-	return "", fmt.Errorf("path not NUL-terminated within %d bytes", pathMax)
+	return string(buf[:n]), fmt.Errorf("path not NUL-terminated within %d bytes: %w", pathMax, unix.ENAMETOOLONG)
 }
 
 // openHowSize is the size of struct open_how in its first version: flags,

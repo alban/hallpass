@@ -6,6 +6,7 @@ package monitor
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/alban/hallpass/internal/lsm"
@@ -29,10 +30,14 @@ type request struct {
 	key     string
 	op      rules.Op
 	obj     rules.Object
+	advance bool // Request.Advance: only a verdict closes it
 	waiters []waiter
 	done    chan struct{}
 	allow   bool
-	why     Reason
+	// timedOut: denied by a verdict because nobody answered in time
+	// (Decision.TimedOut).
+	timedOut bool
+	why      Reason
 }
 
 type waiter struct {
@@ -157,8 +162,7 @@ func (m *Monitor) handle(l *listener, n seccomp.Notif) (ask func()) {
 	}
 	op := opOf(sc, flags)
 	if sc.Op == "exec" {
-		m.exec(l, n, sc)
-		return
+		return m.exec(l, n, sc)
 	}
 	if m.kernel != nil {
 		// Paths of a process in another mount namespace or chroot than
@@ -333,10 +337,8 @@ func (m *Monitor) open(l *listener, n seccomp.Notif, syscall string, op rules.Op
 		r.waiters = append(r.waiters, waiter{l, n.ID})
 		return r, Reason{}, false
 	}
-	m.nextReqID++
 	r = &request{
 		pub: &Request{
-			ID:      m.nextReqID,
 			Syscall: syscall,
 			Op:      op,
 			Objects: []rules.Object{obj},
@@ -348,14 +350,21 @@ func (m *Monitor) open(l *listener, n seccomp.Notif, syscall string, op rules.Op
 		waiters: []waiter{{l, n.ID}},
 		done:    make(chan struct{}),
 	}
+	m.addLocked(r)
+	return r, Reason{}, false
+}
+
+// addLocked makes r pending, with a new ID. mu must be held.
+func (m *Monitor) addLocked(r *request) {
+	m.nextReqID++
+	r.pub.ID = m.nextReqID
 	m.pending[r.pub.ID] = r
-	m.byKey[key] = r
+	m.byKey[r.key] = r
 	m.emitLocked(Event{Opened: r.pub})
 	if !m.polling {
 		m.polling = true
 		go m.poll()
 	}
-	return r, Reason{}, false
 }
 
 // closeLocked closes r. mu must be held.
@@ -372,6 +381,9 @@ func (m *Monitor) closeLocked(r *request, allow bool, why Reason) {
 func (m *Monitor) settleLocked() {
 	now := m.now()
 	for _, r := range m.pending {
+		if r.advance {
+			continue
+		}
 		if v, id, ok := rules.Eval(m.rules, r.op, r.obj, now); ok && v != rules.Ask {
 			m.closeLocked(r, v == rules.Allow, Reason{Rule: id})
 		}
@@ -462,32 +474,35 @@ func (m *Monitor) toBPF(l *listener, n seccomp.Notif, sc seccomp.Rule, op rules.
 
 // report emits a Decided event, if a subscriber wants them.
 // exec continues an execve or execveat: what to check on exec is not
-// designed yet. Its path is read for Decided events only, best effort.
+// designed yet. Its path is read for Decided events, best effort, and for
+// advance requests (AdvanceDir), which are answered and never continued:
+// it returns ask for those waiting for a verdict.
 //
 // In strict mode, the calling thread is first made a member of the
 // session: it may be one the sandbox started before it was marked (the
 // container runtime's init), or a thread that is not the one marked, whose
 // execve would otherwise leave the sandbox. It stays blocked meanwhile, so
 // the new program never runs unmarked.
-func (m *Monitor) exec(l *listener, n seccomp.Notif, sc seccomp.Rule) {
+func (m *Monitor) exec(l *listener, n seccomp.Notif, sc seccomp.Rule) (ask func()) {
+	raw, rerr := procfs.ReadCString(n.PID, n.Args[sc.Paths[0].Path])
+	if strings.HasPrefix(raw, AdvanceDir) {
+		return m.advance(l, n, sc, raw, rerr)
+	}
 	if m.kernel != nil {
 		if err := m.kernel.AddMember(int(n.PID)); err != nil {
 			if l.n.IDValid(n.ID) {
 				m.warn(fmt.Sprintf("strict mode: %s: %v", sc.Name, err))
 			}
 			_ = l.n.Deny(n.ID, int32(unix.EPERM))
-			return
+			return nil
 		}
 	}
 	m.mu.Lock()
 	want := m.decided > 0
 	m.mu.Unlock()
 	var objs []rules.Object
-	if want {
-		pa := sc.Paths[0]
-		if raw, err := procfs.ReadCString(n.PID, n.Args[pa.Path]); err == nil {
-			objs = []rules.Object{{Path: &rules.PathObject{Path: raw}}}
-		}
+	if want && rerr == nil {
+		objs = []rules.Object{{Path: &rules.PathObject{Path: raw}}}
 	}
 	if err := l.n.Continue(n.ID); err != nil && !errors.Is(err, unix.ENOENT) {
 		m.warn(fmt.Sprintf("continue %s: %v", sc.Name, err))
@@ -495,6 +510,7 @@ func (m *Monitor) exec(l *listener, n seccomp.Notif, sc seccomp.Rule) {
 	if want {
 		m.report(n, sc.Name, 0, objs, true, []Reason{{Builtin: "execve"}})
 	}
+	return nil
 }
 
 func (m *Monitor) report(n seccomp.Notif, syscall string, op rules.Op, objs []rules.Object, allowed bool, why []Reason) {
