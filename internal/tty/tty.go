@@ -288,7 +288,8 @@ func (t *Term) rowUnknown(y int) bool {
 }
 
 // makeRoom scrolls the screen up, in the user's terminal and the emulator
-// alike, when the overlay would cover unknown rows, so that the program's
+// alike, when the overlay would cover unknown rows, or the program's cursor
+// line while unknown rows are on screen, so that the program's
 // cursor line ends right above the overlay: the overlay never erases what
 // hallpass could not repaint. The scrolled lines go to the terminal's
 // scrollback, and the program's text stays that much higher afterwards.
@@ -298,14 +299,16 @@ func (t *Term) makeRoom() {
 		return
 	}
 	top := t.overlayTop()
+	cy := t.emu.CursorPosition().Y
+	// paint shifts the rows above the overlay when the cursor line is
+	// under it, which unknown rows cannot follow: scroll for real then too.
 	covered := false
-	for y := top; y < t.rows; y++ {
-		covered = covered || t.rowUnknown(y)
+	for y := range t.rows {
+		covered = covered || (y >= top || cy >= top) && t.rowUnknown(y)
 	}
 	if !covered {
 		return
 	}
-	cy := t.emu.CursorPosition().Y
 	n := min(cy-top+1, cy)
 	for y := cy + 1; y < t.rows; y++ {
 		if t.rowUnknown(y) {
