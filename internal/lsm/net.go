@@ -185,6 +185,10 @@ func inetTrie(session uint32, rules []InetRule, expiry func(time.Time) uint64) (
 			} else if bits <= 96 && r.Prefix.Masked().Contains(mapped.Addr()) {
 				shadow = true
 			}
+			if !a.Is4() && bits >= 96 && mapped.Contains(a) {
+				// Addresses are unmapped: no IPv6 address is in there.
+				continue
+			}
 			p := netip.PrefixFrom(netip.AddrFrom16(a.As16()), bits)
 			k.Prefixlen += uint32(bits)
 			k.Addr = p.Addr().As16()

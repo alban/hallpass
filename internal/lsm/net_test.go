@@ -437,6 +437,9 @@ func TestInetTrieV6(t *testing.T) {
 		{PortLo: 53, PortHi: 53},
 		{Prefix: netip.MustParsePrefix("::/0"), Deny: true},
 		{Prefix: netip.MustParsePrefix("10.0.0.0/8")},
+		// IPv6, as IPv4-mapped addresses: they match nothing.
+		{Prefix: netip.PrefixFrom(netip.MustParseAddr("::ffff:0:0"), 96), Deny: true},
+		{Prefix: netip.PrefixFrom(netip.MustParseAddr("::ffff:10.0.0.0"), 104), Deny: true},
 	}, exp)
 	if err != nil {
 		t.Fatal(err)
