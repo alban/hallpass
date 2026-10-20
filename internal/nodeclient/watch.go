@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -21,6 +22,8 @@ type Session struct {
 	Info    *pb.SessionInfo
 	Pending []*pb.Request // by id
 	Rules   []*pb.Rule
+	// Generation is the rules' generation, for Decision.IfGeneration.
+	Generation uint64
 }
 
 // State is every session of a node agent, by id.
@@ -83,6 +86,7 @@ type watched struct {
 	info    *pb.SessionInfo
 	pending map[uint64]*pb.Request
 	rules   []*pb.Rule
+	gen     uint64
 	cancel  context.CancelFunc
 }
 
@@ -154,6 +158,7 @@ func (w *watcher) follow(ctx context.Context, id string, s *watched) {
 				s.pending[r.Id] = r
 			}
 			s.rules = snap.Rules
+			s.gen = snap.Generation
 		}
 		for _, e := range b.Events {
 			switch k := e.Kind.(type) {
@@ -170,6 +175,7 @@ func (w *watcher) follow(ctx context.Context, id string, s *watched) {
 			if snap, err := w.c.Snapshot(ctx, &pb.SnapshotRequest{}); err == nil {
 				w.mu.Lock()
 				s.rules = snap.Rules
+				s.gen = snap.Generation
 				w.mu.Unlock()
 			}
 		}
@@ -182,7 +188,7 @@ func (w *watcher) state() State {
 	defer w.mu.Unlock()
 	var st State
 	for _, s := range w.sessions {
-		out := Session{Info: s.info, Rules: s.rules}
+		out := Session{Info: s.info, Rules: s.rules, Generation: s.gen}
 		for _, r := range s.pending {
 			out.Pending = append(out.Pending, r)
 		}
@@ -200,12 +206,14 @@ func (st State) MarshalJSON() ([]byte, error) {
 		Info    json.RawMessage   `json:"info"`
 		Pending []json.RawMessage `json:"pending"`
 		Rules   []json.RawMessage `json:"rules"`
+		// As protojson writes 64-bit integers.
+		Generation string `json:"generation"`
 	}
 	out := struct {
 		Sessions []session `json:"sessions"`
 	}{Sessions: []session{}}
 	for _, s := range st.Sessions {
-		js := session{Pending: []json.RawMessage{}, Rules: []json.RawMessage{}}
+		js := session{Pending: []json.RawMessage{}, Rules: []json.RawMessage{}, Generation: strconv.FormatUint(s.Generation, 10)}
 		var err error
 		if js.Info, err = marshal(s.Info); err != nil {
 			return nil, err

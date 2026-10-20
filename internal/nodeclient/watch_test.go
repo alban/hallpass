@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -37,7 +38,7 @@ func (h *fakeNode) List(context.Context, *pb.ListRequest) (*pb.ListReply, error)
 func (h *fakeNode) Snapshot(context.Context, *pb.SnapshotRequest) (*pb.SnapshotReply, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return &pb.SnapshotReply{Rules: h.rules}, nil
+	return &pb.SnapshotReply{Rules: h.rules, Generation: 2}, nil
 }
 
 func (h *fakeNode) Events(_ *pb.EventsRequest, stream grpc.ServerStreamingServer[pb.EventBatch]) error {
@@ -134,15 +135,18 @@ func TestWatch(t *testing.T) {
 	})
 
 	h.mu.Lock()
-	h.rules = []*pb.Rule{{Id: 7, Label: "r"}}
+	h.rules = []*pb.Rule{{Id: 7, Label: "r", Spec: "allow path /w/**"}}
 	h.mu.Unlock()
 	h.events["b"] <- &pb.Event{Kind: &pb.Event_Rules{Rules: 2}}
 	st := wait("the rules", func(map[string][]string) bool { return true })
 	for len(st.Sessions) < 2 || len(st.Sessions[1].Rules) == 0 {
 		st = wait("the rules", func(map[string][]string) bool { return true })
 	}
-	if st.Sessions[1].Rules[0].Id != 7 {
-		t.Errorf("rules of b: %v", st.Sessions[1].Rules)
+	if st.Sessions[1].Rules[0].Id != 7 || st.Sessions[1].Generation != 2 {
+		t.Errorf("rules of b: %v generation %d", st.Sessions[1].Rules, st.Sessions[1].Generation)
+	}
+	if b, _ := json.Marshal(st); !strings.Contains(string(b), `"generation":"2"`) || !strings.Contains(string(b), `"spec":"allow path /w/**"`) {
+		t.Errorf("JSON without the generation or the rule's spec: %s", b)
 	}
 
 	h.mu.Lock()
