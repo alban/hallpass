@@ -116,7 +116,7 @@ func runSession(cfg sessionConfig) (int, error) {
 	}
 	defer srv.Close()
 	// The socket directory exists now: the kernel's rules need it.
-	protected := protectedRules(cfg.Mediate, sessionapi.SocketDir(), nil)
+	protected := protectedRules(cfg.Defaults, cfg.Mediate, sessionapi.SocketDir(), nil)
 	if _, err := m.Apply(monitor.Decision{AddRules: protected, Client: "hallpass"}); err != nil {
 		return 0, err
 	}

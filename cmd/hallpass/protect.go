@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/alban/hallpass/internal/defaults"
 	"github.com/alban/hallpass/internal/monitor"
 	"github.com/alban/hallpass/internal/rules"
 	"github.com/alban/hallpass/internal/seccomp"
@@ -16,14 +17,17 @@ import (
 const (
 	labelSockets = "hallpass sessions"
 	labelWeb     = "hallpass web UI"
+	labelConfig  = "hallpass config"
+	labelBinary  = "hallpass binary"
 )
 
 // protectedRules returns the denials that no answer or rule lifts
 // (monitor.ProtectedSet): the sandbox must not reach the clients that
-// answer for it. With files mediated, no write to sockDir (the session
-// sockets, the registered web ports); with the network, no connection to
-// the session sockets nor to the web UI's ports.
-func protectedRules(mediate seccomp.Category, sockDir string, ports []uint16) []rules.Rule {
+// answer for it, nor change what hallpass runs next time. With files
+// mediated, no write to sockDir (the session sockets, the registered web
+// ports) nor to d's protected paths (its config and binary); with the
+// network, no connection to the session sockets nor to the web UI's ports.
+func protectedRules(d *defaults.Defaults, mediate seccomp.Category, sockDir string, ports []uint16) []rules.Rule {
 	var rs []rules.Rule
 	if mediate&seccomp.Files != 0 {
 		rs = append(rs, rules.Rule{
@@ -33,6 +37,7 @@ func protectedRules(mediate seccomp.Category, sockDir string, ports []uint16) []
 			Label:   labelSockets,
 			Set:     monitor.ProtectedSet,
 		})
+		rs = append(rs, d.ProtectedRules(monitor.ProtectedSet)...)
 	}
 	if mediate&seccomp.Network == 0 {
 		return rs

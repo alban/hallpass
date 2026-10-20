@@ -138,10 +138,14 @@ type options struct {
 	// policy is the policy the flags give (--allow-path, --deny-path,
 	// --mediate, --allow-net...).
 	policy policy.Policy
-	// deny is denied on top of policy: hallpass's own config and binary.
-	deny []string
-	args []string // command to run
+	// protect is denied for good on top of policy, in the monitor's
+	// protected set: hallpass's own config and binary.
+	protect []protectedPath
+	args    []string // command to run
 }
+
+// protectedPath is a tree no client can lift the denial of.
+type protectedPath struct{ path, label string }
 
 // flagNames are the flags filling the fields of a policy.Spec.
 var flagNames = map[string]string{
@@ -414,7 +418,7 @@ func (o *options) resolvePaths(home, cfgDir string) error {
 	}
 
 	// The sandbox must not change what hallpass runs next time, outside it.
-	o.deny = append(o.deny, cfgDir)
+	o.protect = append(o.protect, protectedPath{cfgDir, labelConfig})
 	// Nor overwrite the hallpass binary itself: a later strict run would
 	// execute the tampered copy as root, and any run would execute
 	// unsandboxing code. Deny it like the config, even when it sits inside
@@ -423,7 +427,7 @@ func (o *options) resolvePaths(home, cfgDir string) error {
 		if resolved, err := filepath.EvalSymlinks(exe); err == nil {
 			exe = resolved
 		}
-		o.deny = append(o.deny, exe)
+		o.protect = append(o.protect, protectedPath{exe, labelBinary})
 	}
 	return nil
 }
@@ -431,7 +435,7 @@ func (o *options) resolvePaths(home, cfgDir string) error {
 // buildPolicy returns the rules of o, before the session's own $TMPDIR and
 // terminal are known.
 func (o *options) buildPolicy(home string) *defaults.Defaults {
-	c := policy.Context{Home: home, Deny: o.deny}
+	c := policy.Context{Home: home}
 	if o.policy.Mediate&seccomp.Exec != 0 {
 		// The command is named on the command line: it is explicit, kept
 		// with --no-implicit. Groups are allowed by --allow-exec=@name, a
@@ -447,7 +451,11 @@ func (o *options) buildPolicy(home string) *defaults.Defaults {
 			c.AllowGroups = programs.Implicit()
 		}
 	}
-	return o.policy.Defaults(c)
+	d := o.policy.Defaults(c)
+	for _, p := range o.protect {
+		d.Protect(p.path, p.label)
+	}
+	return d
 }
 
 // lookPrograms returns the absolute paths of the programs names, as the
@@ -483,7 +491,7 @@ func (o *options) printRules(engine *defaults.Defaults) {
 		}
 	}
 	// What a session would add when it starts.
-	rs := append(engine.Rules(), protectedRules(o.policy.Mediate, sessionapi.SocketDir(), sessionapi.ProtectedPorts())...)
+	rs := append(engine.Rules(), protectedRules(engine, o.policy.Mediate, sessionapi.SocketDir(), sessionapi.ProtectedPorts())...)
 	for _, l := range engine.Describe(rs) {
 		fmt.Println(l)
 	}

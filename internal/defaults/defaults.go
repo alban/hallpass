@@ -33,6 +33,8 @@ type Defaults struct {
 	allow   []string
 	deny    []string
 	warn    []warnLoc
+	// protect are denied for good (Protect): no client can lift them.
+	protect []warnLoc
 	// ask are trees asked about even inside an allowed one (--ask-path).
 	ask []string
 	// ownListeners allows connections to listeners started inside the
@@ -106,6 +108,31 @@ func (d *Defaults) AllowDevice(path string) {
 	if path != "" {
 		d.allow = append(d.allow, d.canon(path))
 	}
+}
+
+// Protect denies the tree under path, absolute, for good: hallpass's own
+// config and binary. It is not in Rules, which clients may edit, but in
+// ProtectedRules, labelled with label.
+func (d *Defaults) Protect(path, label string) {
+	if path != "" {
+		d.protect = append(d.protect, warnLoc{path: d.canon(path), label: label})
+	}
+}
+
+// ProtectedRules returns the denials of Protect, in set (the monitor's
+// protected set).
+func (d *Defaults) ProtectedRules(set string) []rules.Rule {
+	var rs []rules.Rule
+	for _, p := range d.protect {
+		rs = append(rs, rules.Rule{
+			Ops:     rules.OpAll,
+			Object:  rules.ObjectMatch{Path: &rules.PathMatch{Path: p.path, Tree: true}},
+			Verdict: rules.Deny,
+			Label:   p.label,
+			Set:     set,
+		})
+	}
+	return rs
 }
 
 // AllowOwnListeners allows connections and sends to the loopback or unix
@@ -501,6 +528,11 @@ func (d *Defaults) FolderFor(path string) string {
 	for _, p := range d.deny {
 		if rules.Under(p, folder) {
 			// Offering it would look like it covers the secret.
+			return ""
+		}
+	}
+	for _, p := range d.protect {
+		if rules.Under(p.path, folder) {
 			return ""
 		}
 	}

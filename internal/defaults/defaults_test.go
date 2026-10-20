@@ -158,6 +158,24 @@ func TestFolderFor(t *testing.T) {
 	}
 }
 
+func TestProtect(t *testing.T) {
+	d := newTest()
+	d.Protect("/home/u/.config/hallpass", "hallpass config")
+	d.Protect("/opt/tool/hallpass", "hallpass binary")
+	for _, r := range d.Rules() {
+		if p := r.Object.Path; p != nil && strings.Contains(p.Path, "hallpass") && r.Verdict == rules.Deny {
+			t.Errorf("Rules has the protected %v", r)
+		}
+	}
+	rs := d.ProtectedRules("protected")
+	if len(rs) != 2 || rs[0].Set != "protected" || rs[0].Label != "hallpass config" || eval(rs, "/home/u/.config/hallpass/config") != "deny" {
+		t.Errorf("ProtectedRules = %v", rs)
+	}
+	if got := d.FolderFor("/opt/tool/lib/f"); got != "" {
+		t.Errorf("FolderFor offers %q, holding the binary", got)
+	}
+}
+
 func TestDescribe(t *testing.T) {
 	d := newTest()
 	rs := append(d.Rules(),
