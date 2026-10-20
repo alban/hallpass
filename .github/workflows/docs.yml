@@ -7,6 +7,7 @@ on:
       - docs/**
       - "!docs/devel/**"
       - demos/media/**
+      - website/**
       - mkdocs.yml
       - .github/workflows/docs.yml
       - .github/scripts/check-site-media.py
@@ -15,6 +16,7 @@ on:
       - docs/**
       - "!docs/devel/**"
       - demos/media/**
+      - website/**
       - mkdocs.yml
       - .github/workflows/docs.yml
       - .github/scripts/check-site-media.py
