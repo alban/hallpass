@@ -2176,14 +2176,17 @@ func (x *ApplyReply) GetGeneration() uint64 {
 }
 
 type Rule struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            uint64                 `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
-	Ops           uint32                 `protobuf:"varint,2,opt,name=ops,proto3" json:"ops,omitempty"`
-	Object        *ObjectMatch           `protobuf:"bytes,3,opt,name=object,proto3" json:"object,omitempty"`
-	Verdict       RuleVerdict            `protobuf:"varint,4,opt,name=verdict,proto3,enum=hallpass.session.v1.RuleVerdict" json:"verdict,omitempty"`
-	Label         string                 `protobuf:"bytes,5,opt,name=label,proto3" json:"label,omitempty"`
-	Expires       *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=expires,proto3" json:"expires,omitempty"` // unset: until removed
-	Set           string                 `protobuf:"bytes,7,opt,name=set,proto3" json:"set,omitempty"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Id      uint64                 `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
+	Ops     uint32                 `protobuf:"varint,2,opt,name=ops,proto3" json:"ops,omitempty"`
+	Object  *ObjectMatch           `protobuf:"bytes,3,opt,name=object,proto3" json:"object,omitempty"`
+	Verdict RuleVerdict            `protobuf:"varint,4,opt,name=verdict,proto3,enum=hallpass.session.v1.RuleVerdict" json:"verdict,omitempty"`
+	Label   string                 `protobuf:"bytes,5,opt,name=label,proto3" json:"label,omitempty"`
+	Expires *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=expires,proto3" json:"expires,omitempty"` // unset: until removed
+	Set     string                 `protobuf:"bytes,7,opt,name=set,proto3" json:"set,omitempty"`
+	// The rule in the text syntax of hallpass answer add (e.g. "allow path
+	// /src/**"), without its expiry; set by the server, ignored in requests.
+	Spec          string `protobuf:"bytes,8,opt,name=spec,proto3" json:"spec,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2263,6 +2266,13 @@ func (x *Rule) GetExpires() *timestamppb.Timestamp {
 func (x *Rule) GetSet() string {
 	if x != nil {
 		return x.Set
+	}
+	return ""
+}
+
+func (x *Rule) GetSpec() string {
+	if x != nil {
+		return x.Spec
 	}
 	return ""
 }
@@ -2926,7 +2936,7 @@ const file_session_proto_rawDesc = "" +
 	"ApplyReply\x12\x1e\n" +
 	"\n" +
 	"generation\x18\x01 \x01(\x04R\n" +
-	"generation\"\xfc\x01\n" +
+	"generation\"\x90\x02\n" +
 	"\x04Rule\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x04R\x02id\x12\x10\n" +
 	"\x03ops\x18\x02 \x01(\rR\x03ops\x128\n" +
@@ -2934,7 +2944,8 @@ const file_session_proto_rawDesc = "" +
 	"\averdict\x18\x04 \x01(\x0e2 .hallpass.session.v1.RuleVerdictR\averdict\x12\x14\n" +
 	"\x05label\x18\x05 \x01(\tR\x05label\x124\n" +
 	"\aexpires\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\aexpires\x12\x10\n" +
-	"\x03set\x18\a \x01(\tR\x03set\"\xc9\x02\n" +
+	"\x03set\x18\a \x01(\tR\x03set\x12\x12\n" +
+	"\x04spec\x18\b \x01(\tR\x04spec\"\xc9\x02\n" +
 	"\vObjectMatch\x124\n" +
 	"\x04path\x18\x01 \x01(\v2\x1e.hallpass.session.v1.PathMatchH\x00R\x04path\x124\n" +
 	"\x04proc\x18\x02 \x01(\v2\x1e.hallpass.session.v1.ProcMatchH\x00R\x04proc\x12\x1a\n" +

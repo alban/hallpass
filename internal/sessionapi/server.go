@@ -24,6 +24,7 @@ import (
 	pb "github.com/alban/hallpass/api/session/v1"
 	"github.com/alban/hallpass/internal/answer"
 	"github.com/alban/hallpass/internal/monitor"
+	"github.com/alban/hallpass/internal/rulepb"
 	"github.com/alban/hallpass/internal/rules"
 )
 
@@ -170,7 +171,7 @@ func (e entry) snapshot() *pb.SnapshotReply {
 		out.Pending = append(out.Pending, toPBRequest(r, e.sess.Prompt(r)))
 	}
 	for _, r := range rs {
-		out.Rules = append(out.Rules, toPBRule(r))
+		out.Rules = append(out.Rules, rulepb.To(r))
 	}
 	return out
 }
@@ -215,7 +216,7 @@ func (s *service) Events(req *pb.EventsRequest, stream grpc.ServerStreamingServe
 			case ev.Released != nil:
 				r := &pb.Released{Subject: toPBSubject(ev.Released.Subject)}
 				for _, rule := range ev.Released.Rules {
-					r.Rules = append(r.Rules, toPBRule(rule))
+					r.Rules = append(r.Rules, rulepb.To(rule))
 				}
 				pe.Kind = &pb.Event_Released{Released: r}
 			default:

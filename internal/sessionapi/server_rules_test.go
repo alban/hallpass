@@ -14,6 +14,7 @@ import (
 	pb "github.com/alban/hallpass/api/session/v1"
 	"github.com/alban/hallpass/internal/defaults"
 	"github.com/alban/hallpass/internal/monitor"
+	"github.com/alban/hallpass/internal/rulepb"
 	"github.com/alban/hallpass/internal/rules"
 )
 
@@ -23,7 +24,7 @@ func spec(t *testing.T, s string) *pb.Rule {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return toPBRule(r)
+	return rulepb.To(r)
 }
 
 // TestApplyRules checks that the rules a client adds give no more than an
@@ -61,7 +62,7 @@ func TestApplyRules(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, r := range snap.Rules {
-			if rr, _ := fromPBRule(r); rr.Spec() == spec {
+			if r.GetSpec() == spec {
 				return r.Id
 			}
 		}
