@@ -21,7 +21,10 @@ import (
 	"time"
 
 	pb "github.com/alban/hallpass/api/session/v1"
+	"github.com/alban/hallpass/internal/answer"
+	"github.com/alban/hallpass/internal/defaults"
 	"github.com/alban/hallpass/internal/monitor"
+	"github.com/alban/hallpass/internal/rules"
 	"github.com/alban/hallpass/internal/sessionapi"
 )
 
@@ -35,6 +38,10 @@ func (f fakeSession) Answer(id uint64, answer, client string) error {
 	f.answered <- strconv.FormatUint(id, 10) + " " + answer + " " + client
 	return nil
 }
+func (fakeSession) CheckRules(_ string, add, removed []rules.Rule) error {
+	return answer.CheckRules(defaults.New("/home/u", "", nil, nil), add, removed)
+}
+func (fakeSession) RulesChanged(string, []rules.Rule, []rules.Rule) {}
 
 type client struct {
 	t       *testing.T

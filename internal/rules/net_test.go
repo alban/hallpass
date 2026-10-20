@@ -153,6 +153,9 @@ func TestCoversNet(t *testing.T) {
 		{"10.0.0.0/8", "*", false, true},
 		{"10.0.0.0/8", "[::ffff:10.0.0.1]", true, true},
 		{"10.0.0.0/8", "[::1]", false, false},
+		// netip.Prefix.Contains and Overlaps are false across families.
+		{"0.0.0.0/0", "[2001:db8::1]", false, false},
+		{"[::]/0", "1.2.3.4", false, false},
 		{"[2001:db8::]/32", "[2001:db8::1]:443", true, true},
 		{"*:443", "1.2.3.4:443", true, true},
 		{"*:443", "1.2.3.4", false, true},
@@ -194,5 +197,8 @@ func TestCoversNet(t *testing.T) {
 	tcp, _ := ParseNet("tcp:127.0.0.1:80")
 	if own.CoversNet(tcp) || !own.OverlapsNet(tcp) || (ObjectMatch{Path: &PathMatch{Path: "/"}}).OverlapsNet(tcp) {
 		t.Error("own listeners or a path")
+	}
+	if !own.CoversNet(own) || own.CoversNet(ObjectMatch{AnyNet: true}) || !(ObjectMatch{AnyNet: true}).CoversNet(own) {
+		t.Error("own listeners cover only themselves")
 	}
 }

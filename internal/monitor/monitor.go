@@ -485,6 +485,11 @@ func (m *Monitor) nextRules(old []rules.Rule, d Decision) ([]rules.Rule, bool, e
 	return next, changed, nil
 }
 
+// Check validates r the way Apply does, and resolves its paths: rules
+// checked before they are applied (in strict mode, whether the kernel can
+// enforce them: ErrUnsupported).
+func (m *Monitor) Check(r *rules.Rule) error { return m.check(r) }
+
 // check validates r and resolves its path.
 func (m *Monitor) check(r *rules.Rule) error {
 	o := r.Object

@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -21,7 +22,9 @@ import (
 	"google.golang.org/grpc/status"
 
 	pb "github.com/alban/hallpass/api/session/v1"
+	"github.com/alban/hallpass/internal/answer"
 	"github.com/alban/hallpass/internal/monitor"
+	"github.com/alban/hallpass/internal/rules"
 )
 
 // SocketDir returns the directory holding the sessions' sockets.
@@ -73,6 +76,13 @@ type Session interface {
 	// Answer answers request id with the session's policy; it fails with
 	// monitor.ErrClosed if the request is not pending.
 	Answer(id uint64, answer, client string) error
+	// CheckRules checks that client may remove the rules removed and add
+	// the rules add (checked by the monitor already); it fails with
+	// answer.ErrTooWide if the session's policy does not let it.
+	CheckRules(client string, add, removed []rules.Rule) error
+	// RulesChanged reports that client removed and added rules, after
+	// CheckRules.
+	RulesChanged(client string, add, removed []rules.Rule)
 }
 
 // Server serves a session on its socket.
@@ -229,11 +239,50 @@ func (s *service) Apply(ctx context.Context, d *pb.Decision) (*pb.ApplyReply, er
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
+	removed, err := checkRules(e, &md)
+	if err != nil {
+		return nil, err
+	}
 	gen, err := e.m.Apply(md)
 	if err != nil {
 		return nil, toStatus(err)
 	}
+	if len(md.AddRules)+len(removed) > 0 {
+		e.sess.RulesChanged(md.Client, md.AddRules, removed)
+	}
 	return &pb.ApplyReply{Generation: gen}, nil
+}
+
+// checkRules checks the rules d adds and removes with the session's policy,
+// and returns those it removes. An allow it adds may rely on an allow it
+// removes (an edit narrowing it): without IfGeneration, d then applies to
+// the rules checked only.
+func checkRules(e entry, d *monitor.Decision) ([]rules.Rule, error) {
+	if len(d.AddRules)+len(d.RemoveRules)+len(d.RemoveSets) == 0 {
+		return nil, nil
+	}
+	for i := range d.AddRules {
+		if err := e.m.Check(&d.AddRules[i]); err != nil {
+			if s := toStatus(err); status.Code(s) != codes.Unknown {
+				return nil, s
+			}
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
+	}
+	_, rs, gen := e.m.Snapshot()
+	var removed []rules.Rule
+	for _, r := range rs {
+		if slices.Contains(d.RemoveRules, r.ID) || slices.Contains(d.RemoveSets, r.Set) {
+			removed = append(removed, r)
+		}
+	}
+	if err := e.sess.CheckRules(d.Client, d.AddRules, removed); err != nil {
+		return nil, toStatus(err)
+	}
+	if d.IfGeneration == 0 && len(removed) > 0 && slices.ContainsFunc(d.AddRules, func(r rules.Rule) bool { return r.Verdict == rules.Allow }) {
+		d.IfGeneration = gen
+	}
+	return removed, nil
 }
 
 func (s *service) Answer(ctx context.Context, a *pb.AnswerRequest) (*pb.AnswerReply, error) {
@@ -258,7 +307,7 @@ func toStatus(err error) error {
 		return status.Error(codes.NotFound, err.Error())
 	case errors.Is(err, monitor.ErrUnsupported), errors.Is(err, ErrBadAnswer):
 		return status.Error(codes.InvalidArgument, err.Error())
-	case errors.Is(err, monitor.ErrProtected):
+	case errors.Is(err, monitor.ErrProtected), errors.Is(err, answer.ErrTooWide):
 		return status.Error(codes.PermissionDenied, err.Error())
 	}
 	return status.Error(codes.Unknown, err.Error())

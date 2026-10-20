@@ -219,13 +219,15 @@ func parseUnix(s string) (ObjectMatch, error) {
 }
 
 // CoversNet reports whether network match m selects every destination
-// network match o selects. Only every destination (AnyNet) covers own
-// listeners or every destination.
+// network match o selects. Only every destination (AnyNet) covers every
+// destination, and only it or own listeners cover own listeners.
 func (m ObjectMatch) CoversNet(o ObjectMatch) bool {
 	switch {
 	case !m.IsNet() || !o.IsNet():
 		return false
 	case m.AnyNet:
+		return true
+	case m.OwnListener && o.OwnListener:
 		return true
 	case o.AnyNet || m.OwnListener || o.OwnListener:
 		return false

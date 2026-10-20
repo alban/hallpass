@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -315,4 +316,34 @@ func (s *session) Answer(id uint64, a, who string) error {
 	}
 	s.event(deny, reason, fmt.Sprintf("%s: answered %s from %s", describe(r), ans, clean(who)))
 	return nil
+}
+
+// CheckRules implements sessionapi.Session: with a policy that does not
+// prompt, rules can only be tightened.
+func (s *session) CheckRules(who string, add, removed []rules.Rule) error {
+	err := answer.CheckRules(s.d, add, removed)
+	if !s.policy.Prompt {
+		err = answer.CheckTighten(add, removed)
+	}
+	if err != nil {
+		s.log.Info("rules refused", "client", who, "error", err)
+	}
+	return err
+}
+
+// RulesChanged implements sessionapi.Session: a change is an Event.
+func (s *session) RulesChanged(who string, add, removed []rules.Rule) {
+	if who == "" {
+		who = remoteClient
+	}
+	var parts []string
+	for _, r := range removed {
+		parts = append(parts, "removed "+r.Spec())
+	}
+	for _, r := range add {
+		parts = append(parts, "added "+r.Spec())
+	}
+	msg := strings.Join(parts, ", ")
+	s.log.Info("rules", "change", msg, "client", who)
+	s.event(false, reasonRules, fmt.Sprintf("rules %s by %s", msg, clean(who)))
 }

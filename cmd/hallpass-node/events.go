@@ -36,6 +36,8 @@ const (
 	// reasonReleased: the workload gave back grants of its requests made
 	// in advance (hallpass-request release).
 	reasonReleased = "HallpassReleased"
+	// reasonRules: a client changed the rules (the Headlamp plugin).
+	reasonRules = "HallpassRulesChanged"
 )
 
 // startedMessage is the message of the reasonStarted Event.

@@ -11,7 +11,9 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	pb "github.com/alban/hallpass/api/session/v1"
+	"github.com/alban/hallpass/internal/answer"
 	"github.com/alban/hallpass/internal/monitor"
+	"github.com/alban/hallpass/internal/rules"
 	"github.com/alban/hallpass/internal/sessionapi"
 	"github.com/alban/hallpass/internal/ui"
 )
@@ -58,3 +60,11 @@ func (s *session) Answer(id uint64, answer, who string) error {
 	}
 	return fmt.Errorf("request %d: %w", id, monitor.ErrClosed)
 }
+
+// CheckRules implements sessionapi.Session.
+func (s *session) CheckRules(_ string, add, removed []rules.Rule) error {
+	return answer.CheckRules(s.cfg.Defaults, add, removed)
+}
+
+// RulesChanged implements sessionapi.Session.
+func (s *session) RulesChanged(string, []rules.Rule, []rules.Rule) {}

@@ -34,7 +34,9 @@ service Session {
   rpc Events(EventsRequest) returns (stream EventBatch);
   // Apply is monitor.Apply. Errors: FAILED_PRECONDITION for ErrStale,
   // NOT_FOUND for ErrClosed, INVALID_ARGUMENT for ErrUnsupported and
-  // invalid rules.
+  // invalid rules, PERMISSION_DENIED for the protected rules and for an
+  // allow rule wider than an "always" answer could give, unless it narrows
+  // an allow rule the decision removes (answer.CheckRules).
   rpc Apply(Decision) returns (ApplyReply);
   // Answer answers a pending request like the terminal prompt does, with
   // the session's policy (the folder of a grant, "never" as an exact

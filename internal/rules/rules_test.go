@@ -158,3 +158,82 @@ func TestEvalExec(t *testing.T) {
 		}
 	}
 }
+
+func TestCovers(t *testing.T) {
+	now := time.Now()
+	spec := func(s string) Rule {
+		t.Helper()
+		r, err := ParseSpec(s, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	for _, tc := range []struct {
+		old, r string
+		want   bool
+	}{
+		{"allow path /srv/**", "allow path /srv/www/**", true},
+		{"allow path /srv/**", "allow path /srv/www/index.html for 1m", true},
+		{"allow path /srv/**", "allow path /srvx/**", false},
+		{"allow path /srv/www/**", "allow path /srv/**", false},
+		{"allow path /srv/a", "allow path /srv/a", true},
+		{"allow path /srv/a", "allow path /srv/a/**", false},
+		{"allow path /srv/**", "allow exec /srv/bin/x", false},
+		{"allow exec /opt/bin/**", "allow exec /opt/bin/x", true},
+		{"deny path /srv/**", "allow path /srv/www/**", false},
+		{"ask path /srv/**", "allow path /srv/www/**", false},
+		{"allow path /**", "allow net all", false},
+		{"allow net all", "allow path /srv", false},
+		{"allow net all", "allow net 10.0.0.0/8", true},
+		{"allow net all", "allow net unix:@x", true},
+		{"allow net all", "allow net own-listeners", true},
+		{"allow net 10.0.0.0/8", "allow net tcp:10.1.0.0/16:443", true},
+		{"allow net 10.0.0.0/8", "allow net 11.0.0.0/16", false},
+		{"allow net 10.0.0.0/8", "allow net 0.0.0.0/0", false},
+		{"allow net 10.0.0.0/8", "allow net [::ffff:a00:1]", true}, // IPv4-mapped: 10.0.0.1
+		{"allow net 10.0.0.0/8", "allow net [2001:db8::1]", false},
+		{"allow net 0.0.0.0/0", "allow net [2001:db8::1]", false},
+		{"allow net [::]/0", "allow net 10.0.0.1", false},
+		{"allow net tcp:*:443", "allow net tcp:1.2.3.4:443", true},
+		{"allow net tcp:*:443", "allow net udp:1.2.3.4:443", false},
+		{"allow net tcp:*:443", "allow net 1.2.3.4:443", false},
+		{"allow net *:8000-8999", "allow net *:8080", true},
+		{"allow net *:8000-8999", "allow net *", false},
+		{"allow net unix:/run/**", "allow net unix:/run/x.sock", true},
+		{"allow net unix:/run/x.sock", "allow net unix:/run/**", false},
+		{"allow net unix:@x*", "allow net unix:@xy", true},
+		{"allow net unix:@x*", "allow net unix:/x", false},
+		{"allow net own-listeners", "allow net 127.0.0.1:80", false},
+		{"allow net own-listeners", "allow net own-listeners", true},
+		{"allow net own-listeners", "allow net all", false},
+		{"allow unknown", "allow unknown", true},
+		{"allow proc mem node", "allow proc mem node", true},
+		{"allow proc mem node", "allow proc mem bash", false},
+	} {
+		if got := spec(tc.old).Covers(spec(tc.r)); got != tc.want {
+			t.Errorf("(%s).Covers(%s) = %v, want %v", tc.old, tc.r, got, tc.want)
+		}
+	}
+
+	old := spec("allow path /srv/** for 1h")
+	if old.Covers(spec("allow path /srv/www/**")) {
+		t.Errorf("a temporary allow covers a lasting one")
+	}
+	if old.Covers(spec("allow path /srv/www/** for 2h")) {
+		t.Errorf("a temporary allow covers a longer one")
+	}
+	if !old.Covers(spec("allow path /srv/www/** for 30m")) {
+		t.Errorf("a temporary allow does not cover a shorter one")
+	}
+	// Files rules from flags have the file ops only.
+	flag := spec("allow path /srv/**")
+	flag.Ops = OpFiles
+	if !flag.Covers(spec("allow path /srv/www/**")) {
+		t.Errorf("the network ops of a file rule count")
+	}
+	flag.Ops = OpWrite
+	if flag.Covers(spec("allow path /srv/www/**")) {
+		t.Errorf("more ops covered")
+	}
+}

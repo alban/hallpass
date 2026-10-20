@@ -18,6 +18,7 @@ import (
 	pb "github.com/alban/hallpass/api/session/v1"
 	"github.com/alban/hallpass/internal/monitor"
 	"github.com/alban/hallpass/internal/nodeclient"
+	"github.com/alban/hallpass/internal/rules"
 	"github.com/alban/hallpass/internal/sessionapi"
 )
 
@@ -68,6 +69,10 @@ func (s *session) Info() *pb.SessionInfo {
 	return &pb.SessionInfo{Labels: map[string]string{"namespace": "ns", "pod": s.name, "container": "c"}}
 }
 func (s *session) Prompt(*monitor.Request) *pb.Prompt { return &pb.Prompt{} }
+func (s *session) CheckRules(string, []rules.Rule, []rules.Rule) error {
+	return nil
+}
+func (s *session) RulesChanged(string, []rules.Rule, []rules.Rule) {}
 func (s *session) Answer(id uint64, answer, client string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

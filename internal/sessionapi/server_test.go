@@ -16,8 +16,11 @@ import (
 	"google.golang.org/grpc/status"
 
 	pb "github.com/alban/hallpass/api/session/v1"
+	"github.com/alban/hallpass/internal/answer"
+	"github.com/alban/hallpass/internal/defaults"
 	"github.com/alban/hallpass/internal/monitor"
 	"github.com/alban/hallpass/internal/nodeclient"
+	"github.com/alban/hallpass/internal/rules"
 )
 
 type fakeSession struct{}
@@ -27,6 +30,10 @@ func (fakeSession) Info() *pb.SessionInfo {
 }
 func (fakeSession) Prompt(*monitor.Request) *pb.Prompt  { return &pb.Prompt{} }
 func (fakeSession) Answer(uint64, string, string) error { return monitor.ErrClosed }
+func (fakeSession) CheckRules(_ string, add, removed []rules.Rule) error {
+	return answer.CheckRules(defaults.New("/home/u", "", nil, nil), add, removed)
+}
+func (fakeSession) RulesChanged(string, []rules.Rule, []rules.Rule) {}
 
 func listen(t *testing.T) *Server {
 	t.Helper()

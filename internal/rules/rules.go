@@ -230,6 +230,46 @@ func (r Rule) Expired(now time.Time) bool {
 	return !r.Expires.IsZero() && !now.Before(r.Expires)
 }
 
+// Covers reports whether allow rule old allows everything rule r does,
+// for as long: r narrows it. Only the ops that can match the rules'
+// objects count (see relevantOps).
+func (old Rule) Covers(r Rule) bool {
+	if old.Verdict != Allow {
+		return false
+	}
+	if !old.Expires.IsZero() && (r.Expires.IsZero() || r.Expires.After(old.Expires)) {
+		return false
+	}
+	if r.relevantOps()&^old.relevantOps() != 0 {
+		return false
+	}
+	a, b := old.Object, r.Object
+	switch {
+	case a.Path != nil && b.Path != nil:
+		if len(a.Path.Args)+len(b.Path.Args) > 0 {
+			return false
+		}
+		if a.Path.Tree {
+			return Under(b.Path.Path, a.Path.Path)
+		}
+		return !b.Path.Tree && a.Path.Path == b.Path.Path
+	case a.Proc != nil && b.Proc != nil:
+		return *a.Proc == *b.Proc
+	case a.Unknown:
+		return b.Unknown
+	}
+	return a.CoversNet(b)
+}
+
+// relevantOps returns the ops of r that can match its object: a file rule
+// with the network ops matches no more than without.
+func (r Rule) relevantOps() Op {
+	if r.Object.IsNet() {
+		return r.Ops & OpNet
+	}
+	return r.Ops &^ OpNet
+}
+
 // Eval returns the decision of rs on op on obj at now, and the deciding
 // rule's ID; ok is false when no rule matches. Any Deny wins, at any depth;
 // otherwise the deepest Allow or Ask decides (Ask on a tie).

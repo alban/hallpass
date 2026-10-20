@@ -57,7 +57,9 @@ type SessionClient interface {
 	Events(ctx context.Context, in *EventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[EventBatch], error)
 	// Apply is monitor.Apply. Errors: FAILED_PRECONDITION for ErrStale,
 	// NOT_FOUND for ErrClosed, INVALID_ARGUMENT for ErrUnsupported and
-	// invalid rules.
+	// invalid rules, PERMISSION_DENIED for the protected rules and for an
+	// allow rule wider than an "always" answer could give, unless it narrows
+	// an allow rule the decision removes (answer.CheckRules).
 	Apply(ctx context.Context, in *Decision, opts ...grpc.CallOption) (*ApplyReply, error)
 	// Answer answers a pending request like the terminal prompt does, with
 	// the session's policy (the folder of a grant, "never" as an exact
@@ -159,7 +161,9 @@ type SessionServer interface {
 	Events(*EventsRequest, grpc.ServerStreamingServer[EventBatch]) error
 	// Apply is monitor.Apply. Errors: FAILED_PRECONDITION for ErrStale,
 	// NOT_FOUND for ErrClosed, INVALID_ARGUMENT for ErrUnsupported and
-	// invalid rules.
+	// invalid rules, PERMISSION_DENIED for the protected rules and for an
+	// allow rule wider than an "always" answer could give, unless it narrows
+	// an allow rule the decision removes (answer.CheckRules).
 	Apply(context.Context, *Decision) (*ApplyReply, error)
 	// Answer answers a pending request like the terminal prompt does, with
 	// the session's policy (the folder of a grant, "never" as an exact
