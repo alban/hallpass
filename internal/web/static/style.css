@@ -33,6 +33,11 @@ h2 { font-size: 1em; margin: 1em 0 .3em; }
 #pair-code { font-size: 2em; font-family: monospace; margin: .5em 0; }
 #pairing button { font: inherit; padding: .3em .8em; border-radius: 4px; border: 1px solid #aaa; cursor: pointer; background: #fff; }
 td button { white-space: nowrap; }
+.editor { display: flex; flex-wrap: wrap; gap: .4em; align-items: center; }
+input.spec { flex: 1; min-width: 20em; font: 13px monospace; padding: .2em; }
+.add-rule { margin: .6em 0; }
+.syntax { color: #555; font-size: .85em; margin: .4em 0; }
+.error { color: #b00; }
 td.nowrap { white-space: nowrap; word-break: normal; }
 .session { max-width: 40em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 h2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

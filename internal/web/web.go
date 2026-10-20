@@ -37,6 +37,7 @@ import (
 	"github.com/alban/hallpass"
 	pb "github.com/alban/hallpass/api/session/v1"
 	"github.com/alban/hallpass/internal/nodeclient"
+	"github.com/alban/hallpass/internal/rulepb"
 	"github.com/alban/hallpass/internal/sessionapi"
 )
 
@@ -732,15 +733,20 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// rules removes rules, by id or by set.
+// rules changes the session's rules in one decision: it removes rules, by
+// id or by set, and adds rules written in the rules.SpecSyntax. With
+// ifGeneration, it fails with 409 if the rules changed since that snapshot.
 func (s *Server) rules(w http.ResponseWriter, r *http.Request) {
 	c, ctx, ok := s.sessionClient(w, r)
 	if !ok {
 		return
 	}
 	var req struct {
-		Remove     []string `json:"remove"` // rule ids, as protojson writes them
-		RemoveSets []string `json:"removeSets"`
+		Remove       []string `json:"remove"` // rule ids, as protojson writes them
+		RemoveSets   []string `json:"removeSets"`
+		Add          []string `json:"add"`
+		Label        string   `json:"label"` // of the added rules
+		IfGeneration string   `json:"ifGeneration"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -754,8 +760,22 @@ func (s *Server) rules(w http.ResponseWriter, r *http.Request) {
 		}
 		d.RemoveRules = append(d.RemoveRules, n)
 	}
-	if len(d.RemoveRules) == 0 && len(d.RemoveSets) == 0 {
-		http.Error(w, "nothing to remove", http.StatusBadRequest)
+	if req.IfGeneration != "" {
+		n, err := strconv.ParseUint(req.IfGeneration, 10, 64)
+		if err != nil {
+			http.Error(w, "bad generation", http.StatusBadRequest)
+			return
+		}
+		d.IfGeneration = n
+	}
+	add, err := rulepb.Parse(req.Add, req.Label, time.Now())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	d.AddRules = add
+	if len(d.RemoveRules) == 0 && len(d.RemoveSets) == 0 && len(d.AddRules) == 0 {
+		http.Error(w, "nothing to change", http.StatusBadRequest)
 		return
 	}
 	if _, err := c.Apply(ctx, d); err != nil {

@@ -44,10 +44,11 @@ function opsNames(ops) {
   const names = ["write", "create", "mkdir", "symlink", "delete", "link", "rename", "truncate", "connect", "send"];
   const out = [];
   names.forEach((n, i) => { if (ops & (1 << i)) out.push(n); });
-  if (out.length === 10) return "all";
-  if ((ops & 0xff) === 0xff) return ["files", ...out.slice(8)].join(",");
-  if ((ops & 0x300) === 0x300) return [...out.slice(0, -2), "network"].join(",");
-  return out.join(",");
+  const exec = ops & 0x400 ? ["exec"] : [];
+  if (out.length === 10) return ["all", ...exec].join(",");
+  if ((ops & 0xff) === 0xff) return ["files", ...out.slice(8), ...exec].join(",");
+  if ((ops & 0x300) === 0x300) return [...out.slice(0, -2), "network", ...exec].join(",");
+  return [...out, ...exec].join(",");
 }
 
 function protoName(p) {
@@ -203,6 +204,7 @@ async function refreshRules(pid) {
   if (!r.ok) return;
   const snap = await r.json();
   s.rules = snap.rules || [];
+  s.generation = snap.generation || "0";
   markDirty();
 }
 
@@ -212,6 +214,7 @@ function onBatch(pid, s, batch) {
     s.pending.clear();
     for (const r of batch.snapshot.pending || []) s.pending.set(r.id, r);
     s.rules = batch.snapshot.rules || [];
+    s.generation = batch.snapshot.generation || "0";
     pendingChanged = true;
   }
   for (const e of batch.events || []) {
@@ -416,7 +419,7 @@ async function post(url, body) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!r.ok) throw new Error((await r.text()).trim() || r.statusText);
+  if (!r.ok) throw new HTTPError(r.status, (await r.text()).trim() || r.statusText);
 }
 
 function renderSessions() {
@@ -551,6 +554,76 @@ function renderActivity() {
   body.replaceChildren(...rows);
 }
 
+// forText gives what is left of an expiry, rounded down, as a "for"
+// suffix: an edit can keep an expiry, not extend it.
+function forText(expires) {
+  if (!expires) return "";
+  const secs = Math.floor((new Date(expires) - Date.now()) / 1000);
+  if (secs <= 0) return "";
+  return " for " + (secs >= 120 ? Math.floor(secs / 60) + "m" : secs + "s");
+}
+
+const RULE_SYNTAX = `VERDICT KIND VALUE [for DURATION]
+  VERDICT   allow, deny or ask
+  path P    the file P; P/** the tree below P
+  exec P    running the program P; P/** every program below P
+  net N     a destination: tcp:1.2.3.4:443, [2001:db8::1]:22, unix:/run/x.sock, unix:@name, all...
+  proc N C  /proc/<pid>/N of the processes named C
+  unknown   the paths that could not be read (lite mode)
+  DURATION  e.g. 10m or 2h; without it, until removed
+An allow rule gives at most what answering "always" would, or narrows the rule it replaces.`; // rules.SpecSyntax
+
+// The open rule editors, by "pid/id" ("pid/new" to add one): their text
+// and error survive re-rendering.
+const ruleEditors = new Map();
+let focusEditor = ""; // the editor just opened
+let rulesShown = ""; // what renderRules last showed, to re-render only on changes
+
+function editorKey(pid, id) { return pid + "/" + id; }
+
+// changeRules posts a rules change. When it applies to the rules as they
+// were (ifGeneration) and they changed meanwhile, it refreshes them and
+// says so.
+async function changeRules(pid, body, ed) {
+  const s = sessions.get(pid);
+  try {
+    await post(`/api/sessions/${encodeURIComponent(pid)}/rules`, body);
+    return true;
+  } catch (e) {
+    if (e.status === 409) {
+      ed.error = "The rules changed meanwhile: check them and save again.";
+      if (s) {
+        await refreshRules(pid);
+        ed.generation = s.generation;
+      }
+    } else ed.error = e.message;
+    markRulesDirty();
+    return false;
+  }
+}
+
+function markRulesDirty() { rulesShown = ""; markDirty(); }
+
+function ruleEditor(pid, key, onSave, saveText) {
+  const ed = ruleEditors.get(key);
+  const input = el("input", { class: "spec", type: "text", "data-editor": key, placeholder: "allow path /home/me/src/** for 1h", spellcheck: "false" });
+  input.value = ed.text;
+  input.addEventListener("input", () => { ed.text = input.value; });
+  const save = async () => {
+    ed.error = "";
+    if (await onSave(ed)) ruleEditors.delete(key);
+    markRulesDirty();
+  };
+  input.addEventListener("keydown", e => {
+    if (e.key === "Enter") save();
+    if (e.key === "Escape") { ruleEditors.delete(key); markRulesDirty(); }
+  });
+  return el("span", { class: "editor" }, input,
+    el("button", { onclick: save }, saveText),
+    el("button", { onclick: () => { ruleEditors.delete(key); markRulesDirty(); } }, "Cancel"),
+    el("span", { class: "error" }, ed.error || ""));
+}
+
 function ruleRow(pid, r) {
   const o = r.object || {};
   let obj = "";
@@ -559,13 +632,32 @@ function ruleRow(pid, r) {
   else if (o.unknown) obj = "(unknown paths)";
   else if (o.anyNet || o.ownListener || o.inet || o.unix) obj = "network: " + netMatchText(o);
   const verdict = (r.verdict || "ALLOW").toLowerCase();
+  const key = editorKey(pid, r.id);
+  const s = sessions.get(pid);
+  if (ruleEditors.has(key)) {
+    // An edit replaces the rule, in one change that fails if the rules
+    // changed since this page read them. Group labels go with the rules
+    // the group gave.
+    const label = (r.label || "").startsWith("@") ? "" : r.label || "";
+    return el("tr", {},
+      el("td", { class: "nowrap" }, String(r.id)),
+      el("td", { colspan: "6" }, ruleEditor(pid, key,
+        ed => changeRules(pid, { remove: [r.id], add: [ed.text], label, ifGeneration: ed.generation }, ed), "Save")));
+  }
   const err = el("span", { class: "error" });
+  const edit = el("button", {
+    onclick: () => {
+      ruleEditors.set(key, { text: (r.spec || "") + forText(r.expires), error: "", generation: s.generation });
+      focusEditor = key;
+      markRulesDirty();
+    },
+  }, "Edit");
   const remove = el("button", {
     onclick: async () => {
       try { await post(`/api/sessions/${encodeURIComponent(pid)}/rules`, { remove: [r.id] }); }
       catch (e) { err.textContent = e.message; }
     },
-  }, "Remove");
+  }, "Delete");
   return el("tr", {},
     el("td", { class: "nowrap" }, String(r.id)),
     el("td", { class: "nowrap " + (verdict === "allow" ? "allow" : "deny") }, verdict),
@@ -573,10 +665,26 @@ function ruleRow(pid, r) {
     el("td", {}, obj),
     el("td", {}, r.label || ""),
     el("td", {}, r.expires ? new Date(r.expires).toLocaleTimeString() : ""),
-    el("td", {}, remove, err));
+    el("td", {}, edit, " ", remove, err));
+}
+
+function addRuleForm(pid) {
+  const key = editorKey(pid, "new");
+  if (!ruleEditors.has(key)) {
+    return el("p", {}, el("button", {
+      onclick: () => { ruleEditors.set(key, { text: "", error: "" }); focusEditor = key; markRulesDirty(); },
+    }, "Add rule"));
+  }
+  return el("div", { class: "add-rule" },
+    ruleEditor(pid, key, ed => changeRules(pid, { add: [ed.text] }, ed), "Add"),
+    el("pre", { class: "syntax" }, RULE_SYNTAX));
 }
 
 function renderRules() {
+  const shown = JSON.stringify([...sessions].map(([pid, s]) => [pid, s.ended, s.generation, s.rules]));
+  if (shown === rulesShown) return; // keeps the editors' focus
+  rulesShown = shown;
+  const focused = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.editor : undefined;
   const box = document.getElementById("view-rules");
   box.replaceChildren();
   for (const [pid, s] of sessions) {
@@ -605,7 +713,13 @@ function renderRules() {
         el("tbody", {}, ...rules.map(r => ruleRow(pid, r)))));
     }
     if (s.rules.length === 0) box.append(el("p", { class: "empty" }, "No rules."));
+    box.append(addRuleForm(pid));
   }
+  if (focused || focusEditor) {
+    const input = box.querySelector(`input[data-editor="${CSS.escape(focused || focusEditor)}"]`);
+    if (input) input.focus();
+  }
+  focusEditor = "";
 }
 
 function render() {

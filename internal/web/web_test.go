@@ -20,6 +20,8 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/encoding/protojson"
+
 	pb "github.com/alban/hallpass/api/session/v1"
 	"github.com/alban/hallpass/internal/answer"
 	"github.com/alban/hallpass/internal/defaults"
@@ -335,6 +337,58 @@ func TestAPI(t *testing.T) {
 	if c.session != "" {
 		t.Errorf("hallpass web follows session %q only", c.session)
 	}
+}
+
+// TestRules edits a session's rules the way the Rules tab does.
+func TestRules(t *testing.T) {
+	s, c, _ := setup(t)
+	c = pair(t, s, c)
+	url := "/api/sessions/" + strconv.Itoa(os.Getpid()) + "/rules"
+	snapshot := func() (gen string, ids map[string]string) {
+		t.Helper()
+		resp := c.do("GET", "/api/sessions/"+strconv.Itoa(os.Getpid())+"/snapshot", "")
+		var snap struct {
+			Generation string
+			Rules      []json.RawMessage
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&snap); err != nil {
+			t.Fatal(err)
+		}
+		ids = map[string]string{}
+		for _, raw := range snap.Rules {
+			var r pb.Rule
+			if err := protojson.Unmarshal(raw, &r); err != nil {
+				t.Fatal(err)
+			}
+			ids[r.GetSpec()+" "+r.GetLabel()] = strconv.FormatUint(r.GetId(), 10)
+		}
+		return snap.Generation, ids
+	}
+	post := func(body string, want int) {
+		t.Helper()
+		resp := c.do("POST", url, body)
+		if resp.StatusCode != want {
+			msg, _ := io.ReadAll(resp.Body)
+			t.Errorf("%s: %s %s, want %d", body, resp.Status, msg, want)
+		}
+	}
+
+	post(`{"add":["deny path /home/u/x"],"label":"mine"}`, http.StatusNoContent)
+	gen, ids := snapshot()
+	id := ids["deny path /home/u/x mine"]
+	if id == "" {
+		t.Fatalf("rules %v", ids)
+	}
+	edit := `{"remove":["` + id + `"],"add":["deny path /home/u/y"],"label":"mine","ifGeneration":"` + gen + `"}`
+	post(edit, http.StatusNoContent)
+	if _, ids := snapshot(); ids["deny path /home/u/y mine"] == "" || ids["deny path /home/u/x mine"] != "" {
+		t.Errorf("after the edit: %v", ids)
+	}
+	post(edit, http.StatusConflict)
+	post(`{"add":["allow path /home/u/**"]}`, http.StatusForbidden)
+	post(`{"add":["allow path /home/u/src/f for 1h"]}`, http.StatusNoContent)
+	post(`{"add":["allow path relative"]}`, http.StatusBadRequest)
+	post(`{"ifGeneration":"x","add":["deny path /a"]}`, http.StatusBadRequest)
 }
 
 // TestWatching: a page tells whether it shows the sessions, connected and
