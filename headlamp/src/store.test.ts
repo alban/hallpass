@@ -3,7 +3,15 @@
 
 import { describe, expect, it } from 'vitest';
 import { ClusterStore, ConnectFn, Deps, Link, maxBackoff, pendingCount } from './store';
-import { answerAllowed, answersFor, grantForText, ruleObject, sessionName } from './types';
+import {
+  answerAllowed,
+  answersFor,
+  editLabel,
+  forSuffix,
+  grantForText,
+  ruleObject,
+  sessionName,
+} from './types';
 
 // A fake wasm client and port-forward: each open() creates a connection
 // the test drives.
@@ -33,6 +41,9 @@ class Fake {
       },
       answer: async (s, r, a) => {
         c.answers.push([s, r, a]);
+      },
+      rules: async (s, remove, add, label, gen) => {
+        c.answers.push([s, 'rules', remove.join(','), add.join(','), label, gen]);
       },
       close: () => {
         c.linkClosed = true;
@@ -118,6 +129,14 @@ describe('ClusterStore', () => {
     await s.answer('a', 's1', '7', 'once');
     expect(f.conns[1].answers).toEqual([['s1', '7', 'once']]);
     await expect(s.answer('zz', 's1', '7', 'once')).rejects.toThrow();
+
+    await s.rules('a', 's1', { remove: ['3'], add: ['deny path /x'], label: 'l', generation: '5' });
+    await s.rules('a', 's1', { add: ['allow path /y'] });
+    expect(f.conns[1].answers.slice(1)).toEqual([
+      ['s1', 'rules', '3', 'deny path /x', 'l', '5'],
+      ['s1', 'rules', '', 'allow path /y', '', ''],
+    ]);
+    await expect(s.rules('zz', 's1', { remove: ['3'] })).rejects.toThrow();
   });
 
   it('reconnects with a backoff', async () => {
@@ -211,5 +230,15 @@ describe('types', () => {
       'network: unix:@x*'
     );
     expect(ruleObject({ object: { unix: { path: '/run/', prefix: true } } })).toBe('network: unix:/run/**');
+  });
+
+  it('keeps what is left of an expiry and the label in an edit', () => {
+    const now = Date.parse('2026-10-20T10:00:00Z');
+    expect(forSuffix('2026-10-20T11:00:30Z', now)).toBe(' for 60m');
+    expect(forSuffix('2026-10-20T10:01:30Z', now)).toBe(' for 90s');
+    expect(forSuffix('2026-10-20T09:00:00Z', now)).toBe('');
+    expect(forSuffix(undefined, now)).toBe('');
+    expect(editLabel({ label: '@git' })).toBe('');
+    expect(editLabel({ label: 'SSH keys' })).toBe('SSH keys');
   });
 });

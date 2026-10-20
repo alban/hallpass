@@ -29,6 +29,13 @@ export interface Link {
   deliver(data: ArrayBuffer): void;
   closed(reason?: string): void;
   answer(session: string, request: string, answer: string): Promise<void>;
+  rules(
+    session: string,
+    remove: string[],
+    add: string[],
+    label: string,
+    generation: string
+  ): Promise<void>;
   close(): void;
 }
 
@@ -46,6 +53,17 @@ export interface Deps {
 }
 
 export const maxBackoff = 30_000;
+
+// A change of a session's rules, applied at once: the ids of the rules to
+// remove, the rules to add in the rules syntax (rules.SpecSyntax) with
+// their label, and the rules' generation the change was made from, if it
+// must fail when they changed meanwhile.
+export interface RulesChange {
+  remove?: string[];
+  add?: string[];
+  label?: string;
+  generation?: string;
+}
 
 class AgentConn {
   state: AgentState;
@@ -166,6 +184,19 @@ class AgentConn {
     return this.link.answer(session, request, answer);
   }
 
+  rules(session: string, change: RulesChange): Promise<void> {
+    if (!this.link) {
+      return Promise.reject(new Error(`not connected to ${this.state.pod}`));
+    }
+    return this.link.rules(
+      session,
+      change.remove || [],
+      change.add || [],
+      change.label || '',
+      change.generation || ''
+    );
+  }
+
   stop() {
     this.stopped = true;
     if (this.timer !== null) {
@@ -226,6 +257,15 @@ export class ClusterStore {
       return Promise.reject(new Error(`no agent ${pod}`));
     }
     return c.answer(session, request, answer);
+  }
+
+  // rules changes a session's rules in one decision.
+  rules(pod: string, session: string, change: RulesChange): Promise<void> {
+    const c = this.conns.get(pod);
+    if (!c) {
+      return Promise.reject(new Error(`no agent ${pod}`));
+    }
+    return c.rules(session, change);
   }
 
   changed() {

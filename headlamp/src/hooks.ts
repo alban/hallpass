@@ -5,7 +5,7 @@ import { K8s } from '@kinvolk/headlamp-plugin/lib';
 import { getCluster } from '@kinvolk/headlamp-plugin/lib/Utils';
 import { useEffect, useSyncExternalStore } from 'react';
 import { agentNamespace, agentSelector, realDeps } from './client';
-import { ClusterStore } from './store';
+import { ClusterStore, RulesChange } from './store';
 import { Agent, AgentState, Answer } from './types';
 
 const stores = new Map<string, ClusterStore>();
@@ -25,6 +25,7 @@ export interface Hallpass {
   listed: boolean;
   listError?: string;
   answer(pod: string, session: string, request: string, answer: Answer): Promise<void>;
+  rules(pod: string, session: string, change: RulesChange): Promise<void>;
 }
 
 // useHallpass lists the hallpass-node pods of the current cluster, keeps a
@@ -57,5 +58,6 @@ export function useHallpass(): Hallpass {
     listed: store.listed,
     listError: store.listError,
     answer: (pod, session, request, answer) => store.answer(pod, session, request, answer),
+    rules: (pod, session, change) => store.rules(pod, session, change),
   };
 }

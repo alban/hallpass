@@ -50,17 +50,22 @@ export interface Rule {
     unix?: { path?: string; abstract?: boolean; name?: string; prefix?: boolean };
     ownListener?: boolean;
     anyNet?: boolean;
+    unknown?: boolean;
   };
   verdict?: 'ALLOW' | 'DENY' | 'ASK';
   label?: string;
   expires?: string;
   set?: string;
+  // The rule in the syntax an edit takes, without its expiry
+  // (rules.Rule.Spec, written by the server).
+  spec?: string;
 }
 
 export interface Session {
   info: SessionInfo;
   pending?: PendingRequest[];
   rules?: Rule[];
+  generation?: string; // of the rules, for an edit to check they did not change
 }
 
 export interface NodeState {
@@ -128,6 +133,27 @@ export function sessionName(s: Session): string {
   }
   return (s.info.command || []).join(' ') || s.info.id || '';
 }
+
+// forSuffix is what is left of an expiry, rounded down, as a " for"
+// suffix of a rule: an edit can keep an expiry, not extend it.
+export function forSuffix(expires: string | undefined, now: number): string {
+  if (!expires) {
+    return '';
+  }
+  const secs = Math.floor((Date.parse(expires) - now) / 1000);
+  if (!(secs > 0)) {
+    return '';
+  }
+  return ' for ' + (secs >= 120 ? `${Math.floor(secs / 60)}m` : `${secs}s`);
+}
+
+// editLabel is the label an edit keeps: a program group's goes with the
+// rules the group gave.
+export function editLabel(r: Rule): string {
+  return (r.label || '').startsWith('@') ? '' : r.label || '';
+}
+
+export const ruleSyntax = `VERDICT KIND VALUE [for DURATION]: allow path /data/**, deny exec /usr/bin/curl, ask net tcp:10.0.0.1:443 for 1h, allow proc environ bash. An allow rule gives at most what answering "always" would, or narrows the rule it replaces.`;
 
 export function ruleObject(r: Rule): string {
   if (r.object?.path) {

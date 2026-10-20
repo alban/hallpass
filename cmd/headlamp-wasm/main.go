@@ -18,19 +18,24 @@
 //   - callbacks.onClose(error): the connection ended; error is a string,
 //     empty after close().
 //
-// It returns {deliver, closed, answer, close}:
+// It returns {deliver, closed, answer, rules, close}:
 //
 //   - deliver(ArrayBuffer): a message received on the WebSocket;
 //   - closed(reason): the WebSocket closed or failed;
 //   - answer(session, request, answer): answers a pending request, as
 //     `hallpass-node answer`; returns a Promise;
+//   - rules(session, remove, add, label, generation): changes the
+//     session's rules in one Apply: removes the rules with the ids in
+//     remove, adds the rules written in the rules syntax in add (with
+//     label), and fails if the rules' generation is not generation (unless
+//     ""); returns a Promise;
 //   - close(): ends the connection.
 //
-// These four are bound functions (Function.prototype.bind) of four
-// js.Funcs made once, with the connection's id: JavaScript collects them
-// like any object, while a js.Func per connection would stay in the Go
-// runtime's table until released, and calling a released one panics.
-// Calls for a connection that ended are ignored (answer rejects).
+// These are bound functions (Function.prototype.bind) of js.Funcs made
+// once, with the connection's id: JavaScript collects them like any
+// object, while a js.Func per connection would stay in the Go runtime's
+// table until released, and calling a released one panics. Calls for a
+// connection that ended are ignored (answer and rules reject).
 package main
 
 import (
@@ -44,6 +49,7 @@ import (
 
 	pb "github.com/alban/hallpass/api/session/v1"
 	"github.com/alban/hallpass/internal/nodeclient"
+	"github.com/alban/hallpass/internal/rulepb"
 )
 
 func main() {
@@ -125,7 +131,49 @@ var (
 		}
 		return nil
 	})
+	rulesFn = js.FuncOf(func(_ js.Value, args []js.Value) any {
+		l := lookup(args)
+		session, remove, add := args[1].String(), jsStrings(args[2]), jsStrings(args[3])
+		label, generation := args[4].String(), args[5].String()
+		return promise(func() error {
+			if l == nil {
+				return errClosed
+			}
+			d := &pb.Decision{Client: "headlamp"}
+			for _, s := range remove {
+				id, err := strconv.ParseUint(s, 10, 64)
+				if err != nil {
+					return err
+				}
+				d.RemoveRules = append(d.RemoveRules, id)
+			}
+			if generation != "" {
+				g, err := strconv.ParseUint(generation, 10, 64)
+				if err != nil {
+					return err
+				}
+				d.IfGeneration = g
+			}
+			var err error
+			if d.AddRules, err = rulepb.Parse(add, label, time.Now()); err != nil {
+				return err
+			}
+			actx, acancel := context.WithTimeout(nodeclient.WithSession(l.ctx, session), 10*time.Second)
+			defer acancel()
+			_, err = l.c.Apply(actx, d)
+			return err
+		})
+	})
 )
+
+// jsStrings reads a JavaScript array of strings.
+func jsStrings(v js.Value) []string {
+	out := make([]string, v.Length())
+	for i := range out {
+		out[i] = v.Index(i).String()
+	}
+	return out
+}
 
 func connect(_ js.Value, args []js.Value) any {
 	if len(args) != 2 {
@@ -182,6 +230,7 @@ func connect(_ js.Value, args []js.Value) any {
 	res.Set("closed", bind(closedFn))
 	res.Set("answer", bind(answerFn))
 	res.Set("close", bind(closeFn))
+	res.Set("rules", bind(rulesFn))
 	return res
 }
 

@@ -11,20 +11,33 @@ import {
 } from '@kinvolk/headlamp-plugin/lib/CommonComponents';
 import type Pod from '@kinvolk/headlamp-plugin/lib/lib/k8s/pod';
 import { getCluster, localeDate } from '@kinvolk/headlamp-plugin/lib/Utils';
-import { Badge, Box, Button, ButtonGroup, IconButton, Tooltip, Typography } from '@mui/material';
+import {
+  Badge,
+  Box,
+  Button,
+  ButtonGroup,
+  IconButton,
+  TextField,
+  Tooltip,
+  Typography,
+} from '@mui/material';
 import { useSnackbar } from 'notistack';
 import { useState, useSyncExternalStore } from 'react';
 import { getStore, Hallpass, useHallpass } from './hooks';
 import { policyAnnotation } from './sandbox';
-import { pendingCount } from './store';
+import { pendingCount, RulesChange } from './store';
 import {
   AgentState,
   Answer,
   answerAllowed,
   answersFor,
+  editLabel,
+  forSuffix,
   grantForText,
   PendingRequest,
+  Rule,
   ruleObject,
+  ruleSyntax,
   Session,
   sessionName,
 } from './types';
@@ -289,18 +302,147 @@ export function PendingBadge() {
   return <ClusterBadge />;
 }
 
-function RulesTable(props: { session: Session }) {
-  return (
-    <SimpleTable
-      columns={[
-        { label: 'Verdict', getter: r => (r.verdict || 'ALLOW').toLowerCase() },
-        { label: 'Object', getter: r => ruleObject(r) },
-        { label: 'Label', getter: r => r.label },
-        { label: 'Expires', getter: r => r.expires || 'with the session' },
-      ]}
-      data={props.session.rules || []}
-      emptyMessage="No rule."
+// RulesTable lists a session's rules, and edits, deletes and adds them.
+function RulesTable(props: { hp: Hallpass; agent: AgentState; session: Session }) {
+  const { hp, agent, session } = props;
+  const [editing, setEditing] = useState<{ id: string; text: string; generation: string } | null>(
+    null
+  );
+  const [adding, setAdding] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const { enqueueSnackbar } = useSnackbar();
+  const change = async (what: string, c: RulesChange): Promise<boolean> => {
+    setBusy(true);
+    try {
+      await hp.rules(agent.pod, session.info.id || '', c);
+      return true;
+    } catch (e) {
+      enqueueSnackbar(`hallpass: ${what}: ${e}`, { variant: 'error' });
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+  const save = async (r: Rule) => {
+    if (!editing) {
+      return;
+    }
+    const ok = await change(`edit rule ${r.id}`, {
+      remove: [r.id || ''],
+      add: [editing.text],
+      label: editLabel(r),
+      generation: editing.generation,
+    });
+    if (ok) {
+      setEditing(null);
+    } else {
+      // Saving again applies to the rules shown now.
+      setEditing({ ...editing, generation: session.generation || '' });
+    }
+  };
+  const add = async () => {
+    if (adding !== null && (await change('add rule', { add: [adding] }))) {
+      setAdding(null);
+    }
+  };
+  const specField = (
+    value: string,
+    set: (v: string) => void,
+    submit: () => void,
+    label: string
+  ) => (
+    <TextField
+      size="small"
+      fullWidth
+      value={value}
+      disabled={busy}
+      placeholder="allow path /data/** for 1h"
+      inputProps={{ 'aria-label': label, spellCheck: false, style: { fontFamily: 'monospace' } }}
+      onChange={e => set(e.target.value)}
+      onKeyDown={e => {
+        if (e.key === 'Enter') {
+          submit();
+        }
+      }}
     />
+  );
+  return (
+    <>
+      <SimpleTable
+        columns={[
+          {
+            label: 'Rule',
+            getter: (r: Rule) =>
+              editing && editing.id === r.id ? (
+                specField(
+                  editing.text,
+                  text => setEditing({ ...editing, text }),
+                  () => save(r),
+                  `rule ${r.id}`
+                )
+              ) : (
+                <>
+                  {(r.verdict || 'ALLOW').toLowerCase()} {ruleObject(r)}
+                </>
+              ),
+          },
+          { label: 'Label', getter: (r: Rule) => r.label },
+          { label: 'Expires', getter: (r: Rule) => r.expires || 'with the session' },
+          {
+            label: '',
+            getter: (r: Rule) =>
+              editing && editing.id === r.id ? (
+                <ButtonGroup size="small" variant="outlined" disabled={busy}>
+                  <Button onClick={() => save(r)}>Save</Button>
+                  <Button onClick={() => setEditing(null)}>Cancel</Button>
+                </ButtonGroup>
+              ) : (
+                <ButtonGroup size="small" variant="outlined" disabled={busy}>
+                  <Button
+                    aria-label={`edit rule ${r.id}`}
+                    onClick={() =>
+                      setEditing({
+                        id: r.id || '',
+                        text: (r.spec || '') + forSuffix(r.expires, Date.now()),
+                        generation: session.generation || '',
+                      })
+                    }
+                  >
+                    Edit
+                  </Button>
+                  <Button
+                    color="error"
+                    aria-label={`delete rule ${r.id}`}
+                    onClick={() => change(`delete rule ${r.id}`, { remove: [r.id || ''] })}
+                  >
+                    Delete
+                  </Button>
+                </ButtonGroup>
+              ),
+          },
+        ]}
+        data={session.rules || []}
+        emptyMessage="No rule."
+      />
+      {adding === null ? (
+        <Button size="small" onClick={() => setAdding('')}>
+          Add rule
+        </Button>
+      ) : (
+        <Box display="flex" gap={1} alignItems="center" mt={1}>
+          {specField(adding, setAdding, add, 'new rule')}
+          <ButtonGroup size="small" variant="outlined" disabled={busy}>
+            <Button onClick={add}>Add</Button>
+            <Button onClick={() => setAdding(null)}>Cancel</Button>
+          </ButtonGroup>
+        </Box>
+      )}
+      {(adding !== null || editing) && (
+        <Typography variant="body2" color="text.secondary" mt={1}>
+          {ruleSyntax}
+        </Typography>
+      )}
+    </>
   );
 }
 
@@ -347,10 +489,10 @@ export function PodSection(props: { resource: Pod }) {
         <>
           <Typography variant="h6">Pending requests</Typography>
           <PendingTable hp={hp} filter={match} showSession={false} />
-          {sessions.map(({ session }) => (
+          {sessions.map(({ agent, session }) => (
             <Box key={session.info.id}>
               <Typography variant="h6">Rules of {session.info.labels?.container}</Typography>
-              <RulesTable session={session} />
+              <RulesTable hp={hp} agent={agent} session={session} />
             </Box>
           ))}
         </>
