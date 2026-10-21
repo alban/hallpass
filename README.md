@@ -58,7 +58,7 @@ go build ./cmd/hallpass
 
 On [alban.github.io/hallpass](https://alban.github.io/hallpass/):
 
-- [Install](https://alban.github.io/hallpass/workstation/install/), [Usage](https://alban.github.io/hallpass/workstation/usage/) (default policy, agent CLIs, over ssh), [CLI reference](https://alban.github.io/hallpass/workstation/reference/) (flags), [Strict mode](https://alban.github.io/hallpass/workstation/strict/), [Use cases](https://alban.github.io/hallpass/workstation/use-cases/) (audit, CI, checking a tool's declared paths)
+- [Install](https://alban.github.io/hallpass/workstation/install/), [Usage](https://alban.github.io/hallpass/workstation/usage/) (default policy, agent CLIs, over ssh), [Agents](https://alban.github.io/hallpass/workstation/agents/) (asking in advance with `hallpass-request`), [CLI reference](https://alban.github.io/hallpass/workstation/reference/) (flags), [Strict mode](https://alban.github.io/hallpass/workstation/strict/), [Use cases](https://alban.github.io/hallpass/workstation/use-cases/) (audit, CI, checking a tool's declared paths)
 - [Kubernetes](https://alban.github.io/hallpass/kubernetes/): sandbox pods with a node agent and answer from Headlamp
 - [Answers and rules](https://alban.github.io/hallpass/answers/), [Web UI](https://alban.github.io/hallpass/answers/web/), [Write a client](https://alban.github.io/hallpass/answers/api/) for the session API
 - [How it works](https://alban.github.io/hallpass/how-it-works/): design, security model and limitations

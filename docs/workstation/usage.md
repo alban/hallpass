@@ -117,7 +117,7 @@ While a prompt is pending, the paused thread only reacts to fatal signals (Linux
 
 ## Asking in advance
 
-A program that knows it will write a folder later, for example an agent about to start a long task while you are still there, can ask for it beforehand, so that you are not prompted while you are away. It runs a magic path that names what it wants:
+A program that knows it will write a folder later, for example an agent about to start a long task while you are still there, can ask for it beforehand, so that you are not prompted while you are away. The [`hallpass-request`](agents.md#hallpass-request) helper does it with a plain command line and exit codes (`hallpass-request write '/home/me/.cache/build/**' --for 30m --reason 'cache object files'`); underneath, and for scripts that do without it, it runs a magic path that names what it wants:
 
 ```console
 exec '/proc/self/hallpass/request?op=write&path=/home/me/.cache/build/**&for=30m&reason=cache+object+files'
@@ -161,7 +161,7 @@ hallpass never runs anything: the `execve` always fails, and its error number is
 
 With `--prompt=deny`, requests are denied (`EPERM`) without a card; with `--prompt=allow`, they are granted. A request is covered (`EEXIST`) when the rules already allow the whole path for the duration asked, so asking again right after a grant does not prompt.
 
-Agents can learn it from their instructions file (`AGENTS.md`, `.github/copilot-instructions.md`, `CLAUDE.md`...), for example:
+Agents learn it from a skill or their instructions file: see [Agents](agents.md#tell-the-agent), which uses `hallpass-request`. Where the helper is not installed, an instructions file (`AGENTS.md`, `.github/copilot-instructions.md`, `CLAUDE.md`...) can teach the magic path itself, for example:
 
 ````markdown
 ## Sandbox
@@ -187,7 +187,7 @@ Ask only for what the task needs, and say why in the reason.
 
 ## Using hallpass with agent CLIs
 
-Wrap the top-level command; there is nothing to configure in the agent:
+Wrap the top-level command; there is nothing to configure in the agent (to let it [ask in advance](agents.md), give it the `hallpass-request` helper):
 
 ```console
 hallpass -- copilot

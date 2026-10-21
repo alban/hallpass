@@ -43,6 +43,38 @@ hallpass web --node 127.0.0.1:7323                  # prints the page's address,
 
 *The pod's shell waits while the question is in the browser on another machine; denying it fails the write in the pod.*
 
+## Asking in advance from a pod
+
+The [`hallpass-request`](../workstation/agents.md#hallpass-request) helper
+asks in advance with a plain command line and exit codes. It is static
+and runs in any container. Build its image (`FROM scratch`, the binary
+only) as in [Agents](../workstation/agents.md#in-kubernetes), and mount
+it read-only with an image volume (on by default from Kubernetes 1.35;
+containerd 2.1 or CRI-O 1.33):
+
+```yaml
+spec:
+  containers:
+  - name: agent
+    volumeMounts:
+    - name: hallpass-request
+      mountPath: /opt/hallpass
+      readOnly: true
+  volumes:
+  - name: hallpass-request
+    image:
+      reference: <registry>/hallpass-request:<tag>
+```
+
+Without image volumes, copy it into the container's image instead
+(`COPY --from=<registry>/hallpass-request:<tag> /hallpass-request /usr/local/bin/`).
+Prefer either to an init container copying it to an `emptyDir`: the
+`emptyDir` would have to be writable, and the agent could replace the
+helper.
+
+hallpass asks about it like any other program: allow it in the policy,
+`allowExec: [/opt/hallpass/hallpass-request]`.
+
 ## Logs and Events
 
 The agent logs every request, answer and session

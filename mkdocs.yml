@@ -43,6 +43,7 @@ nav:
       - Install: workstation/install.md
       - Getting started: workstation/getting-started.md
       - Usage: workstation/usage.md
+      - Agents: workstation/agents.md
       - CLI reference: workstation/reference.md
       - Strict mode: workstation/strict.md
       - Use cases: workstation/use-cases.md

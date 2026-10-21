@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # hallpass-request, static with musl, alone in an image: mount it in a pod
-# with an image volume, or copy it from an init container (see
-# docs/workstation/agents.md). Build from this directory, for the
+# with an image volume, or COPY --from it into another image (see
+# docs/kubernetes/answer.md). Build from this directory, for the
 # machine's architecture or several:
 #
 #	docker build -t hallpass-request:dev cmd/hallpass-request

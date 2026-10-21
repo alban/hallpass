@@ -12,6 +12,8 @@ hallpass -- copilot      # or any command; no command: a shell
 - [Getting started](getting-started.md): a first session, step by step.
 - [Usage](usage.md): the default policy, programs, network, agent
   CLIs, over ssh.
+- [Agents](agents.md): let an agent ask in advance with
+  `hallpass-request`.
 - [CLI reference](reference.md): every flag.
 - [Strict mode](strict.md): enforce your answers in the kernel with
   BPF-LSM.
