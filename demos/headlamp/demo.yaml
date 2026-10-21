@@ -8,9 +8,10 @@ kind: HallpassPolicy
 metadata:
   name: demo
 spec:
-  allowPaths: [/workspace/**]
-  # busybox's shell and tools (kubectl exec sh, cat): not asked about.
-  allowExec: ["@busybox"]
+  rules: |
+    allow write /workspace/**
+    # busybox's shell and tools (kubectl exec sh, cat): not asked about.
+    allow exec @busybox
   prompt: true
   promptTimeout: 5m
 ---

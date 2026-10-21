@@ -73,8 +73,8 @@ Prefer either to an init container copying it to an `emptyDir`: the
 `emptyDir` would have to be writable, and the agent could replace the
 helper.
 
-hallpass asks about it like any other program: allow it in the policy,
-`allowExec: [/opt/hallpass/hallpass-request]`.
+hallpass asks about it like any other program: allow it in the policy's
+rules, `allow exec /opt/hallpass/hallpass-request`.
 
 ## Logs and Events
 

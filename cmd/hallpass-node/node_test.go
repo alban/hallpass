@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,22 +30,26 @@ import (
 func TestParsePolicy(t *testing.T) {
 	no := false
 	p, err := parsePolicy("agent", policy.Spec{
-		AllowPaths:    []string{"/workspace/**", "/tmp", "/home/agent/.cache/"},
-		DenyPaths:     []string{"/var/run/secrets/**"},
+		Rules: `allow write /workspace/**
+allow write /tmp/**   # scratch
+allow write /home/agent/.cache/**
+deny write /var/run/secrets/**
+`,
 		Prompt:        &no,
 		PromptTimeout: "30s",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := &Policy{Name: "agent", Policy: policy.Policy{
-		AllowPaths:    []string{"/workspace", "/tmp", "/home/agent/.cache"},
-		DenyPaths:     []string{"/var/run/secrets"},
-		PromptTimeout: 30 * time.Second,
-		Mediate:       seccomp.DefaultCategories,
-	}}
-	if !reflect.DeepEqual(p, want) {
-		t.Errorf("got %+v, want %+v", p, want)
+	var specs []string
+	for _, r := range p.Rules {
+		specs = append(specs, r.Spec())
+	}
+	if want := []string{"allow write /workspace/**", "allow write /tmp/**", "allow write /home/agent/.cache/**", "deny write /var/run/secrets/**"}; !slices.Equal(specs, want) {
+		t.Errorf("rules %q, want %q", specs, want)
+	}
+	if p.Name != "agent" || p.Prompt || p.PromptTimeout != 30*time.Second || p.Mediate != seccomp.DefaultCategories {
+		t.Errorf("got %+v", p)
 	}
 
 	p, err = parsePolicy("default", policy.Spec{})
@@ -52,31 +57,47 @@ func TestParsePolicy(t *testing.T) {
 		t.Errorf("defaults: %+v, %v", p, err)
 	}
 
-	p, err = parsePolicy("net", policy.Spec{Mediate: []string{"write", "exec", "connect"}, AllowNet: []string{"all"}, DenyNet: []string{"tcp:169.254.169.254"}})
-	if err != nil || p.Mediate != seccomp.AllCategories || len(p.AllowNet) != 1 || !p.AllowNet[0].AnyNet || p.DenyNet[0].NetString() != "tcp:169.254.169.254" {
+	p, err = parsePolicy("net", policy.Spec{Mediate: []string{"write", "exec", "connect"}, Rules: "allow connect all\ndeny connect tcp:169.254.169.254"})
+	if err != nil || p.Mediate != seccomp.AllCategories || len(p.Rules) != 2 || !p.Rules[0].Object.AnyNet || p.Rules[1].Object.NetString() != "tcp:169.254.169.254" {
 		t.Errorf("network: %+v, %v", p, err)
 	}
 
 	for _, bad := range []policy.Spec{
-		{AllowPaths: []string{"workspace/**"}},
-		{AllowPaths: []string{"/work*/x"}},
-		{DenyPaths: []string{"/a/**/b"}},
-		{AskPaths: []string{"workspace/.git"}},
+		{Rules: "allow write workspace/**"},
+		{Rules: "allow write /work*/x"},
+		{Rules: "deny write /a/**/b"},
+		{Rules: "allow write $HOME/x"},
+		{Rules: "allow write /x for 1h"},
 		{PromptTimeout: "soon"},
 		{PromptTimeout: "-1s"},
 		{Mediate: []string{"dns"}},
 		{Mediate: []string{}},
-		{AllowNet: []string{"all"}},
-		{Mediate: []string{"connect"}, DenyNet: []string{"tcp:nowhere"}},
+		{Rules: "allow connect all"},
+		{Rules: "deny exec /usr/bin/curl", Mediate: []string{"write"}},
+		{Mediate: []string{"connect"}, Rules: "deny connect tcp:nowhere"},
 	} {
 		if _, err := parsePolicy("bad", bad); err == nil {
 			t.Errorf("%+v: no error", bad)
 		}
 	}
+	// The fields rules replaced are refused, not ignored: a denyNet that
+	// silently did nothing would fail open.
+	for _, old := range []policy.Spec{
+		{AllowPaths: []string{"/workspace/**"}},
+		{Mediate: []string{"write", "connect"}, DenyNet: []string{"169.254.169.254"}},
+		{AllowExec: []string{"@coreutils"}},
+	} {
+		if _, err := parsePolicy("old", old); err == nil || !strings.Contains(err.Error(), "replaced by rules") {
+			t.Errorf("%+v: %v", old, err)
+		}
+	}
 }
 
 func TestDefaultsFor(t *testing.T) {
-	p, _ := parsePolicy("agent", policy.Spec{AllowPaths: []string{"/workspace/**"}, DenyPaths: []string{"/workspace/.git/**"}, AskPaths: []string{"/workspace/secret"}})
+	p, err := parsePolicy("agent", policy.Spec{Rules: "allow write /workspace/**\ndeny write /workspace/.git/**\nask write /workspace/secret/**"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	rs := defaultsFor(p, metadata{Home: "/home/agent"}, seccomp.DefaultCategories, 0).Rules()
 	var allow, deny, ask []string
 	for _, r := range rs {
@@ -105,7 +126,7 @@ func TestDefaultsFor(t *testing.T) {
 		t.Errorf("ask: %v", ask)
 	}
 
-	p, _ = parsePolicy("net", policy.Spec{Mediate: []string{"write", "connect"}, AllowNet: []string{"unix:@x"}, DenyNet: []string{"tcp:*:22"}, AskNet: []string{"unix:@xy"}})
+	p, _ = parsePolicy("net", policy.Spec{Mediate: []string{"write", "connect"}, Rules: "allow connect unix:@x\ndeny connect tcp:*:22\nask connect unix:@xy"})
 	var nets []string
 	for _, r := range defaultsFor(p, metadata{}, p.Mediate, 0).Rules() {
 		if r.Object.Path == nil {
@@ -143,11 +164,11 @@ func TestDefaultsForExec(t *testing.T) {
 	if _, ok := got[sh]; len(got) != 1 || !ok {
 		t.Errorf("command only: %v, want %s", got, sh)
 	}
-	if got := execs(policy.Spec{AllowExec: []string{"@coreutils"}}); got[ls] != "@coreutils" {
+	if got := execs(policy.Spec{Rules: "allow exec @coreutils"}); got[ls] != "@coreutils" {
 		t.Errorf("@coreutils: %s not in %v", ls, got)
 	}
 	// A policy's group, resolved in the container too.
-	got = execs(policy.Spec{Groups: map[string][]string{"@mine": {"/bin/ls"}}, AllowExec: []string{"@mine"}})
+	got = execs(policy.Spec{Groups: map[string][]string{"@mine": {"/bin/ls"}}, Rules: "allow exec @mine"})
 	if len(got) != 2 || got[ls] != "@mine" {
 		t.Errorf("@mine: %v, want %s", got, ls)
 	}

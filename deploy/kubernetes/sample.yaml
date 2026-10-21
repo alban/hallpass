@@ -10,9 +10,11 @@ kind: HallpassPolicy
 metadata:
   name: agent
 spec:
-  allowPaths: [/workspace/**, /tmp/**]
-  denyPaths: [/var/run/secrets/**]
-  allowExec: ["@busybox"]
+  rules: |
+    allow write /workspace/**
+    allow write /tmp/**
+    deny write /var/run/secrets/**
+    allow exec @busybox
   prompt: true
   promptTimeout: 5m
 ---

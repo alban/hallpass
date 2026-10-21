@@ -25,29 +25,66 @@ kind: HallpassPolicy
 metadata:
   name: agent
 spec:
-  allowPaths: [/workspace/**, /tmp/**]
-  denyPaths: [/var/run/secrets/**]
-  askPaths: [/workspace/.git/hooks/**]
   prompt: true         # false: deny without asking
   promptTimeout: 5m    # no answer in time: deny
   mediate: [write, exec, connect]  # default: write, exec
-  allowNet: ["tcp:*:443", "unix:@my-service"]
-  denyNet: ["169.254.169.254"]
-  askNet: ["tcp:10.0.0.1:22"]
-  allowExec: [/usr/bin/make, /usr/local/go/bin/**, "@shells", "@git", "@build"]
-  denyExec: [/usr/bin/curl]
   groups:
     "@build": [/usr/bin/make, /usr/bin/cc, /usr/local/go/bin/**]
+  rules: |
+    allow write /workspace/**
+    allow write /tmp/**
+    deny  write /var/run/secrets/**
+    ask   write /workspace/.git/hooks/**   # hooks run outside the sandbox
+    allow exec  /usr/bin/make
+    allow exec  /usr/local/go/bin/**
+    allow exec  @shells
+    allow exec  @git
+    allow exec  @build
+    deny  exec  /usr/bin/curl
+    allow connect tcp:*:443
+    allow connect unix:@my-service
+    ask   connect tcp:10.0.0.1:22
+    deny  connect 169.254.169.254
 ```
 
-- `allowPaths` and `denyPaths` are paths in the container: `/workspace/**`
-  and `/workspace` both mean `/workspace` and everything under it. Other
-  globs and relative paths are rejected. Deny wins.
-- `askPaths`: paths asked about even inside what `allowPaths` allows
-  (`--ask-path`), same syntax. The most specific rule decides, an ask
-  wins over an allow as specific, and a deny wins over both.
-- Also allowed: `/dev/null` and the other harmless devices, the
-  terminal (`/dev/tty`, `/dev/pts`) and `/dev/termination-log`.
+`rules` has one rule per line, in the syntax of `hallpass answer add`
+and of [rule files](../workstation/usage.md#rule-files); `#` starts a comment.
+Paths are the container's, with no variables (`$HOME`). The most
+specific rule decides, an ask wins over an allow as specific, and a deny
+wins over both. A pod naming a policy with an invalid rule fails to
+start, as for a missing policy.
+
+- `write PATH`: `/workspace/**` is `/workspace` and everything under it,
+  `/workspace/file` that file only. Other globs and relative paths are
+  rejected. Also allowed, without a rule: `/dev/null` and the other
+  harmless devices, the terminal (`/dev/tty`, `/dev/pts`) and
+  `/dev/termination-log`.
+- `exec PROGRAM`: programs in the container, like paths:
+  `/usr/bin/make` is that program, `/opt/tools/**` every program below
+  `/opt/tools`. `allow exec @NAME` allows a group of programs, resolved
+  in the container: `@shells`, `@coreutils`, `@search`, `@git`,
+  `@busybox` (see [Programs](../workstation/usage.md#programs)), or one of
+  `groups`; for a busybox image, `allow exec @busybox` lets its shell
+  and applets run. They need `exec` in `mediate`. Also allowed, by a
+  fixed rule: the container's command (its first argument, looked up in
+  the container's `$PATH`), with any arguments, any number of times,
+  also through `kubectl exec`. Other programs are asked about, and a
+  prompt about a program of a group offers the group. Programs are
+  matched by path only: an allowed interpreter runs any code it is given
+  (`python3 -c`, `bash -c`), `ld.so /path/to/program` runs a program
+  without executing it, a copy of a program under an allowed path runs,
+  busybox applets installed as symlinks are all the same program, a
+  `binfmt_misc` handler needs an allow in strict mode (it is never
+  asked about), and a `memfd` is never allowed for good. See
+  [Programs](../workstation/usage.md#programs) for details.
+- `connect DESTINATION`: destinations in the `--allow-net` syntax
+  ([Network](../workstation/usage.md#network-experimental)); `all` is every
+  destination, unix sockets included. They need `connect` in `mediate`.
+  Loopback and unix listeners started in the container are allowed
+  without asking.
+
+The other fields:
+
 - `prompt` (default `true`): ask about the other writes and programs. With
   `false`, they are denied at once, and so are requests made in advance.
 - `promptTimeout` (default `5m`): a request with no answer by then is
@@ -60,39 +97,17 @@ spec:
   A request made in advance fails at once with `ENOSYS` when its
   category is left out (`write`, `exec` or `connect`, as the request's
   operation).
-- `allowNet` and `denyNet`: destinations in the `--allow-net`
-  syntax; `all` is every destination, unix sockets included. They need
-  `connect` in `mediate`. Deny wins. Loopback and unix listeners
-  started in the container are allowed without asking.
-- `askNet`: destinations asked about even inside what `allowNet`
-  allows (`--ask-net`). The most specific rule decides, an ask wins over
-  an allow as specific, and a deny wins over both. Needs `connect` in
-  `mediate`.
-- `allowExec` and `denyExec`: programs in the container, like `allowPaths`:
-  `/usr/bin/make` is that program, `/opt/tools/**` every program below
-  `/opt/tools`. `allowExec` also takes groups of programs, resolved in
-  the container: `@shells`, `@coreutils`, `@search`, `@git`, `@busybox`
-  (see [Programs](../workstation/usage.md#programs)); for a busybox
-  image, `allowExec: ["@busybox"]` lets its shell and applets run. They
-  need `exec` in `mediate`. Deny wins. Also allowed, by a fixed rule:
-  the container's command (its first argument, looked up in the
-  container's `$PATH`), with any arguments, any number of times, also
-  through `kubectl exec`. Other programs are asked about, and a prompt
-  about a program of a group offers the group. Programs are
-  matched by path only: an allowed interpreter runs any code it is given
-  (`python3 -c`, `bash -c`), `ld.so /path/to/program` runs a program
-  without executing it, a copy of a program under an allowed path runs,
-  busybox applets installed as symlinks are all the same program, a
-  `binfmt_misc` handler needs an allow in strict mode (it is never
-  asked about), and a `memfd` is never allowed for good. See
-  [Programs](../workstation/usage.md#programs) for details.
 - `groups`: groups of programs of the policy's own, by name: a new
   group (`@build` above), or a replacement for the built-in group of the
-  same name. Their programs are paths in the container, as in
-  `denyExec`, resolved when the container starts. `allowExec` names
+  same name. Their programs are paths in the container, as in `exec`
+  rules, resolved when the container starts. `allow exec @NAME` allows
   them, and a prompt about one of their programs offers the group. Names
   are `@`, a lowercase letter, then lowercase letters, digits or `-`.
   They need `exec` in `mediate`.
+
+The fields `rules` replaced (`allowPaths`, `denyPaths`, `askPaths`,
+`allowNet`, `denyNet`, `askNet`, `allowExec`, `denyExec`) are refused:
+the API server rejects a policy that has them.
 
 Policy changes apply to containers started afterwards: a running
 session keeps the policy it started with.

@@ -33,32 +33,19 @@ spec:
             spec:
               type: object
               properties:
-                allowPaths:
+                rules:
                   description: >-
-                    Container paths writable without asking. "/workspace/**"
-                    (or "/workspace") is the tree under /workspace.
-                  type: array
-                  items:
-                    type: string
-                    pattern: '^/[^*?\[]*(/\*\*)?$'
-                denyPaths:
-                  description: >-
-                    Container paths denied without asking, even under an
-                    allowed tree. Same syntax as allowPaths.
-                  type: array
-                  items:
-                    type: string
-                    pattern: '^/[^*?\[]*(/\*\*)?$'
-                askPaths:
-                  description: >-
-                    Container paths asked about even inside a less specific
-                    allowPaths entry (e.g. /workspace/.git in an allowed
-                    /workspace); a more specific allowPaths entry still
-                    allows. Same syntax as allowPaths.
-                  type: array
-                  items:
-                    type: string
-                    pattern: '^/[^*?\[]*(/\*\*)?$'
+                    The policy's rules, one per line: "allow write
+                    /workspace/**", "deny write /workspace/.git/**", "ask
+                    write /workspace/secret", "allow exec /usr/bin/make",
+                    "allow exec @git", "deny connect 169.254.169.254",
+                    "allow connect tcp:*:443"... (# starts a comment).
+                    Container paths, without variables. exec rules need
+                    exec in mediate, connect rules connect; the rules are
+                    checked by hallpass-node, which refuses a pod naming a
+                    policy with an invalid rule.
+                  type: string
+                  maxLength: 65536
                 prompt:
                   description: >-
                     Ask about writes and programs no rule decides (default
@@ -79,59 +66,54 @@ spec:
                   items:
                     type: string
                     enum: [write, exec, connect]
+                allowPaths:
+                  description: Replaced by rules; refused.
+                  type: array
+                  items:
+                    type: string
+                denyPaths:
+                  description: Replaced by rules; refused.
+                  type: array
+                  items:
+                    type: string
+                askPaths:
+                  description: Replaced by rules; refused.
+                  type: array
+                  items:
+                    type: string
                 allowNet:
-                  description: >-
-                    Network destinations reached without asking: "all"
-                    (every destination, unix sockets included),
-                    "[tcp:|udp:]ADDR[/N][:PORT[-PORT]]" (ADDR "*" for any,
-                    IPv6 in brackets), "unix:/path", "unix:/dir/**",
-                    "unix:@name", "unix:@prefix*". Needs connect in mediate.
+                  description: Replaced by rules; refused.
                   type: array
                   items:
                     type: string
                 denyNet:
-                  description: >-
-                    Network destinations denied without asking, even if
-                    allowed. Same syntax as allowNet.
+                  description: Replaced by rules; refused.
                   type: array
                   items:
                     type: string
                 askNet:
-                  description: >-
-                    Network destinations asked about even inside a less
-                    specific allowNet entry (e.g. 10.0.0.1:22 in an
-                    allowed 10.0.0.0/8); a more specific allowNet
-                    entry still allows. Same syntax as allowNet.
+                  description: Replaced by rules; refused.
                   type: array
                   items:
                     type: string
                 allowExec:
-                  description: >-
-                    Container programs run without asking, besides the
-                    container's command (its args[0]): "/usr/bin/make" (that
-                    program), "/opt/tools/**" (every program below
-                    /opt/tools), or a built-in group of programs, resolved in
-                    the container: "@shells", "@coreutils", "@search", "@git",
-                    "@busybox", or one of groups. Needs exec in mediate.
+                  description: Replaced by rules; refused.
                   type: array
                   items:
                     type: string
-                    pattern: '^(/[^*?\[]*(/\*\*)?|@[a-z][a-z0-9-]*)$'
                 denyExec:
-                  description: >-
-                    Container programs never run, even if allowed. Same
-                    syntax as allowExec, without groups.
+                  description: Replaced by rules; refused.
                   type: array
                   items:
                     type: string
-                    pattern: '^/[^*?\[]*(/\*\*)?$'
                 groups:
                   description: >-
                     Groups of container programs, by name ("@tools"): a new
                     group, or the replacement of the built-in group of the
-                    same name. Programs as in denyExec. A prompt about a
-                    program of a group offers the group; allowExec names
-                    it. Needs exec in mediate.
+                    same name. Programs are container paths: "/usr/bin/make" or
+                    "/opt/tools/**". A prompt about a program of a group
+                    offers the group; "allow exec @name" in rules allows it.
+                    Needs exec in mediate.
                   type: object
                   maxProperties: 64
                   additionalProperties:
@@ -147,11 +129,14 @@ spec:
                         lowercase letters, digits or -
               x-kubernetes-validations:
                 - rule: >-
-                    (!has(self.allowNet) && !has(self.denyNet) &&
-                    !has(self.askNet)) ||
-                    (has(self.mediate) && 'connect' in self.mediate)
-                  message: allowNet, denyNet and askNet need connect in mediate
+                    !has(self.allowPaths) && !has(self.denyPaths) &&
+                    !has(self.askPaths) && !has(self.allowNet) &&
+                    !has(self.denyNet) && !has(self.askNet) &&
+                    !has(self.allowExec) && !has(self.denyExec)
+                  message: >-
+                    allowPaths, denyPaths, askPaths, allowNet, denyNet,
+                    askNet, allowExec and denyExec are replaced by rules,
+                    one rule per line ("allow write /workspace/**")
                 - rule: >-
-                    (!has(self.allowExec) && !has(self.denyExec) && !has(self.groups)) ||
-                    !has(self.mediate) || 'exec' in self.mediate
-                  message: allowExec, denyExec and groups need exec in mediate
+                    !has(self.groups) || !has(self.mediate) || 'exec' in self.mediate
+                  message: groups need exec in mediate

@@ -26,6 +26,11 @@ type Policy struct {
 
 // parsePolicy validates spec, the HallpassPolicy name.
 func parsePolicy(name string, spec policy.Spec) (*Policy, error) {
+	if f := spec.Structured(); f != "" {
+		// Kept in the CRD's schema so that the API server does not
+		// prune them silently: a lost denyNet would fail open.
+		return nil, fmt.Errorf("policy %s: %s: replaced by rules (one rule per line, as \"allow write /workspace/**\")", name, f)
+	}
 	p, err := spec.Validate()
 	if err != nil {
 		return nil, fmt.Errorf("policy %s: %w", name, err)
@@ -75,6 +80,14 @@ func defaultsFor(p *Policy, md metadata, cats seccomp.Category, pid int) *defaul
 		// many images.
 		pol.AllowExec = inContainer(pid, pol.AllowExec)
 		pol.DenyExec = inContainer(pid, pol.DenyExec)
+		rs := make([]rules.Rule, len(pol.Rules))
+		for i, r := range pol.Rules {
+			if r.Ops == rules.OpExec && r.Object.Path != nil {
+				r.Object.Path = &inContainer(pid, []rules.PathMatch{*r.Object.Path})[0]
+			}
+			rs[i] = r
+		}
+		pol.Rules = rs
 	}
 	return pol.Defaults(c)
 }

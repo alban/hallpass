@@ -152,8 +152,11 @@ kind: HallpassPolicy
 metadata:
   name: agent
 spec:
-  allowPaths: [/workspace/**, /tmp/**, /home/agent/.cache/**]
-  denyPaths: [/var/run/secrets/**]
+  rules: |
+    allow write /workspace/**
+    allow write /tmp/**
+    allow write /home/agent/.cache/**
+    deny write /var/run/secrets/**
   prompt: true         # false: deny without asking (audit-only pods)
   promptTimeout: 5m    # no answer in time: deny
 ```
