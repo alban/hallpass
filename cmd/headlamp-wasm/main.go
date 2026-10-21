@@ -50,6 +50,7 @@ import (
 	pb "github.com/alban/hallpass/api/session/v1"
 	"github.com/alban/hallpass/internal/nodeclient"
 	"github.com/alban/hallpass/internal/rulepb"
+	"google.golang.org/grpc/status"
 )
 
 func main() {
@@ -242,7 +243,8 @@ func promise(f func() error) js.Value {
 		go func() {
 			defer executor.Release()
 			if err := f(); err != nil {
-				reject.Invoke(js.Global().Get("Error").New(err.Error()))
+				// The server's message, without "rpc error: code = ...".
+				reject.Invoke(js.Global().Get("Error").New(status.Convert(err).Message()))
 				return
 			}
 			resolve.Invoke()
