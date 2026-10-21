@@ -240,18 +240,30 @@ func (s *service) Apply(ctx context.Context, d *pb.Decision) (*pb.ApplyReply, er
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	removed, err := checkRules(e, &md)
+	gen, err := ApplyRules(e.m, e.sess, md)
 	if err != nil {
 		return nil, err
 	}
-	gen, err := e.m.Apply(md)
-	if err != nil {
-		return nil, toStatus(err)
-	}
-	if len(md.AddRules)+len(removed) > 0 {
-		e.sess.RulesChanged(md.Client, md.AddRules, removed)
-	}
 	return &pb.ApplyReply{Generation: gen}, nil
+}
+
+// ApplyRules applies d to m like Apply does, for clients in the session's
+// own process: the rules it adds and removes are checked with sess's policy
+// first. Errors are gRPC statuses.
+func ApplyRules(m *monitor.Monitor, sess Session, d monitor.Decision) (uint64, error) {
+	e := entry{m: m, sess: sess}
+	removed, err := checkRules(e, &d)
+	if err != nil {
+		return 0, err
+	}
+	gen, err := m.Apply(d)
+	if err != nil {
+		return 0, toStatus(err)
+	}
+	if len(d.AddRules)+len(removed) > 0 {
+		sess.RulesChanged(d.Client, d.AddRules, removed)
+	}
+	return gen, nil
 }
 
 // checkRules checks the rules d adds and removes with the session's policy,
