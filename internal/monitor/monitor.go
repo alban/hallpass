@@ -166,6 +166,11 @@ type Decision struct {
 	// TimedOut: the verdicts deny requests nobody answered in time. An
 	// advance request then fails with ETIMEDOUT rather than EPERM.
 	TimedOut bool
+	// Check, if set, is called by Apply with the rules d adds, validated
+	// and with their paths resolved, and the rules d removes, before
+	// anything changes: an error fails Apply. It judges the very rules
+	// applied, atomically. The Monitor is locked: Check must not call it.
+	Check func(add, removed []rules.Rule) error
 }
 
 // Verdict allows or denies one request, once. In strict mode, an allow is
@@ -462,9 +467,13 @@ func (m *Monitor) nextRules(old []rules.Rule, d Decision) ([]rules.Rule, bool, e
 	now := m.now()
 	next := make([]rules.Rule, 0, len(old)+len(d.AddRules))
 	changed := len(d.AddRules) > 0
+	var added, removed []rules.Rule
 	for _, r := range old {
 		if rmID[r.ID] && r.Set == ProtectedSet {
 			return nil, false, fmt.Errorf("rule %d: %w", r.ID, ErrProtected)
+		}
+		if rmID[r.ID] || rmSet[r.Set] {
+			removed = append(removed, r)
 		}
 		if rmID[r.ID] || rmSet[r.Set] || r.Expired(now) {
 			changed = true
@@ -480,6 +489,12 @@ func (m *Monitor) nextRules(old []rules.Rule, d Decision) ([]rules.Rule, bool, e
 		id++
 		r.ID = id
 		next = append(next, r)
+		added = append(added, r)
+	}
+	if d.Check != nil {
+		if err := d.Check(added, removed); err != nil {
+			return nil, false, err
+		}
 	}
 	m.nextRuleID = id
 	return next, changed, nil

@@ -5,6 +5,8 @@ package sessionapi
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -125,5 +127,22 @@ func TestApplyRules(t *testing.T) {
 	}
 	if _, err := c.Apply(ctx, &pb.Decision{AddRules: []*pb.Rule{{Ops: uint32(rules.OpAll), Object: &pb.ObjectMatch{Kind: &pb.ObjectMatch_Path{Path: &pb.PathMatch{Path: "rel"}}}}}}); status.Code(err) != codes.InvalidArgument {
 		t.Errorf("relative path: %v", err)
+	}
+
+	// A narrower path is judged once resolved: through a symlink to "/",
+	// it is not narrower.
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/", filepath.Join(dir, "root")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Apply(monitor.Decision{AddRules: []rules.Rule{{Ops: rules.OpAll, Verdict: rules.Allow, Object: rules.ObjectMatch{Path: &rules.PathMatch{Path: dir, Tree: true}}, Set: defaults.Set}}}); err != nil {
+		t.Fatal(err)
+	}
+	d = &pb.Decision{RemoveRules: []uint64{id("allow path " + dir + "/**")}, AddRules: []*pb.Rule{spec(t, "allow path "+dir+"/root/**")}}
+	if _, err := c.Apply(ctx, d); status.Code(err) != codes.PermissionDenied {
+		t.Errorf("narrowing through a symlink: %v", err)
 	}
 }

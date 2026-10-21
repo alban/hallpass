@@ -12,7 +12,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -78,8 +77,9 @@ type Session interface {
 	// monitor.ErrClosed if the request is not pending.
 	Answer(id uint64, answer, client string) error
 	// CheckRules checks that client may remove the rules removed and add
-	// the rules add (checked by the monitor already); it fails with
-	// answer.ErrTooWide if the session's policy does not let it.
+	// the rules add (validated by the monitor already, their paths
+	// resolved); it fails with answer.ErrTooWide if the session's policy
+	// does not let it. The monitor is locked: CheckRules must not call it.
 	CheckRules(client string, add, removed []rules.Rule) error
 	// RulesChanged reports that client removed and added rules, after
 	// CheckRules.
@@ -251,51 +251,45 @@ func (s *service) Apply(ctx context.Context, d *pb.Decision) (*pb.ApplyReply, er
 // own process: the rules it adds and removes are checked with sess's policy
 // first. Errors are gRPC statuses.
 func ApplyRules(m *monitor.Monitor, sess Session, d monitor.Decision) (uint64, error) {
-	e := entry{m: m, sess: sess}
-	removed, err := checkRules(e, &d)
-	if err != nil {
+	if len(d.AddRules)+len(d.RemoveRules)+len(d.RemoveSets) == 0 {
+		gen, err := m.Apply(d)
+		if err != nil {
+			return 0, toStatus(err)
+		}
+		return gen, nil
+	}
+	if err := checkRules(m, d.AddRules); err != nil {
 		return 0, err
+	}
+	var added, removed []rules.Rule
+	d.Check = func(add, rm []rules.Rule) error {
+		added, removed = add, rm
+		return sess.CheckRules(d.Client, add, rm)
 	}
 	gen, err := m.Apply(d)
 	if err != nil {
 		return 0, toStatus(err)
 	}
-	if len(d.AddRules)+len(removed) > 0 {
-		sess.RulesChanged(d.Client, d.AddRules, removed)
+	if len(added)+len(removed) > 0 {
+		sess.RulesChanged(d.Client, added, removed)
 	}
 	return gen, nil
 }
 
-// checkRules checks the rules d adds and removes with the session's policy,
-// and returns those it removes. An allow it adds may rely on an allow it
-// removes (an edit narrowing it): without IfGeneration, d then applies to
-// the rules checked only.
-func checkRules(e entry, d *monitor.Decision) ([]rules.Rule, error) {
-	if len(d.AddRules)+len(d.RemoveRules)+len(d.RemoveSets) == 0 {
-		return nil, nil
-	}
-	for i := range d.AddRules {
-		if err := e.m.Check(&d.AddRules[i]); err != nil {
+// checkRules validates the rules a client adds, so that a malformed rule is
+// InvalidArgument. Apply checks them again, with the session's policy, as
+// it resolves their paths: a path the sandbox changes in between cannot
+// slip through.
+func checkRules(m *monitor.Monitor, add []rules.Rule) error {
+	for _, r := range add {
+		if err := m.Check(&r); err != nil {
 			if s := toStatus(err); status.Code(s) != codes.Unknown {
-				return nil, s
+				return s
 			}
-			return nil, status.Error(codes.InvalidArgument, err.Error())
+			return status.Error(codes.InvalidArgument, err.Error())
 		}
 	}
-	_, rs, gen := e.m.Snapshot()
-	var removed []rules.Rule
-	for _, r := range rs {
-		if slices.Contains(d.RemoveRules, r.ID) || slices.Contains(d.RemoveSets, r.Set) {
-			removed = append(removed, r)
-		}
-	}
-	if err := e.sess.CheckRules(d.Client, d.AddRules, removed); err != nil {
-		return nil, toStatus(err)
-	}
-	if d.IfGeneration == 0 && len(removed) > 0 && slices.ContainsFunc(d.AddRules, func(r rules.Rule) bool { return r.Verdict == rules.Allow }) {
-		d.IfGeneration = gen
-	}
-	return removed, nil
+	return nil
 }
 
 func (s *service) Answer(ctx context.Context, a *pb.AnswerRequest) (*pb.AnswerReply, error) {
