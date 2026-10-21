@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -63,6 +64,61 @@ func TestDial(t *testing.T) {
 	}
 	if _, err := c.Answer(context.Background(), &pb.AnswerRequest{Request: 1, Answer: "once"}); err == nil {
 		t.Error("Answer of an unknown request succeeded")
+	}
+}
+
+// slowSession answers after a while, telling started when asked.
+type slowSession struct {
+	fakeSession
+	started chan struct{}
+}
+
+func (s slowSession) Answer(uint64, string, string) error {
+	close(s.started)
+	time.Sleep(200 * time.Millisecond)
+	return nil
+}
+
+// TestCloseFinishesCalls: an answer in progress when the server closes
+// (it let the command exit) still gets its reply, and Close does not wait
+// for the event streams.
+func TestCloseFinishesCalls(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	m, err := monitor.New(monitor.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := slowSession{started: make(chan struct{})}
+	s, err := Listen(m, sess)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	conn, c, err := Dial(s.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	ev, err := c.Events(context.Background(), &pb.EventsRequest{Snapshot: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ev.Recv(); err != nil {
+		t.Fatal(err)
+	}
+	answered := make(chan error, 1)
+	go func() {
+		_, err := c.Answer(context.Background(), &pb.AnswerRequest{Request: 1, Answer: "once"})
+		answered <- err
+	}()
+	<-sess.started
+	start := time.Now()
+	s.Close()
+	if d := time.Since(start); d >= closeGrace {
+		t.Errorf("Close took %v: it waited for the event stream", d)
+	}
+	if err := <-answered; err != nil {
+		t.Errorf("Answer in progress at Close: %v", err)
 	}
 }
 

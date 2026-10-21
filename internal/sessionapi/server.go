@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
@@ -92,6 +94,9 @@ type Server struct {
 	service
 	srv  *grpc.Server
 	path string
+	// quit ends the streams (Close).
+	quit      chan struct{}
+	closeOnce sync.Once
 }
 
 // entry is a served session.
@@ -121,7 +126,7 @@ func Listen(m *monitor.Monitor, sess Session) (*Server, error) {
 		return nil, err
 	}
 	e := entry{m: m, sess: sess}
-	s := &Server{path: path}
+	s := &Server{path: path, quit: make(chan struct{})}
 	s.lookup = func(context.Context) (entry, error) { return e, nil }
 	s.list = func() []*pb.SessionInfo { return []*pb.SessionInfo{sess.Info()} }
 	s.srv = grpc.NewServer(
@@ -136,7 +141,16 @@ func Listen(m *monitor.Monitor, sess Session) (*Server, error) {
 			if err := checkAuth(ss.Context()); err != nil {
 				return err
 			}
-			return h(srv, ss)
+			ctx, cancel := context.WithCancel(ss.Context())
+			defer cancel()
+			go func() {
+				select {
+				case <-s.quit:
+					cancel()
+				case <-ctx.Done():
+				}
+			}()
+			return h(srv, &stream{ServerStream: ss, ctx: ctx})
 		}),
 	)
 	pb.RegisterSessionServer(s.srv, &s.service)
@@ -147,11 +161,37 @@ func Listen(m *monitor.Monitor, sess Session) (*Server, error) {
 // Path returns the socket path.
 func (s *Server) Path() string { return s.path }
 
-// Close stops serving and removes the socket.
+// Close stops serving and removes the socket. The calls in progress
+// finish first: an answer that lets the command exit still gets its
+// reply. The streams (events, prompts) are ended; whatever is left after
+// closeGrace is cut.
 func (s *Server) Close() {
-	s.srv.Stop()
-	_ = os.Remove(s.path)
+	s.closeOnce.Do(func() {
+		close(s.quit)
+		done := make(chan struct{})
+		go func() {
+			s.srv.GracefulStop()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(closeGrace):
+			s.srv.Stop()
+		}
+		_ = os.Remove(s.path)
+	})
 }
+
+// closeGrace bounds how long Close waits for the calls in progress.
+const closeGrace = time.Second
+
+// stream is a grpc.ServerStream with its own context, ended by Close.
+type stream struct {
+	grpc.ServerStream
+	ctx context.Context
+}
+
+func (s *stream) Context() context.Context { return s.ctx }
 
 func (s *service) Info(ctx context.Context, _ *pb.InfoRequest) (*pb.SessionInfo, error) {
 	e, err := s.lookup(ctx)
