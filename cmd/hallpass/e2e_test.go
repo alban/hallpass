@@ -360,11 +360,17 @@ type prompter struct {
 func dialPrompts(t *testing.T, e env, c *exec.Cmd) prompter {
 	t.Helper()
 	sock := fmt.Sprintf("%s/hallpass/%d.sock", e.runtime, c.Process.Pid)
-	for i := 0; i < 100; i++ {
-		if _, err := os.Stat(sock); err == nil {
-			conn, client, err := sessionapi.Dial(sock)
-			if err != nil {
+	start := time.Now()
+	var err error
+	for time.Since(start) < 20*time.Second {
+		if _, err = os.Stat(sock); err == nil {
+			conn, client, derr := sessionapi.Dial(sock)
+			if derr != nil {
+				err = derr
 				break
+			}
+			if d := time.Since(start); d > 2*time.Second {
+				t.Logf("the session socket took %v to appear", d)
 			}
 			t.Cleanup(func() { conn.Close() })
 			return prompter{t, client}
@@ -372,7 +378,17 @@ func dialPrompts(t *testing.T, e env, c *exec.Cmd) prompter {
 		time.Sleep(50 * time.Millisecond)
 	}
 	c.Process.Kill()
-	t.Fatalf("dial %s", sock)
+	werr := c.Wait()
+	ents, _ := os.ReadDir(filepath.Dir(sock))
+	var names []string
+	for _, ent := range ents {
+		names = append(names, ent.Name())
+	}
+	var out string
+	if s, ok := c.Stdout.(fmt.Stringer); ok {
+		out = s.String()
+	}
+	t.Fatalf("dial %s after %v: %v; hallpass: %v; %s holds %q; output:\n%s", sock, time.Since(start), err, werr, filepath.Dir(sock), names, out)
 	return prompter{}
 }
 
@@ -706,7 +722,9 @@ func TestWait(t *testing.T) {
 		t.Run(wait, func(t *testing.T) {
 			e := newEnv(t)
 			logf := e.root + "/log.jsonl"
-			script := `(sleep 3; echo x > "$HOME/late") </dev/null >/dev/null 2>&1 & exit 3`
+			// The limits leave room for hallpass's start, which takes
+			// seconds in the CI's VM (stats over 9p).
+			script := `(sleep 6; echo x > "$HOME/late") </dev/null >/dev/null 2>&1 & exit 3`
 			c := e.cmd(script, "--prompt=deny", "--wait="+wait, "--log="+logf)
 			start := time.Now()
 			out, err := c.CombinedOutput()
@@ -714,18 +732,18 @@ func TestWait(t *testing.T) {
 				t.Fatalf("exit: %v (want 3)\n%s", err, out)
 			}
 			took := time.Since(start)
-			time.Sleep(3500 * time.Millisecond) // let a --wait=main orphan try
+			time.Sleep(6500 * time.Millisecond) // let a --wait=main orphan try
 			l, logged := findLog(readLog(t, logf), e.home+"/late")
 			switch wait {
 			case "main":
-				if took > 2*time.Second {
+				if took > 5*time.Second {
 					t.Errorf("--wait=main took %v: waited for the background process", took)
 				}
 				if logged {
 					t.Errorf("--wait=main logged the background write: %+v", l)
 				}
 			case "all":
-				if took < 3*time.Second {
+				if took < 6*time.Second {
 					t.Errorf("--wait=all returned after %v, before the background process", took)
 				}
 				if !logged || l.Decision != "deny" {
