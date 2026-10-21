@@ -117,7 +117,7 @@ While a prompt is pending, the paused thread only reacts to fatal signals (Linux
 
 ## Asking in advance
 
-A program that knows it will write a folder later, for example an agent about to start a long task while you are still there, can ask for it beforehand, so that you are not prompted while you are away. The [`hallpass-request`](agents.md#hallpass-request) helper does it with a plain command line and exit codes (`hallpass-request write '/home/me/.cache/build/**' --for 30m --reason 'cache object files'`); underneath, and for scripts that do without it, it runs a magic path that names what it wants:
+A program that knows it will write a folder later, run a program or reach a network destination, for example an agent about to start a long task while you are still there, can ask for it beforehand, so that you are not prompted while you are away. The [`hallpass-request`](agents.md#hallpass-request) helper does it with a plain command line and exit codes (`hallpass-request write '/home/me/.cache/build/**' --for 30m --reason 'cache object files'`); underneath, and for scripts that do without it, it runs a magic path that names what it wants:
 
 ```console
 exec '/proc/self/hallpass/request?op=write&path=/home/me/.cache/build/**&for=30m&reason=cache+object+files'
@@ -133,18 +133,21 @@ The request shows a card in every client (terminal, desktop notification, `hallp
  [g] grant for 30m  [d] deny  [Esc] dismiss
 ```
 
-`grant` adds the same rule as an answer to a prompt, with an expiry: Ctrl-] lists it, the web UI can remove it, and in [strict mode](../how-it-works/strict.md) the kernel enforces it like the other rules. The call blocks until you answer.
+`grant` adds the same rule as the matching allow flag (`--allow-path`, `--allow-exec`, `--allow-net`), with an expiry, in the rule set `advance`: Ctrl-] lists it, the web UI can remove it (or the whole set), and in [strict mode](../how-it-works/strict.md) the kernel enforces it like the other rules. The call blocks until you answer. For a program the sandbox may write without asking (or a folder of programs where it may), the card warns you: a grant would let it run anything it writes there.
 
 The query string:
 
 | Key | Value |
 |---|---|
-| `op` | `write`, the only operation for now (it covers every file operation hallpass mediates) |
-| `path` | an absolute path; ending in `/**`, the folder and everything below it. No other globs (`*`, `?`, `[`). Percent-encode `&`, `;`, `%` and `+` in it (`%26`...) |
+| `op` | `write` (every file operation hallpass mediates), `exec` (running a program) or `connect` (connecting and sending to network destinations) |
+| `path` | `write`, `exec`: an absolute path; ending in `/**`, the folder and everything below it. No other globs (`*`, `?`, `[`). Percent-encode `&`, `;`, `%` and `+` in it (`%26`...) |
+| `dest` | `connect`: destinations as [`--allow-net`](#network) takes them, for example `tcp:192.0.2.0/24:443`, `[2001:db8::1]:53`, `unix:/run/x.sock`, `unix:@name`; addresses only, not host names, and not `all` |
 | `for` | optional: a duration (`90s`, `10m`, `2h`); without it, the rest of the session |
 | `reason` | optional: why, shown to you as the program's words; `+` or `%20` for spaces |
 
 `/proc/self/hallpass/check?...`, with the same keys, asks whether a request would be needed, without asking you.
+
+`/proc/self/hallpass/release?op=...&path=...` (or `dest=`), without `for` and `reason`, gives a grant back before it expires, without asking you: it removes the rules granted to this session's requests for exactly that target (same `op`, same path and `/**`, same destinations). It never removes another rule: not your flags, policy file, answers to other prompts or edits. The terminal prints a notice, and `--log` a line with decision `release`.
 
 hallpass never runs anything: the `execve` always fails, and its error number is the answer. A shell prints it (exit code 126, or 127 when there is no hallpass; dash also exits 127 for `ENAMETOOLONG`):
 
@@ -156,10 +159,12 @@ hallpass never runs anything: the `execve` always fails, and its error number is
 | `ETIMEDOUT` | Connection timed out | nobody answered within `--timeout` |
 | `ENOMSG` | No message of desired type | (check) a request would ask you |
 | `EINVAL`, `ENAMETOOLONG` | Invalid argument, File name too long | malformed request |
-| `ENOSYS` | Function not implemented | files are not mediated (`--mediate` without `files`, or a Kubernetes policy's `mediate`): nothing would enforce a grant, so nobody is asked |
+| `ENOSYS` | Function not implemented | the operation's category (files, exec, network) is not mediated (`--mediate`, or a Kubernetes policy's `mediate`): nothing would enforce a grant, so nobody is asked |
 | `ENOENT` | No such file or directory | no hallpass: the path does not exist |
+| `ECANCELED` | Operation canceled | (release) given back |
+| `ESRCH` | No such process | (release) no grant of a request for exactly that target |
 
-With `--prompt=deny`, requests are denied (`EPERM`) without a card; with `--prompt=allow`, they are granted. A request is covered (`EEXIST`) when the rules already allow the whole path for the duration asked, so asking again right after a grant does not prompt.
+With `--prompt=deny`, requests are denied (`EPERM`) without a card; with `--prompt=allow`, they are granted. A request is covered (`EEXIST`) when the rules already allow the whole path, or every destination, for the duration asked, so asking again right after a grant does not prompt; a deny or ask rule inside it takes part of it away, and then it asks.
 
 Agents learn it from a skill or their instructions file: see [Agents](agents.md#tell-the-agent), which uses `hallpass-request`. Where the helper is not installed, an instructions file (`AGENTS.md`, `.github/copilot-instructions.md`, `CLAUDE.md`...) can teach the magic path itself, for example:
 

@@ -584,21 +584,35 @@ const (
   the monitor answers with an errno, so a shell prints it and no program
   runs. Without a monitor the path does not exist (`ENOENT`). The monitor
   parses the query (`EINVAL`, `ENAMETOOLONG` past `PATH_MAX`), fails it
-  with `ENOSYS` when its category (files) is not in `Config.Mediate`,
+  with `ENOSYS` when its category (files for `op=write`, exec for
+  `op=exec`, network for `op=connect`) is not in `Config.Mediate`,
   since nothing would enforce a grant, resolves
-  the path like a write's, and evaluates the rules: covered
-  (`EEXIST`, an allow for the whole tree, with no deny or ask rule below
-  it, lasting at least `for` minus min(`for`/10, 1m)), denied (`EPERM`),
-  or a `Request` with `Advance` set, `Op` `OpFiles` and the path as its
-  object. `check?` stops there (`ENOMSG` instead of a request). That
+  the path like a write's (a `unix:` path destination too), and
+  evaluates the rules: covered
+  (`EEXIST`, an allow for the whole tree or every destination, with no
+  deny or ask rule inside it, lasting at least `for` minus
+  min(`for`/10, 1m)), denied (`EPERM`),
+  or a `Request` with `Advance` set and `Op` `OpFiles`, `OpExec` or
+  `OpNet`. A write or exec request has the path as its object; a connect
+  request has no object, its destinations are `Advance.Net` (an
+  `ObjectMatch` from `rules.ParseNet`, inet prefixes masked).
+  `Advance.Writable` tells that an exec target may be written without a
+  prompt under the current rules (files mediated only).
+  `check?` stops there (`ENOMSG` instead of a request). That
   request is coalesced with identical ones of the same thread group, is
   never settled by rules (the UX answers it: a grant is an `AddRules` of
-  an expiring allow rule plus an allow verdict), emits no `Decided`
+  `Request.Grant(expires)`, an expiring allow rule in the `advance` set
+  (`AdvanceSet`), plus an allow verdict), emits no `Decided`
   events, and fails the execve with `EALREADY` on an allow, `ETIMEDOUT`
   on a deny with `Decision.TimedOut`, `EPERM` on another deny. In strict
   mode the grant is a rule like any other, synced to the kernel; a
   process in another mount view than the session's gets `EINVAL`, since
-  its path would not name the same file.
+  its path would not name the same file. `AddRules` refuses a deny or
+  ask rule in the `advance` set. `release?op=...` removes, through
+  `Apply` with `RemoveRules`, the unexpired allow rules of the `advance`
+  set with the same ops and object as a grant for that target would
+  have, emits a `Released` event and fails the execve with `ECANCELED`,
+  or `ESRCH` when there is none.
 - **Unreadable path** (lite): `Object{Unknown: err}`, matched only by
   `ObjectMatch{Unknown}` rules; a verdict allows that one syscall.
 - **Other mount namespace or unreadable path** (strict): the monitor

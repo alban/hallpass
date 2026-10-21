@@ -9,7 +9,7 @@ When a write needs a human, the session holds it as a **pending request**: what 
 | `o` | once | allow this access only |
 | `t` | temp | allow the folder shown for 5 minutes |
 | `a` | always | allow the folder shown for the rest of the session |
-| `g` | grant | (request made [in advance](../workstation/usage.md#asking-in-advance)) allow the folder asked for, for the duration asked |
+| `g` | grant | (request made [in advance](../workstation/usage.md#asking-in-advance)) allow what was asked for (a folder, a program, destinations), for the duration asked |
 | `d` | deny | deny this access; a retry asks again |
 | `n` | never | deny this path for the rest of the session, without asking |
 | `Esc` | dismiss | deny this access, remember nothing |

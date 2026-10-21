@@ -28,7 +28,8 @@ answer as an errno, as on a workstation (see the
 [list](../workstation/usage.md#asking-in-advance), with the shells' exit
 codes): `EALREADY` granted, `EPERM` denied, `ETIMEDOUT` not
 answered within the policy's `promptTimeout`, and `ENOSYS` when the policy's
-`mediate` leaves out `files`, without a prompt; a shell exits 126 for
+`mediate` leaves out the request's category (`files`, `exec`, `network`),
+without a prompt; a shell exits 126 for
 each of them.
 
 [`hallpass web`](../answers/web.md) does the same in a browser, through the same
@@ -85,6 +86,8 @@ The decisions are Events on the pod, shown by `kubectl describe pod` and
 starts (mode, policy, and how to answer), `HallpassAllowed` and
 `HallpassDenied` for each
 answer and who gave it, `HallpassNotAnswered` when a request timed out,
+`HallpassReleased` when a program gave back what it was granted in
+advance,
 and `HallpassPolicyDenied` for the denials of the policy and of the
 built-in rules, without a human (the first one at once, then at most a
 summary per minute per container, with the most frequent paths):

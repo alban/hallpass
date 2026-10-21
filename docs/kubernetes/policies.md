@@ -57,7 +57,9 @@ spec:
   `exec` asks about the programs the container runs. `network`
   (experimental) asks about connections and sends, like
   `hallpass --mediate` ([Network](../workstation/usage.md#network-experimental)).
-  Without `files`, a request made in advance fails at once with `ENOSYS`.
+  A request made in advance fails at once with `ENOSYS` when its
+  category is left out (`files` for `write`, `exec`, `network` for
+  `connect`).
 - `allowNet` and `denyNet`: destinations in the `--allow-net`
   syntax; `all` is every destination, unix sockets included. They need
   `network` in `mediate`. Deny wins. Loopback and unix listeners
