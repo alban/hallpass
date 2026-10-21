@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,6 +24,7 @@ import (
 	"github.com/alban/hallpass/internal/policy"
 	"github.com/alban/hallpass/internal/privsep"
 	"github.com/alban/hallpass/internal/programs"
+	"github.com/alban/hallpass/internal/rules"
 	"github.com/alban/hallpass/internal/seccomp"
 	"github.com/alban/hallpass/internal/sessionapi"
 	"github.com/alban/hallpass/internal/tty"
@@ -47,7 +49,7 @@ var flagGroups = []struct {
 	title string
 	flags []string
 }{
-	{"Sandbox", []string{"mode", "mediate", "escalate", "allow-userns", "no-implicit"}},
+	{"Sandbox", []string{"mode", "mediate", "escalate", "allow-userns", "no-implicit", "rules"}},
 	{"Files", []string{"C", "workdir", "allow-path", "deny-path", "ask-path", "allow-tty"}},
 	{"Programs", []string{"allow-exec", "deny-exec", "group"}},
 	{"Network (experimental)", []string{"allow-net", "deny-net", "ask-net"}},
@@ -161,6 +163,7 @@ var flagNames = map[string]string{
 	"allowExec":     "--allow-exec",
 	"denyExec":      "--deny-exec",
 	"groups":        "--group",
+	"rules":         "--rules",
 }
 
 // parseFlags parses and checks argv. When it returns ok == false, the run
@@ -194,6 +197,8 @@ func parseFlags(argv []string, printPolicy bool) (o options, code int, ok bool) 
 	var allowExec, denyExec listFlag
 	fs.Var(&allowExec, "allow-exec", "`program` allowed to run without asking (repeatable, comma-separated): a name looked up in $PATH, a path, dir/** for every program below dir, or a group of programs: "+strings.Join(programs.Names(), ", "))
 	fs.Var(&denyExec, "deny-exec", "`program` never allowed to run (repeatable, comma-separated, same syntax but no groups, wins over --allow-exec)")
+	var ruleFiles listFlag
+	fs.Var(&ruleFiles, "rules", "rule `file`: one rule per line, as `allow write ~/.cache/go-build/**`, `deny connect 169.254.169.254`, `allow exec @git` (repeatable; see the docs, Rule files)")
 	var groupFlags listFlag
 	fs.Var(&groupFlags, "group", "a group of programs, as `@name=program,...`, offered in prompts and allowed by --allow-exec=@name (repeatable; programs as in --allow-exec, without groups); replaces the built-in group of the same name")
 	if err := fs.Parse(argv); err != nil {
@@ -206,6 +211,9 @@ func parseFlags(argv []string, printPolicy bool) (o options, code int, ok bool) 
 	spec := o.spec(allow, deny, ask, *mediate, allowNet, denyNet, askNet)
 	spec.AllowExec, spec.DenyExec = programPaths(allowExec), programPaths(denyExec)
 	if spec.Groups, err = groupSpecs(groupFlags); err != nil {
+		return o, fail(err), false
+	}
+	if spec.RuleFiles, spec.Vars, err = readRuleFiles(ruleFiles, o.workdir); err != nil {
 		return o, fail(err), false
 	}
 	if o.policy, err = spec.Validate(); err != nil {
@@ -292,6 +300,65 @@ func programPaths(l []string) []string {
 		}
 	}
 	return out
+}
+
+// readRuleFiles reads the --rules files, and returns the variables of
+// their rules, with workdir the -C flag ("" for the current directory).
+// A file in the project directory is refused: the sandbox can write it.
+func readRuleFiles(names []string, workdir string) ([]policy.RuleFile, func(string) (string, error), error) {
+	if len(names) == 0 {
+		return nil, nil, nil
+	}
+	var err error
+	if workdir == "" {
+		if workdir, err = os.Getwd(); err != nil {
+			return nil, nil, err
+		}
+	}
+	if workdir, err = filepath.Abs(workdir); err != nil {
+		return nil, nil, err
+	}
+	if r, err := filepath.EvalSymlinks(workdir); err == nil {
+		workdir = r
+	}
+	var files []policy.RuleFile
+	for _, name := range names {
+		path, err := filepath.Abs(name)
+		if err == nil {
+			path, err = filepath.EvalSymlinks(path)
+		}
+		if err != nil {
+			return nil, nil, fmt.Errorf("--rules %s: %w", name, err)
+		}
+		if rules.Under(path, workdir) {
+			return nil, nil, fmt.Errorf("--rules %s: in the project directory, which the sandbox can write", name)
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return nil, nil, fmt.Errorf("--rules: %w", err)
+		}
+		files = append(files, policy.RuleFile{Name: name, Text: string(b)})
+	}
+	vars := func(v string) (string, error) {
+		switch v {
+		case "HOME":
+			if h, err := os.UserHomeDir(); err == nil {
+				return h, nil
+			}
+		case "WORKDIR":
+			return workdir, nil
+		case "UID":
+			return strconv.Itoa(os.Getuid()), nil
+		case "XDG_RUNTIME_DIR":
+			if d := os.Getenv(v); d != "" {
+				return d, nil
+			}
+		default:
+			return "", fmt.Errorf("$%s: unknown variable (HOME, WORKDIR, UID, XDG_RUNTIME_DIR)", v)
+		}
+		return "", fmt.Errorf("$%s: not set", v)
+	}
+	return files, vars, nil
 }
 
 // groupSpecs turns --group values, "@name=program,...", into a policy's

@@ -16,6 +16,7 @@ hallpass [flags] [--] [command [args...]]     # default command: $SHELL
                            (default: saved choice, else ask on a terminal, else auto)
       --allow-userns       let the sandbox create user/mount namespaces (weakens lite mode; always on in strict mode)
       --no-implicit        only --allow-path paths are writable and --allow-exec programs run: no project dir, $TMPDIR, devices, terminal or implicit program groups
+      --rules FILE         the rules of a rule file, one per line (repeatable; see Rule files)
 ```
 
 ## Files

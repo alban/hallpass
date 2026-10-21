@@ -101,6 +101,30 @@ For example, `hallpass --mediate=write,exec,connect --allow-net=tcp:*:443 --deny
 
 Some destinations are always denied, even with `--allow-net=all`, because they could answer for the sandbox: the session sockets (in `$XDG_RUNTIME_DIR/hallpass/`) and the ports of the running [`hallpass web`](../answers/web.md) UIs, including one started after the session. The Ctrl-] menu and `hallpass policy` list them as "(hallpass sessions)" and "(hallpass web UI)"; they cannot be removed. Writes to `$XDG_RUNTIME_DIR/hallpass/` are always denied too, with or without network mediation.
 
+## Rule files
+
+`--rules FILE` (repeatable) adds the rules of a file, one per line, in the syntax of `hallpass answer add`:
+
+```text
+# build.rules
+allow write ~/.cache/go-build/**
+ask   write $WORKDIR/.git/hooks/**     # hooks run outside the sandbox
+allow write /tmp/build.log
+allow exec  /usr/local/go/bin/**
+allow exec  @busybox
+deny  exec  /usr/bin/curl
+allow connect tcp:*:443
+deny  connect 169.254.169.254
+```
+
+- `write PATH`, `exec PROGRAM` and `connect DESTINATION` are the rules of `--allow-path`, `--allow-exec` and `--allow-net`, with `allow`, `deny` or `ask`: `PATH/**` is a tree, `PATH` that file or program only (unlike `--ask-path`, always a tree). `allow exec @NAME` allows a group of programs. exec rules need exec in `--mediate`, connect rules connect.
+- `#` starts a comment, at the start of a line or after a blank: a path cannot contain ` #`.
+- `~` and the variables `$HOME`, `$WORKDIR` (the project directory), `$UID` and `$XDG_RUNTIME_DIR` (`${NAME}` too) are expanded; any other variable is an error.
+- No expiry (`for 10m`): the rules last the session.
+- A file in the project directory is refused: the sandbox could write it for the next session.
+
+The rules are listed by `hallpass policy --rules FILE` with the flags' ones, and can be edited during the session like them. An invalid line stops hallpass with its file and line number. A [HallpassPolicy](../kubernetes/policies.md) takes the same text in its `rules` field.
+
 ## Background processes
 
 Processes the command leaves behind (daemons, `nohup`, double forks) stay under hallpass: it becomes their subreaper, so their writes are asked about like any other.

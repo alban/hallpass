@@ -88,7 +88,7 @@ first run asks you:
 hallpass --allow-exec=$HOME/.local/bin/hallpass-request -- copilot
 ```
 
-In Kubernetes, the policy's `allowExec` does the same (see below).
+In Kubernetes, `allow exec PATH` in the policy's `rules` does the same (see below).
 
 ### Tell the agent
 
