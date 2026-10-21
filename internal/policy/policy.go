@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"path"
 	"slices"
 	"strings"
 	"time"
@@ -210,36 +209,25 @@ func programPaths(in []string, groups *[]string, known []programs.Def) ([]rules.
 			}
 			continue
 		}
-		root, tree := strings.CutSuffix(p, "/**")
-		if tree && root == "" {
-			root = "/"
+		m, err := rules.ParsePathMatch(p)
+		if err != nil {
+			return nil, err
 		}
-		if !path.IsAbs(root) {
-			return nil, fmt.Errorf("%q: not an absolute path", p)
-		}
-		if strings.ContainsAny(root, "*?[") {
-			return nil, fmt.Errorf("%q: only a trailing /** is supported", p)
-		}
-		out = append(out, rules.PathMatch{Path: path.Clean(root), Tree: tree})
+		out = append(out, m)
 	}
 	return out, nil
 }
 
-// treeRoots turns policy paths into the roots of the trees they cover.
+// treeRoots turns policy paths into the roots of the trees they cover
+// (with or without a trailing /**).
 func treeRoots(in []string) ([]string, error) {
 	var out []string
 	for _, p := range in {
-		root := strings.TrimSuffix(p, "/**")
-		if root == "" {
-			root = "/"
+		m, err := rules.ParsePathMatch(p)
+		if err != nil {
+			return nil, err
 		}
-		if !path.IsAbs(root) {
-			return nil, fmt.Errorf("%q: not an absolute path", p)
-		}
-		if strings.ContainsAny(root, "*?[") {
-			return nil, fmt.Errorf("%q: only a trailing /** is supported", p)
-		}
-		out = append(out, path.Clean(root))
+		out = append(out, m.Path)
 	}
 	return out, nil
 }

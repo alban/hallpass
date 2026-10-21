@@ -58,6 +58,7 @@ func TestValidate(t *testing.T) {
 		{Spec{AllowPaths: []string{"/work*/x"}}, "allowPaths"},
 		{Spec{DenyPaths: []string{"/a/**/b"}}, "denyPaths"},
 		{Spec{AskPaths: []string{"relative"}}, "askPaths"},
+		{Spec{AllowPaths: []string{""}}, "allowPaths"},
 		{Spec{PromptTimeout: "soon"}, "promptTimeout"},
 		{Spec{PromptTimeout: "-1s"}, "promptTimeout"},
 		{Spec{Mediate: []string{"dns"}}, "mediate"},

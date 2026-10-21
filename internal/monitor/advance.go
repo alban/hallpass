@@ -6,7 +6,6 @@ package monitor
 import (
 	"fmt"
 	"net/url"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -178,18 +177,11 @@ func parseAdvance(raw string) (advanceQuery, unix.Errno) {
 			q.adv.Net = m
 		case "path":
 			hasPath = true
-			p := v[0]
-			if base, ok := strings.CutSuffix(p, "/**"); ok {
-				q.adv.Tree = true
-				p = base
-				if p == "" {
-					p = "/"
-				}
-			}
-			if !filepath.IsAbs(p) || strings.ContainsAny(p, "*?[") {
+			pm, err := rules.ParsePathMatch(v[0])
+			if err != nil {
 				return q, unix.EINVAL
 			}
-			q.path = filepath.Clean(p)
+			q.path, q.adv.Tree = pm.Path, pm.Tree
 		case "for":
 			d, err := time.ParseDuration(v[0])
 			if err != nil || d <= 0 || q.verb == verbRelease {

@@ -55,9 +55,42 @@ func TestParseSpec(t *testing.T) {
 		"", "allow", "maybe path /x", "allow path", "allow path rel/x", "allow exec ~/bin/x",
 		"allow net nope:1.2.3.4:x", "allow proc", "allow proc a/b c", "deny unknown x",
 		"allow file /x", "allow path /x for -1m",
+		"allow path /src/*.go", "allow path /src/**/x", "deny exec /usr/bin/py?", "allow path /a/[b]/**",
 	} {
 		if r, err := ParseSpec(in, now); err == nil {
 			t.Errorf("ParseSpec(%q) = %v, want an error", in, r)
+		}
+	}
+}
+
+func TestParsePathMatch(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want PathMatch
+		err  string
+	}{
+		{in: "/src", want: PathMatch{Path: "/src"}},
+		{in: "/src/", want: PathMatch{Path: "/src"}},
+		{in: "/src/../etc//x", want: PathMatch{Path: "/etc/x"}},
+		{in: "/src/**", want: PathMatch{Path: "/src", Tree: true}},
+		{in: "/src//**", want: PathMatch{Path: "/src", Tree: true}},
+		{in: "/**", want: PathMatch{Path: "/", Tree: true}},
+		{in: "/", want: PathMatch{Path: "/"}},
+		{in: "", err: `"": not an absolute path`},
+		{in: "**", err: `"**": not an absolute path`},
+		{in: "src/**", err: `"src/**": not an absolute path`},
+		{in: "/src/*.go", err: `"/src/*.go": only a trailing /** is supported`},
+		{in: "/src/**/x", err: `"/src/**/x": only a trailing /** is supported`},
+		{in: "/src/**/**", err: `"/src/**/**": only a trailing /** is supported`},
+		{in: "/bin/py?", err: `"/bin/py?": only a trailing /** is supported`},
+		{in: "/a/[b]", err: `"/a/[b]": only a trailing /** is supported`},
+	} {
+		got, err := ParsePathMatch(tc.in)
+		switch {
+		case tc.err != "" && (err == nil || err.Error() != tc.err):
+			t.Errorf("ParsePathMatch(%q) = %v, %v, want error %s", tc.in, got, err, tc.err)
+		case tc.err == "" && (err != nil || got.Path != tc.want.Path || got.Tree != tc.want.Tree):
+			t.Errorf("ParsePathMatch(%q) = %v, %v, want %v", tc.in, got, err, tc.want)
 		}
 	}
 }

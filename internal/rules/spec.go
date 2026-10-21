@@ -100,7 +100,18 @@ func parsePathSpec(s string) (*PathMatch, error) {
 	if s == "" {
 		return nil, errors.New("missing path")
 	}
-	m := &PathMatch{Path: s}
+	m, err := ParsePathMatch(s)
+	if err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
+// ParsePathMatch reads an absolute path, or with a trailing /** the tree
+// below it ("/**" alone: every path). Globs are not supported: "*", "?"
+// or "[" elsewhere is an error. The path is cleaned.
+func ParsePathMatch(s string) (PathMatch, error) {
+	m := PathMatch{Path: s}
 	if p, ok := strings.CutSuffix(s, "/**"); ok {
 		m.Path, m.Tree = p, true
 		if m.Path == "" {
@@ -108,7 +119,10 @@ func parsePathSpec(s string) (*PathMatch, error) {
 		}
 	}
 	if !filepath.IsAbs(m.Path) {
-		return nil, fmt.Errorf("%q: want an absolute path", s)
+		return PathMatch{}, fmt.Errorf("%q: not an absolute path", s)
+	}
+	if strings.ContainsAny(m.Path, "*?[") {
+		return PathMatch{}, fmt.Errorf("%q: only a trailing /** is supported", s)
 	}
 	m.Path = filepath.Clean(m.Path)
 	return m, nil
