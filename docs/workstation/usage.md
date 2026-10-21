@@ -22,7 +22,7 @@ When the sandbox starts, hallpass prints one line on stderr with the mode, the s
 hallpass: sandbox started (lite, session 1234). Ctrl-] for the menu, then w for the web UI; 'hallpass web' in another terminal for all sessions.
 ```
 
-Press Ctrl-] inside a session to see its current rules, including answers given so far; `w` opens the session's [web UI](../answers/web.md#from-a-session), any other key closes the overlay.
+Press Ctrl-] inside a session to see its current rules, including answers given so far; `r` lists them to [add, edit or delete](../answers/index.md#editing-rules) one (`hallpass answer rules` from another terminal), `w` opens the session's [web UI](../answers/web.md#from-a-session), any other key closes the overlay.
 
 On a terminal, the window title starts with `[hallpass]` until the session ends: every title the program sets gets the prefix, and the command running in the foreground, if it is not a shell, is appended (`[hallpass] ~/src — vim main.go`), since the terminal itself only sees hallpass. At exit, hallpass restores the previous title in terminals that support the title stack (xterm, VTE-based ones such as GNOME Terminal); elsewhere, the title stays until your shell sets a new one.
 
@@ -133,7 +133,7 @@ The request shows a card in every client (terminal, desktop notification, `hallp
  [g] grant for 30m  [d] deny  [Esc] dismiss
 ```
 
-`grant` adds the same rule as the matching allow flag (`--allow-path`, `--allow-exec`, `--allow-net`), with an expiry, in the rule set `advance`: Ctrl-] lists it, the web UI can remove it (or the whole set), and in [strict mode](../how-it-works/strict.md) the kernel enforces it like the other rules. The call blocks until you answer. For a program the sandbox may write without asking (or a folder of programs where it may), the card warns you: a grant would let it run anything it writes there.
+`grant` adds the same rule as the matching allow flag (`--allow-path`, `--allow-exec`, `--allow-net`), with an expiry, in the rule set `advance`: Ctrl-] lists it, the web UI and `hallpass answer` can edit or remove it (the web UI the whole set too), and in [strict mode](../how-it-works/strict.md) the kernel enforces it like the other rules. The call blocks until you answer. For a program the sandbox may write without asking (or a folder of programs where it may), the card warns you: a grant would let it run anything it writes there.
 
 The query string:
 
@@ -224,7 +224,7 @@ hallpass --prompt=answer -- copilot     # in one terminal
 hallpass answer                      # in another, to see prompts and reply
 ```
 
-`hallpass answer` connects to the running session's socket, shows each pending request (path, the `by:` command line and its parents) and lets you give the same [answers](../answers/index.md) as the terminal. Every client answers the same requests: the first answer wins, and the others take their prompt down, the terminal overlay included.
+`hallpass answer` connects to the running session's socket, shows each pending request (path, the `by:` command line and its parents) and lets you give the same [answers](../answers/index.md) as the terminal. Every client answers the same requests: the first answer wins, and the others take their prompt down, the terminal overlay included. `hallpass answer rules`, `add`, `edit` and `delete` [edit the session's rules](../answers/index.md#editing-rules), like the Ctrl-] menu and the web UI.
 
 `hallpass answer` is mainly a testing and debugging aid, and a fallback for the headless case above; the terminal overlay is the normal way to answer. The socket serves a gRPC API (`api/session/v1/session.proto`, see [Write a client](../answers/api.md)) to follow and answer the session. It only accepts a client of the same user that is not itself sandboxed (it rejects any peer running under a seccomp filter), so the sandbox cannot answer its own prompts through it.
 

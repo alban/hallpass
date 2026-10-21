@@ -29,7 +29,34 @@ Processes of the sandbox may write each other's `/proc/<pid>` files (agents tune
 
 For a network destination (with network [mediated](../workstation/usage.md#network-experimental)), `t`, `a` and `n` cover that destination only: address and port, any protocol (looking up a name connects a UDP socket to each address before the TCP connection: one question for both), or the unix socket.
 
-Rules live as long as the session: nothing is written back to the command line or to the policy. Press Ctrl-] in a terminal session to see them; the web UI can remove them.
+Rules live as long as the session: nothing is written back to the command line or to the policy. Press Ctrl-] in a terminal session to see them, and [edit them](#editing-rules).
+
+## Editing rules
+
+Every rule of a session can be edited, deleted or added, including those from the command line or the policy: from the [web UI](web.md#editing-rules), the [Headlamp plugin](../kubernetes/answer.md#headlamp-plugin), the Ctrl-] menu (`r`) or `hallpass answer`. A change applies to this session only. Rules are written as `VERDICT KIND VALUE [for DURATION]`:
+
+```
+allow path /home/me/src/**        # a tree; without /**, the file only
+deny exec /usr/bin/curl for 1h    # running a program, for an hour
+ask net tcp:140.82.112.21:443     # a destination; unix:/run/x.sock, unix:@name, all...
+allow proc oom_score_adj chrome   # /proc/<pid>/oom_score_adj of the processes named chrome
+deny unknown                      # the paths hallpass could not read (lite mode)
+```
+
+Editing gives no more power than answering: an allow rule may only grant what `always` could (a [folder](#the-folder-of-temp-and-always), one program, one destination), or narrow the allow rule it replaces, for no longer. Deny and ask rules can be added and removed freely. The built-in denials (`~/.config/hallpass`, the hallpass binary, the session sockets and web UI ports) are not rules you can change. In Kubernetes, a session whose policy does not ask can only be tightened. An edit fails if the rules changed since they were shown: look again and redo it.
+
+```console
+$ hallpass answer rules
+ID  RULE                           LABEL
+1   allow path /home/me/proj/**
+...
+42  allow path /home/me/.cache/**
+$ hallpass answer edit 42 allow path /home/me/.cache/pip/**
+$ hallpass answer add deny exec /usr/bin/curl
+$ hallpass answer delete 43
+```
+
+`hallpass answer [PID] add --label TEXT RULE` labels the rule; an edit keeps the label, except a program group's (`@shells`). An edit is a new rule, with a new ID.
 
 ## Prompts that don't flood you
 

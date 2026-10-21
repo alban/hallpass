@@ -146,7 +146,10 @@ It adds:
 - A badge in the app bar with the number of pending requests, on every
   page. A blocked container waits for an answer.
 - A **hallpass** section in the details of a mediated pod: its policy,
-  pending requests and rules.
+  pending requests and rules. Each rule can be edited (in the
+  [rule syntax](../answers/index.md#editing-rules)) or deleted, and
+  **Add rule** adds one, for this session only; an allow rule gives at
+  most what answering "always" would.
 - A **hallpass** column in the pod list: `mediated`, or the number of
   pending requests.
 - **Sandbox with hallpass**, a pod action: it sets or removes

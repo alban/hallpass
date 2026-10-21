@@ -73,5 +73,9 @@ See [Where to answer](../answers/clients.md); `--prompt=deny` and `--prompt=allo
 ```
 hallpass policy [flags]                       # print the rules these flags give, then exit
 hallpass answer [PID]                         # answer another session's prompts from this terminal
+hallpass answer [PID] rules                   # list the session's rules
+hallpass answer [PID] add [--label TEXT] RULE # add a rule, e.g. deny exec /usr/bin/curl for 1h
+hallpass answer [PID] edit ID RULE            # replace rule ID
+hallpass answer [PID] delete ID...            # remove rules
 hallpass web [--listen ADDR] [--open] [--node ADDR]  # follow and answer every session in a browser (experimental)
 ```

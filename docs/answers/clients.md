@@ -4,13 +4,13 @@ All clients answer the same requests with the same [answers](index.md); they dif
 
 | Client | Where | Answers | Also |
 |---|---|---|---|
-| Terminal prompt | the session's terminal | all | Ctrl-] shows the rules; Ctrl-] or a prompt's `w` opens the web UI |
+| Terminal prompt | the session's terminal | all | Ctrl-] shows and edits the rules; Ctrl-] or a prompt's `w` opens the web UI |
 | Desktop notification | without a terminal (`--prompt=desktop`) | three buttons | Open web UI button |
-| `hallpass answer` | another terminal | all | |
-| [Web UI](web.md) | a browser, every session of the user | all | activity, remove rules |
+| `hallpass answer` | another terminal | all | list and edit rules |
+| [Web UI](web.md) | a browser, every session of the user | all | activity, edit rules |
 | `hallpass-node` client | [Kubernetes](../kubernetes/answer.md), one node | all | |
-| `hallpass web --node` | [Kubernetes](../kubernetes/answer.md), one node | all | activity, remove rules |
-| Headlamp plugin | [Kubernetes](../kubernetes/answer.md#headlamp-plugin), the whole cluster | all | badge, per-pod view, sandbox a workload |
+| `hallpass web --node` | [Kubernetes](../kubernetes/answer.md), one node | all | activity, edit rules |
+| Headlamp plugin | [Kubernetes](../kubernetes/answer.md#headlamp-plugin), the whole cluster | all | badge, per-pod view and rules, sandbox a workload |
 
 ## Terminal prompt
 
@@ -36,4 +36,4 @@ Without a terminal, hallpass asks with a desktop notification. It has room for t
 
 ## Another terminal
 
-`hallpass answer [PID]` shows the pending requests of a session and takes the same answers as the terminal prompt. See [Usage: over ssh](../workstation/usage.md#over-ssh).
+`hallpass answer [PID]` shows the pending requests of a session and takes the same answers as the terminal prompt. `hallpass answer [PID] rules`, `add`, `edit` and `delete` [edit its rules](index.md#editing-rules). See [Usage: over ssh](../workstation/usage.md#over-ssh).

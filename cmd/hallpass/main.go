@@ -34,10 +34,11 @@ import (
 const usageText = `Usage:
   hallpass [flags] [--] [command [args...]]   run command (default: $SHELL)
   hallpass answer [PID]                       answer prompts from this terminal
+  hallpass answer [PID] rules|add|edit|delete list or edit the session's rules
   hallpass web [--listen ADDR] [--open]       follow and answer sessions in a browser (experimental)
   hallpass policy [flags]                     print the rules these flags give
 
-In the program's terminal, press Ctrl-] to show the current rules.
+In the program's terminal, press Ctrl-] to show the current rules, then r to edit them.
 `
 
 // flagGroups is the order of the flags in --help, by topic; the CLI

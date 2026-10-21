@@ -169,7 +169,13 @@ Shaped for the UI, not for the monitor, and free to change with it:
   whether it is visible and has the focus (see [One server, two scopes](#one-server-two-scopes)).
 - `POST /api/sessions/{pid}/answer`: `{request, answer}` with the same
   answers as the terminal (once, temp, always, never, deny).
-- `POST /api/sessions/{pid}/rules`: remove a rule, or a set.
+- `POST /api/sessions/{pid}/rules`: `{remove: [id], removeSets: [set],
+  add: [spec], label, ifGeneration}` removes rules and adds rules written
+  in the rule syntax (`rules.ParseSpec`), in one `Apply`; an edit is a
+  remove and an add, with `ifGeneration` from the snapshot so that a
+  concurrent change fails it (409). The session checks the rules
+  (`answer.CheckRules`): an allow gives at most what "always" could, or
+  narrows an allow removed with it (403 otherwise).
 - `POST /api/visibility`: `{tab, visible, seq}`, on the page's
   `visibilitychange`, `focus` and `blur` events. `seq` numbers the page's
   reports, which may arrive out of order: the server keeps the latest.
@@ -192,8 +198,8 @@ the browser so offer the same choices with the same effect.
   filterable by session, path, process, verdict, reason; each line links
   to the rule that decided it (strace-like, see
   [monitor.md](monitor.md#tracing)).
-- **Rules**: per session, by set (implicit, session answers), with
-  expiry; remove a rule.
+- **Rules**: per session, with label and expiry; edit (a text field in
+  the rule syntax), delete, or add a rule.
 
 ## Security
 
