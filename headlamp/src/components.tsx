@@ -52,6 +52,9 @@ const answerHelp: Record<Answer, string> = {
   grant: 'Grant what the program asks for in advance, for the time it asks',
 };
 
+// monitor.ProtectedSet: the agent refuses to change these denials.
+const protectedSet = 'protected';
+
 function AnswerButtons(props: {
   hp: Hallpass;
   agent: AgentState;
@@ -396,7 +399,7 @@ function RulesTable(props: { hp: Hallpass; agent: AgentState; session: Session }
                   <Button onClick={() => save(r)}>Save</Button>
                   <Button onClick={() => setEditing(null)}>Cancel</Button>
                 </ButtonGroup>
-              ) : (
+              ) : r.set === protectedSet ? null : (
                 <ButtonGroup size="small" variant="outlined" disabled={busy}>
                   <Button
                     aria-label={`edit rule ${r.id}`}

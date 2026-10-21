@@ -573,6 +573,9 @@ const RULE_SYNTAX = `VERDICT KIND VALUE [for DURATION]
   DURATION  e.g. 10m or 2h; without it, until removed
 An allow rule gives at most what answering "always" would, or narrows the rule it replaces.`; // rules.SpecSyntax
 
+// monitor.ProtectedSet: the server refuses to change these denials.
+const PROTECTED_SET = "protected";
+
 // The open rule editors, by "pid/id" ("pid/new" to add one): their text
 // and error survive re-rendering.
 const ruleEditors = new Map();
@@ -665,7 +668,7 @@ function ruleRow(pid, r) {
     el("td", {}, obj),
     el("td", {}, r.label || ""),
     el("td", {}, r.expires ? new Date(r.expires).toLocaleTimeString() : ""),
-    el("td", {}, edit, " ", remove, err));
+    el("td", {}, ...(r.set === PROTECTED_SET ? [] : [edit, " ", remove, err])));
 }
 
 function addRuleForm(pid) {
@@ -698,7 +701,7 @@ function renderRules() {
     }
     for (const [set, rules] of sets) {
       const head = el("div", {}, "Set: " + (set || "(none)") + " ");
-      if (set) {
+      if (set && set !== PROTECTED_SET) {
         const err = el("span", { class: "error" });
         head.append(el("button", {
           onclick: async () => {
