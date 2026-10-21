@@ -86,6 +86,15 @@ type Event struct {
 	// Dropped counts Decided events lost because this client was too
 	// slow. Opened, Closed and Rules are never dropped.
 	Dropped uint64
+	// Released reports rules the workload removed (AdvanceDir release).
+	Released *Released
+}
+
+// Released is grants of requests made in advance that the workload gave
+// back: the rules, removed.
+type Released struct {
+	Rules   []rules.Rule
+	Subject rules.Subject
 }
 
 // Request is an access no rule decides, until a verdict or a rule closes
@@ -499,6 +508,10 @@ func (m *Monitor) check(r *rules.Rule) error {
 	}
 	if r.Set == ProtectedSet && (r.Verdict != rules.Deny || !r.Expires.IsZero()) {
 		return fmt.Errorf("monitor: rule on %+v: the protected set takes denials without expiry only: %w", o, ErrProtected)
+	}
+	if r.Set == AdvanceSet && r.Verdict != rules.Allow {
+		// The workload may remove them.
+		return fmt.Errorf("monitor: rule on %+v: the advance set takes allows only", o)
 	}
 	if o.Path != nil {
 		if !filepath.IsAbs(o.Path.Path) {

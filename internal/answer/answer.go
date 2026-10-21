@@ -60,7 +60,11 @@ func Apply(m *monitor.Monitor, p Policy, req *monitor.Request, a ui.Answer, rs [
 	a = Request(p, req, 0).Effective(a)
 	d := monitor.Decision{Client: who}
 	allow := false
-	obj := req.Objects[0]
+	var obj rules.Object
+	if len(req.Objects) > 0 {
+		// None for a request made in advance for network destinations.
+		obj = req.Objects[0]
+	}
 	ops := answerOps(req.Op)
 	switch a {
 	case ui.AnswerGrant:
@@ -69,10 +73,7 @@ func Apply(m *monitor.Monitor, p Policy, req *monitor.Request, a ui.Answer, rs [
 		if req.Advance.For > 0 {
 			expires = time.Now().Add(req.Advance.For)
 		}
-		d.AddRules = append(d.AddRules, rules.Rule{
-			Ops: rules.OpAll, Verdict: rules.Allow, Expires: expires,
-			Object: rules.ObjectMatch{Path: &rules.PathMatch{Path: obj.Path.Path, Tree: req.Advance.Tree}},
-		})
+		d.AddRules = append(d.AddRules, req.Grant(expires))
 	case ui.AnswerTimeout:
 		d.TimedOut = true
 	case ui.AnswerAllowOnce:
@@ -203,17 +204,31 @@ func Request(p Policy, req *monitor.Request, waiting int) ui.Request {
 			r.Parents = append(r.Parents, t.Comm)
 		}
 	}
+	if a := req.Advance; a != nil {
+		r.Advance, r.For, r.Reason = true, a.For, a.Reason
+		switch {
+		case a.Net.IsNet():
+			r.Op, r.Path = "connect to", a.Net.NetString()
+		case req.Op == rules.OpExec:
+			r.Op = "exec"
+			if a.Writable {
+				r.Warn = "writable from inside the sandbox: a grant lets it run what it writes there"
+			}
+		default:
+			r.Op = "write"
+			if w := p.Warn(req.Objects[0].Path.Path); w != "" {
+				r.Warn = w + " — secret store"
+			}
+		}
+		if !a.Net.IsNet() {
+			r.Path = req.Objects[0].Path.Path
+			if a.Tree {
+				r.Path = strings.TrimSuffix(r.Path, "/") + "/**"
+			}
+		}
+		return r
+	}
 	switch obj := req.Objects[0]; {
-	case req.Advance != nil && obj.Path != nil:
-		r.Advance, r.For, r.Reason = true, req.Advance.For, req.Advance.Reason
-		r.Op = "write"
-		r.Path = obj.Path.Path
-		if req.Advance.Tree {
-			r.Path = strings.TrimSuffix(r.Path, "/") + "/**"
-		}
-		if w := p.Warn(obj.Path.Path); w != "" {
-			r.Warn = w + " — secret store"
-		}
 	case obj.Path != nil && req.Op&rules.OpExec != 0:
 		// Answers cover this program, not its folder: a grant on
 		// /usr/bin would allow every program there.

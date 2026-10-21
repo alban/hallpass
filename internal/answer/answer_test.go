@@ -101,6 +101,42 @@ func TestRequestAdvance(t *testing.T) {
 	if r := Request(p, advReq("/", monitor.Advance{Tree: true}), 0); r.Path != "/**" {
 		t.Errorf("root: %+v", r)
 	}
+	exec := advReq("/opt/tool", monitor.Advance{Tree: true, Writable: true})
+	exec.Op = rules.OpExec
+	if r := Request(p, exec, 0); !r.Advance || r.Op != "exec" || r.Path != "/opt/tool/**" || !strings.Contains(r.Warn, "writable") {
+		t.Errorf("exec: %+v", r)
+	}
+	dest, err := rules.ParseNet("tcp:[2001:db8::1]:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := &monitor.Request{Op: rules.OpNet, Advance: &monitor.Advance{Net: dest, Reason: "push"}}
+	if r := Request(p, conn, 0); !r.Advance || r.Op != "connect to" || r.Path != "tcp:[2001:db8::1]:443" || r.Reason != "push" || r.Warn != "" {
+		t.Errorf("connect: %+v", r)
+	}
+}
+
+// TestApplyGrantNet: the grant of a request for network destinations is
+// a network rule in the advance set.
+func TestApplyGrantNet(t *testing.T) {
+	p := defaults.NewLexical("/root", "", nil, nil)
+	dest, err := rules.ParseNet("udp:9.9.9.9:53")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := monitor.New(monitor.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	req := &monitor.Request{Op: rules.OpNet, Advance: &monitor.Advance{Net: dest}}
+	if err := Apply(m, p, req, ui.AnswerGrant, nil, "test"); !errors.Is(err, monitor.ErrClosed) {
+		t.Errorf("Apply: %v, want ErrClosed", err)
+	}
+	_, rs, _ := m.Snapshot()
+	if len(rs) != 1 || rs[0].Ops != rules.OpNet || rs[0].Set != monitor.AdvanceSet || rs[0].Object.NetString() != "udp:9.9.9.9:53" || !rs[0].Expires.IsZero() {
+		t.Fatalf("rules %+v", rs)
+	}
 }
 
 // TestApplyGrant: "grant" adds the rule asked for; other allows deny.
@@ -134,7 +170,7 @@ func TestApplyGrant(t *testing.T) {
 			}
 			continue
 		}
-		if len(rs) != 1 || rs[0].Verdict != rules.Allow || rs[0].Ops != rules.OpAll || rs[0].Object.Path.Path != tc.want.Path || rs[0].Object.Path.Tree != tc.want.Tree {
+		if len(rs) != 1 || rs[0].Verdict != rules.Allow || rs[0].Ops != rules.OpAll || rs[0].Set != monitor.AdvanceSet || rs[0].Object.Path.Path != tc.want.Path || rs[0].Object.Path.Tree != tc.want.Tree {
 			t.Fatalf("%s: rules %+v", tc.name, rs)
 		}
 		if e := rs[0].Expires; (tc.adv.For == 0) != e.IsZero() || (!e.IsZero() && e.Before(before.Add(tc.adv.For))) {

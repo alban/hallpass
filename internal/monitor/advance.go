@@ -19,9 +19,12 @@ import (
 // AdvanceDir is where the workload asks for access in advance: an execve
 // of AdvanceDir+"request?op=write&path=/dir/**&for=10m&reason=..." opens a
 // Request with Advance set, and AdvanceDir+"check?..." asks whether it
-// would be needed. The path never exists: without a monitor, the kernel
-// fails the execve with ENOENT. The monitor never continues it, it answers
-// with an errno:
+// would be needed. op is write (a path), exec (a program, path) or
+// connect (dest, network destinations as rules.ParseNet reads them, but
+// "all"). AdvanceDir+"release?op=...&path=..." removes the rules that
+// granted that very request (AdvanceSet). The path never exists: without a
+// monitor, the kernel fails the execve with ENOENT. The monitor never
+// continues it, it answers with an errno:
 //
 //   - EEXIST: the rules already allow it (no request)
 //   - EALREADY: a verdict allowed the request
@@ -29,31 +32,98 @@ import (
 //   - ETIMEDOUT: denied because nobody answered in time
 //     (Decision.TimedOut)
 //   - EINVAL, ENAMETOOLONG: malformed or too long
-//   - ENOSYS: the category asked for (files) is not mediated
-//     (Config.Mediate): nothing would enforce a grant
+//   - ENOSYS: the category asked for (files, exec, network) is not
+//     mediated (Config.Mediate): nothing would enforce a grant
 //   - ENOMSG: (check only) a request would be needed
+//   - ECANCELED: (release only) the grants were removed
+//   - ESRCH: (release only) no grant of a request made in advance matches
 //
 // See docs/devel/monitor.md.
 const AdvanceDir = "/proc/self/hallpass/"
+
+// AdvanceSet is the rules.Rule.Set of the rules granting requests made in
+// advance (Request.Grant). The workload may remove them (AdvanceDir
+// release), and no other rule: only Allow rules may be added to it.
+const AdvanceSet = "advance"
 
 // advanceSlack bounds how much shorter than asked an existing grant may
 // last and still cover an advance request (a tenth of it at most).
 const advanceSlack = time.Minute
 
 // Advance describes a Request the workload made in advance, before
-// accessing Objects[0]. Op is the operations asked for.
+// accessing Objects[0], or for network destinations, Net. Op is the
+// operations asked for: rules.OpFiles, rules.OpExec or rules.OpNet.
 type Advance struct {
 	Tree   bool          // Objects[0] and everything below it
 	For    time.Duration // how long the grant is asked for; 0: the rest of the session
 	Reason string        // written by the workload: untrusted, display only
+	// Net is the destinations asked for (rules.ParseNet) when Op is
+	// rules.OpNet; Objects is then empty.
+	Net rules.ObjectMatch
+	// Writable: (exec) the rules let the workload write the program, or
+	// a file below the folder, without asking, when it asked: a grant
+	// lets it run what it writes there. Only known with files mediated.
+	Writable bool
 }
+
+// Grant returns the rule that grants r, a request made in advance, until
+// expires (zero: until removed): the same rule as the allow flags'
+// (--allow-path, --allow-exec, --allow-net), in AdvanceSet.
+func (r *Request) Grant(expires time.Time) rules.Rule {
+	g := rules.Rule{Ops: grantOps(r.Op), Verdict: rules.Allow, Expires: expires, Set: AdvanceSet}
+	if r.Advance.Net.IsNet() {
+		g.Object = r.Advance.Net
+	} else {
+		g.Object = rules.ObjectMatch{Path: &rules.PathMatch{Path: r.Objects[0].Path.Path, Tree: r.Advance.Tree}}
+	}
+	return g
+}
+
+// grantOps returns the ops of the rule granting a request in advance for
+// op: a file grant covers every file and network op, like a folder
+// answer.
+func grantOps(op rules.Op) rules.Op {
+	switch op {
+	case rules.OpExec, rules.OpNet:
+		return op
+	}
+	return rules.OpAll
+}
+
+// advanceVerb is what an advance query does.
+type advanceVerb int
+
+const (
+	verbRequest advanceVerb = iota
+	verbCheck
+	verbRelease
+)
 
 // advanceQuery is a parsed advance request.
 type advanceQuery struct {
-	check bool
-	op    rules.Op
-	path  string // absolute and clean, not resolved yet
-	adv   Advance
+	verb advanceVerb
+	op   rules.Op
+	path string // write, exec: absolute and clean, not resolved yet
+	adv  Advance
+}
+
+// scope is what q asks for, as a rule's object; path is resolved.
+func (q advanceQuery) scope() rules.ObjectMatch {
+	if q.op == rules.OpNet {
+		return q.adv.Net
+	}
+	return rules.ObjectMatch{Path: &rules.PathMatch{Path: q.path, Tree: q.adv.Tree}}
+}
+
+// category is the mediated category q needs.
+func (q advanceQuery) category() seccomp.Category {
+	switch q.op {
+	case rules.OpExec:
+		return seccomp.Exec
+	case rules.OpNet:
+		return seccomp.Network
+	}
+	return seccomp.Files
 }
 
 // parseAdvance parses raw, an execve path starting with AdvanceDir.
@@ -63,7 +133,9 @@ func parseAdvance(raw string) (advanceQuery, unix.Errno) {
 	switch verb {
 	case "request":
 	case "check":
-		q.check = true
+		q.verb = verbCheck
+	case "release":
+		q.verb = verbRelease
 	default:
 		return q, unix.EINVAL
 	}
@@ -71,19 +143,41 @@ func parseAdvance(raw string) (advanceQuery, unix.Errno) {
 	if err != nil {
 		return q, unix.EINVAL
 	}
+	hasPath := false
 	for k, v := range vals {
 		if len(v) != 1 {
 			return q, unix.EINVAL
 		}
 		switch k {
 		case "op":
-			// The only file op rules can grant: every file op (strict
-			// mode's rules have no finer ones).
-			if v[0] != "write" {
+			switch v[0] {
+			case "write":
+				// The only file op rules can grant: every file op
+				// (strict mode's rules have no finer ones).
+				q.op = rules.OpFiles
+			case "exec":
+				q.op = rules.OpExec
+			case "connect":
+				// Connect and send, like an answer about either.
+				q.op = rules.OpNet
+			default:
 				return q, unix.EINVAL
 			}
-			q.op = rules.OpFiles
+		case "dest":
+			m, err := rules.ParseNet(v[0])
+			if err != nil || m.AnyNet {
+				// "all" (unix sockets included) is mediation off,
+				// not a scope: the user decides it with a flag.
+				return q, unix.EINVAL
+			}
+			if m.Inet != nil && m.Inet.Prefix.IsValid() {
+				// As in a rule (Monitor.check), so that a release
+				// names the rule granted.
+				m.Inet.Prefix = m.Inet.Prefix.Masked()
+			}
+			q.adv.Net = m
 		case "path":
+			hasPath = true
 			p := v[0]
 			if base, ok := strings.CutSuffix(p, "/**"); ok {
 				q.adv.Tree = true
@@ -98,17 +192,21 @@ func parseAdvance(raw string) (advanceQuery, unix.Errno) {
 			q.path = filepath.Clean(p)
 		case "for":
 			d, err := time.ParseDuration(v[0])
-			if err != nil || d <= 0 {
+			if err != nil || d <= 0 || q.verb == verbRelease {
 				return q, unix.EINVAL
 			}
 			q.adv.For = d
 		case "reason":
+			if q.verb == verbRelease {
+				return q, unix.EINVAL
+			}
 			q.adv.Reason = v[0]
 		default:
 			return q, unix.EINVAL
 		}
 	}
-	if q.op == 0 || q.path == "" {
+	// A path for files and programs, a destination for the network.
+	if q.op == 0 || (q.op == rules.OpNet) != q.adv.Net.IsNet() || (q.op == rules.OpNet) == hasPath {
 		return q, unix.EINVAL
 	}
 	return q, 0
@@ -128,7 +226,7 @@ func (m *Monitor) advance(l *listener, n seccomp.Notif, sc seccomp.Rule, raw str
 		reply(errno)
 		return nil
 	}
-	if q.op&rules.OpFiles != 0 && m.mediate&seccomp.Files == 0 {
+	if m.mediate&q.category() == 0 {
 		reply(unix.ENOSYS)
 		return nil
 	}
@@ -148,16 +246,37 @@ func (m *Monitor) advance(l *listener, n seccomp.Notif, sc seccomp.Rule, raw str
 	if m.procRoot {
 		root = procfs.ProcRoot(n.PID)
 	}
-	t, err := procfs.Resolve(n.PID, root, procfs.AtFDCWD, q.path, true)
-	if err != nil || t.Special != "" {
-		reply(unix.EINVAL)
-		return nil
+	resolve := func(p string) (string, bool) {
+		t, err := procfs.Resolve(n.PID, root, procfs.AtFDCWD, p, true)
+		return t.Path, err == nil && t.Special == ""
 	}
-	obj := rules.Object{Path: &rules.PathObject{Path: t.Path}}
+	var objs []rules.Object
+	switch u := q.adv.Net.Unix; {
+	case q.op != rules.OpNet:
+		p, ok := resolve(q.path)
+		if !ok {
+			reply(unix.EINVAL)
+			return nil
+		}
+		q.path = p
+		objs = []rules.Object{{Path: &rules.PathObject{Path: p}}}
+	case u != nil && !u.Abstract:
+		// As a socket path in a rule: resolved like a file's.
+		p, ok := resolve(u.Path)
+		if !ok {
+			reply(unix.EINVAL)
+			return nil
+		}
+		q.adv.Net = rules.ObjectMatch{Unix: &rules.UnixMatch{Path: p, Prefix: u.Prefix}}
+	}
 	if !l.n.IDValid(n.ID) {
 		return nil
 	}
-	switch m.covered(q, t.Path) {
+	if q.verb == verbRelease {
+		reply(m.releaseGrants(l, n, q))
+		return nil
+	}
+	switch m.covered(q) {
 	case rules.Allow:
 		reply(unix.EEXIST)
 		return nil
@@ -165,18 +284,43 @@ func (m *Monitor) advance(l *listener, n seccomp.Notif, sc seccomp.Rule, raw str
 		reply(unix.EPERM)
 		return nil
 	}
-	if q.check {
+	if q.verb == verbCheck {
 		reply(unix.ENOMSG)
 		return nil
 	}
-	return func() { m.askAdvance(l, n, sc.Name, q, obj, raw) }
+	if q.op == rules.OpExec && m.mediate&seccomp.Files != 0 {
+		q.adv.Writable = writable(m.currentRules(), q.path, q.adv.Tree, m.now())
+	}
+	return func() { m.askAdvance(l, n, sc.Name, q, objs, raw) }
 }
 
-// covered returns Allow if the current rules allow all q asks for on
-// path, for as long as it asks; Deny if a rule denies path; Ask otherwise.
-func (m *Monitor) covered(q advanceQuery, path string) rules.Verdict {
+// writable reports whether rs let the workload write path, or with tree a
+// file below it, without asking.
+func writable(rs []rules.Rule, path string, tree bool, now time.Time) bool {
+	if v, _, ok := rules.Eval(rs, rules.OpWrite, rules.Object{Path: &rules.PathObject{Path: path}}, now); ok && v == rules.Allow {
+		return true
+	}
+	if tree {
+		for _, r := range rs {
+			if !r.Expired(now) && r.Verdict == rules.Allow && r.Ops&rules.OpWrite != 0 && r.Object.Path != nil && rules.Under(r.Object.Path.Path, path) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// covered returns Allow if the current rules allow all q asks for, for as
+// long as it asks; Deny if a rule denies it (the path, or every
+// destination asked for); Ask otherwise, also when the rules allow only
+// part of it.
+func (m *Monitor) covered(q advanceQuery) rules.Verdict {
 	now := m.now()
 	rs := m.currentRules()
+	if q.op == rules.OpNet {
+		return coveredNet(rs, q, now)
+	}
+	path := q.path
 	v, id, ok := rules.Eval(rs, q.op, rules.Object{Path: &rules.PathObject{Path: path}}, now)
 	if !ok || v == rules.Ask {
 		return rules.Ask
@@ -191,12 +335,7 @@ func (m *Monitor) covered(q advanceQuery, path string) rules.Verdict {
 		if q.adv.Tree && (r.Object.Path == nil || !r.Object.Path.Tree) {
 			return rules.Ask
 		}
-		// A request without a duration is for the rest of the session; a
-		// check without one is about now. A grant ending within
-		// advanceSlack of the end asked for covers it, so that asking
-		// again right after a grant does not ask the user again.
-		slack := min(q.adv.For/10, advanceSlack)
-		if !r.Expires.IsZero() && !(q.check && q.adv.For == 0) && (q.adv.For == 0 || r.Expires.Before(now.Add(q.adv.For-slack))) {
+		if !lasts(r, q, now) {
 			return rules.Ask
 		}
 	}
@@ -214,9 +353,104 @@ func (m *Monitor) covered(q advanceQuery, path string) rules.Verdict {
 	return rules.Allow
 }
 
+// coveredNet is covered for network destinations: Allow if an allow
+// covers all of them, for as long as q asks, and no deny or ask as
+// specific takes part of them away; Deny if a deny covers all of them.
+func coveredNet(rs []rules.Rule, q advanceQuery, now time.Time) rules.Verdict {
+	want := q.adv.Net
+	depth := -1 // of the most specific allow covering want
+	partial := false
+	var asks []rules.Rule
+	for _, r := range rs {
+		if r.Expired(now) || r.Ops&rules.OpNet == 0 || !r.Object.OverlapsNet(want) {
+			continue
+		}
+		switch r.Verdict {
+		case rules.Deny:
+			if r.Object.CoversNet(want) {
+				return rules.Deny
+			}
+			partial = true
+		case rules.Ask:
+			asks = append(asks, r)
+		case rules.Allow:
+			if r.Ops&rules.OpNet == rules.OpNet && r.Object.CoversNet(want) && lasts(r, q, now) {
+				depth = max(depth, r.Object.Depth())
+			}
+		}
+	}
+	if partial || depth < 0 {
+		return rules.Ask
+	}
+	for _, r := range asks {
+		// The most specific rule decides, an ask on a tie: an ask
+		// shallower than the allow does not apply.
+		if r.Object.Depth() >= depth {
+			return rules.Ask
+		}
+	}
+	return rules.Allow
+}
+
+// lasts reports whether r, an allow, lasts as long as q asks. A request
+// without a duration is for the rest of the session; a check without one
+// is about now. A grant ending within advanceSlack of the end asked for
+// covers it, so that asking again right after a grant does not ask the
+// user again.
+func lasts(r rules.Rule, q advanceQuery, now time.Time) bool {
+	if r.Expires.IsZero() || (q.verb == verbCheck && q.adv.For == 0) {
+		return true
+	}
+	slack := min(q.adv.For/10, advanceSlack)
+	return q.adv.For != 0 && !r.Expires.Before(now.Add(q.adv.For-slack))
+}
+
+// releaseGrants removes the rules granting requests made in advance
+// (AdvanceSet) for exactly what q names, and returns the errno answering
+// it.
+func (m *Monitor) releaseGrants(l *listener, n seccomp.Notif, q advanceQuery) unix.Errno {
+	scope, ops := q.scope(), grantOps(q.op)
+	now := m.now()
+	var ids []uint64
+	var gone []rules.Rule
+	for _, r := range m.currentRules() {
+		if r.Set == AdvanceSet && r.Verdict == rules.Allow && r.Ops == ops && !r.Expired(now) && sameScope(r.Object, scope) {
+			ids = append(ids, r.ID)
+			gone = append(gone, r)
+		}
+	}
+	if len(ids) == 0 {
+		return unix.ESRCH
+	}
+	if _, err := m.Apply(Decision{RemoveRules: ids, Client: releaseClient}); err != nil {
+		m.warn("release of a grant made in advance: " + err.Error())
+		return unix.EIO
+	}
+	m.mu.Lock()
+	m.emitLocked(Event{Released: &Released{Rules: gone, Subject: buildSubject(n.PID, l.root)}})
+	m.mu.Unlock()
+	return unix.ECANCELED
+}
+
+// releaseClient is the Decision.Client of a release.
+const releaseClient = "release"
+
+// sameScope reports whether a and b, the objects of a grant made in
+// advance, select the same things.
+func sameScope(a, b rules.ObjectMatch) bool {
+	switch {
+	case a.Path != nil && b.Path != nil:
+		return a.Path.Path == b.Path.Path && a.Path.Tree == b.Path.Tree && len(a.Path.Args)+len(b.Path.Args) == 0
+	case a.IsNet() && b.IsNet():
+		return a.NetString() == b.NetString()
+	}
+	return false
+}
+
 // askAdvance opens a request for q (or joins the same one, for a restarted
-// execve), waits for its verdict and answers n.
-func (m *Monitor) askAdvance(l *listener, n seccomp.Notif, syscall string, q advanceQuery, obj rules.Object, raw string) {
+// execve), waits for its verdict and answers n. objs are its objects: the
+// path, none for network destinations.
+func (m *Monitor) askAdvance(l *listener, n seccomp.Notif, syscall string, q advanceQuery, objs []rules.Object, raw string) {
 	subject := buildSubject(n.PID, l.root)
 	m.mu.Lock()
 	if m.closed {
@@ -232,11 +466,15 @@ func (m *Monitor) askAdvance(l *listener, n seccomp.Notif, syscall string, q adv
 		r.waiters = append(r.waiters, waiter{l, n.ID})
 	} else {
 		adv := q.adv
+		var obj rules.Object
+		if len(objs) > 0 {
+			obj = objs[0]
+		}
 		r = &request{
 			pub: &Request{
 				Syscall: syscall,
 				Op:      q.op,
-				Objects: []rules.Object{obj},
+				Objects: objs,
 				Subject: subject,
 				Advance: &adv,
 			},
