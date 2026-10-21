@@ -31,6 +31,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
@@ -92,6 +93,13 @@ func (t *Term) Width() int {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.cols
+}
+
+// Height returns the user's terminal height, in rows.
+func (t *Term) Height() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.rows
 }
 
 // maxHeld bounds the output kept while a prompt is shown; beyond it the
@@ -481,14 +489,9 @@ func (t *Term) paintLoop() {
 	}
 }
 
-// Prompt shows lines at the bottom of the screen and waits for one of the
-// accept keys. Keys pressed within guard of the prompt appearing are ignored,
-// so typing meant for the program does not answer it; so is any input that
-// is not a single key press (pastes, escape sequences other than a lone Esc).
-// It returns 0 after timeout (0: no timeout), when cancel is closed (nil:
-// never), or when the program's terminal goes away. Lines received from
-// relabel (nil: none) replace those shown, if there are as many.
-func (t *Term) Prompt(lines []string, accept string, guard, timeout time.Duration, cancel <-chan struct{}, relabel <-chan []string) byte {
+// openOverlay shows lines at the bottom of the screen; keys go to t.keys
+// until closeOverlay.
+func (t *Term) openOverlay(lines []string) {
 	t.mu.Lock()
 	// Do not cut an escape sequence or a UTF-8 character in two.
 	for wait := time.Now().Add(300 * time.Millisecond); !t.esc.ground() && time.Now().Before(wait); {
@@ -522,7 +525,81 @@ func (t *Term) Prompt(lines []string, accept string, guard, timeout time.Duratio
 	// mode, which the program may have set.
 	t.write("\x1b7" + t.esc.absolute(false) + t.drawOverlay() + t.paint())
 	t.mu.Unlock()
+}
 
+// ReadLine shows lines at the bottom of the screen, the last one followed by
+// a field to type a line in, starting with text. It returns the line when
+// Enter is pressed; ok is false after Esc or Ctrl-C, or when the program's
+// terminal goes away. Backspace deletes a character, Ctrl-U the whole line;
+// other control keys and escape sequences are ignored.
+func (t *Term) ReadLine(lines []string, text string) (line string, ok bool) {
+	lines = slices.Clone(lines)
+	if len(lines) == 0 {
+		lines = []string{""}
+	}
+	prompt := lines[len(lines)-1]
+	field := func() string {
+		room := max(1, t.cols-2-ansi.StringWidth(prompt))
+		shown := text
+		for ansi.StringWidth(shown) > room-1 && shown != "" {
+			_, n := utf8.DecodeRuneInString(shown)
+			shown = shown[n:]
+		}
+		if shown != text {
+			shown = "…" + shown
+		}
+		return prompt + shown + "_"
+	}
+	t.mu.Lock()
+	lines[len(lines)-1] = field()
+	t.mu.Unlock()
+	t.openOverlay(lines)
+	defer func() {
+		t.mu.Lock()
+		t.closeOverlay()
+		t.mu.Unlock()
+	}()
+	for {
+		select {
+		case k := <-t.keys:
+			if len(k) > 1 && k[0] == 0x1b {
+				continue
+			}
+			for _, c := range k {
+				switch {
+				case c == '\r' || c == '\n':
+					return text, true
+				case c == 0x1b || c == 0x03:
+					return "", false
+				case c == 0x7f || c == 0x08:
+					_, n := utf8.DecodeLastRuneInString(text)
+					text = text[:len(text)-n]
+				case c == 0x15:
+					text = ""
+				case c < 0x20:
+				default:
+					text = string(append([]byte(text), c))
+				}
+			}
+			t.mu.Lock()
+			t.ov[len(t.ov)-1] = field()
+			t.write(t.drawOverlay())
+			t.mu.Unlock()
+		case <-t.outDone:
+			return "", false
+		}
+	}
+}
+
+// Prompt shows lines at the bottom of the screen and waits for one of the
+// accept keys. Keys pressed within guard of the prompt appearing are ignored,
+// so typing meant for the program does not answer it; so is any input that
+// is not a single key press (pastes, escape sequences other than a lone Esc).
+// It returns 0 after timeout (0: no timeout), when cancel is closed (nil:
+// never), or when the program's terminal goes away. Lines received from
+// relabel (nil: none) replace those shown, if there are as many.
+func (t *Term) Prompt(lines []string, accept string, guard, timeout time.Duration, cancel <-chan struct{}, relabel <-chan []string) byte {
+	t.openOverlay(lines)
 	shown := time.Now()
 	var expired <-chan time.Time
 	if timeout > 0 {

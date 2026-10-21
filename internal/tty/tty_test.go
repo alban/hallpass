@@ -120,3 +120,46 @@ func TestMakeRoomMargins(t *testing.T) {
 		t.Errorf("CUP 1;1 did not go to the top margin: origin mode lost")
 	}
 }
+
+// typeKeys sends keys as key presses once an overlay is shown.
+func (t *Term) typeKeys(keys ...string) {
+	for {
+		t.mu.Lock()
+		shown := t.ov != nil
+		t.mu.Unlock()
+		if shown {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	for _, k := range keys {
+		t.keys <- []byte(k)
+	}
+}
+
+func TestReadLine(t *testing.T) {
+	tm, written := testTerm(t, 24, 40)
+	go tm.typeKeys("x", "\x15", "ab", "\x7f", "\x1b[A", "é", "c\r")
+	line, ok := tm.ReadLine([]string{"title", "rule: "}, "old")
+	if !ok || line != "aéc" {
+		t.Errorf("ReadLine = %q, %v; want \"aéc\", true", line, ok)
+	}
+	if out := written(); !strings.Contains(out, "rule: old_") || !strings.Contains(out, "rule: aé_") {
+		t.Errorf("field not drawn: %q", out)
+	}
+
+	tm, _ = testTerm(t, 24, 40)
+	go tm.typeKeys("abc", "\x1b")
+	if line, ok := tm.ReadLine([]string{"rule: "}, ""); ok {
+		t.Errorf("ReadLine = %q after Esc, want cancelled", line)
+	}
+
+	tm, written = testTerm(t, 24, 20)
+	go tm.typeKeys("\r")
+	if line, _ := tm.ReadLine([]string{"rule: "}, "allow path /a/very/long/path"); line != "allow path /a/very/long/path" {
+		t.Errorf("ReadLine = %q", line)
+	}
+	if out := written(); !strings.Contains(out, "rule: …y/long/path_") {
+		t.Errorf("long line not scrolled to its end: %q", out)
+	}
+}
