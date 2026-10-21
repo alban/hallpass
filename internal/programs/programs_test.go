@@ -5,6 +5,7 @@ package programs
 
 import (
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -60,6 +61,85 @@ func TestGroups(t *testing.T) {
 		if !slices.Equal(got[name], want) {
 			t.Errorf("%s: got %v, want %v", name, got[name], want)
 		}
+	}
+}
+
+// TestGroupsListing: Groups lists the $PATH directories instead of trying
+// every name in every directory, and finds what Look finds: the first
+// executable in $PATH order, missing and non-directory entries skipped.
+func TestGroupsListing(t *testing.T) {
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, bin := filepath.Join(dir, "first"), filepath.Join(dir, "bin")
+	for _, d := range []string{first, bin} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for p, mode := range map[string]os.FileMode{
+		"first/cat": 0o644, "bin/cat": 0o755, "bin/dash": 0o755, "file": 0o755,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, p), nil, mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resolves := 0
+	f := Finder{
+		Path: strings.Join([]string{dir + "/missing", dir + "/file", first, bin}, ":"),
+		Resolve: func(p string) (string, error) {
+			resolves++
+			return filepath.EvalSymlinks(p)
+		},
+	}
+	// Groups of names only: not @git's absolute directories.
+	defs := slices.DeleteFunc(Builtin(), func(d Def) bool { return d.Name == "@git" })
+	gs := f.Groups(defs)
+	// 4 listings and the 3 names found (cat twice), not one per name and
+	// directory (about 4 × 250).
+	if resolves != 7 {
+		t.Errorf("%d resolves, want 7", resolves)
+	}
+	got := map[string][]string{}
+	for _, g := range gs {
+		got[g.Name] = g.Members
+		for _, m := range g.Members {
+			if l, ok := f.Look(path.Base(m)); !ok || l != m {
+				t.Errorf("%s: Look(%s) = %q, %v", g.Name, path.Base(m), l, ok)
+			}
+		}
+	}
+	for name, want := range map[string][]string{
+		"@shells":    {bin + "/dash"},
+		"@coreutils": {bin + "/cat"},
+	} {
+		if !slices.Equal(got[name], want) {
+			t.Errorf("%s: got %v, want %v", name, got[name], want)
+		}
+	}
+}
+
+// TestGroupsUnlisted: a $PATH directory that can be searched but not
+// read is still searched.
+func TestGroupsUnlisted(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads any directory")
+	}
+	bin := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "dash"), nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(bin, 0o111); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(bin, 0o755) })
+	gs := Finder{Path: bin}.Groups(Builtin())
+	if gs[0].Name != "@shells" || !slices.Equal(gs[0].Members, []string{bin + "/dash"}) {
+		t.Errorf("got %v", gs[0])
 	}
 }
 

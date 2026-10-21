@@ -8,11 +8,14 @@
 package programs
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path"
 	"slices"
 	"strings"
+	"syscall"
 )
 
 // Group is a named set of programs, resolved: Members are absolute paths
@@ -165,14 +168,23 @@ type Finder struct {
 // Look returns the resolved path of program name: looked up in Path
 // without a slash, as is with one (absolute only).
 func (f Finder) Look(name string) (string, bool) {
+	return f.look(name, nil)
+}
+
+// look is Look, skipping the Path directories whose listing in idx (from
+// index) does not have name.
+func (f Finder) look(name string, idx []listing) (string, bool) {
 	if name == "" {
 		return "", false
 	}
 	if strings.Contains(name, "/") {
 		return f.program(name)
 	}
-	for _, dir := range strings.Split(f.Path, ":") {
+	for i, dir := range strings.Split(f.Path, ":") {
 		if !path.IsAbs(dir) {
+			continue
+		}
+		if idx != nil && idx[i].names != nil && !idx[i].names[name] {
 			continue
 		}
 		if p, ok := f.program(path.Join(dir, name)); ok {
@@ -180,6 +192,58 @@ func (f Finder) Look(name string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// listing is the names in a Path directory; names nil: not listed (look
+// tries every name there).
+type listing struct {
+	names map[string]bool
+}
+
+// index lists the Path directories, one per entry of Path: a group
+// definition names a few hundred programs, and trying each in each
+// directory costs a stat (and a Resolve) per name and directory, slow on
+// a network filesystem.
+func (f Finder) index() []listing {
+	dirs := strings.Split(f.Path, ":")
+	out := make([]listing, len(dirs))
+	for i, dir := range dirs {
+		if !path.IsAbs(dir) {
+			continue
+		}
+		out[i] = f.list(dir)
+	}
+	return out
+}
+
+// list lists directory dir: empty when it does not exist, not listed when
+// it cannot be read (search permission without read permission).
+func (f Finder) list(dir string) listing {
+	absent := func(err error) bool {
+		return errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR)
+	}
+	if f.Resolve != nil {
+		r, err := f.Resolve(dir)
+		if err != nil {
+			if absent(err) {
+				return listing{names: map[string]bool{}}
+			}
+			return listing{}
+		}
+		dir = r
+	}
+	ents, err := os.ReadDir(f.Root + dir)
+	if err != nil {
+		if absent(err) {
+			return listing{names: map[string]bool{}}
+		}
+		return listing{}
+	}
+	names := make(map[string]bool, len(ents))
+	for _, e := range ents {
+		names[e.Name()] = true
+	}
+	return listing{names: names}
 }
 
 // program resolves absolute path p, if it is an executable file.
@@ -206,6 +270,7 @@ const maxMembers = 4096
 
 // Groups returns groups defs resolved: members not found are left out.
 func (f Finder) Groups(defs []Def) []Group {
+	idx := f.index()
 	out := make([]Group, 0, len(defs))
 	for _, d := range defs {
 		g := Group{Name: d.Name}
@@ -229,7 +294,7 @@ func (f Finder) Groups(defs []Def) []Group {
 				}
 				continue
 			}
-			if p, ok := f.Look(m); ok {
+			if p, ok := f.look(m, idx); ok {
 				add(p)
 			}
 		}
