@@ -218,6 +218,83 @@ func parseUnix(s string) (ObjectMatch, error) {
 	return ObjectMatch{Unix: u}, nil
 }
 
+// CoversNet reports whether network match m selects every destination
+// network match o selects. Only every destination (AnyNet) covers own
+// listeners or every destination.
+func (m ObjectMatch) CoversNet(o ObjectMatch) bool {
+	switch {
+	case !m.IsNet() || !o.IsNet():
+		return false
+	case m.AnyNet:
+		return true
+	case o.AnyNet || m.OwnListener || o.OwnListener:
+		return false
+	case m.Inet != nil && o.Inet != nil:
+		return m.Inet.covers(o.Inet)
+	case m.Unix != nil && o.Unix != nil:
+		return m.Unix.covers(o.Unix)
+	}
+	return false
+}
+
+// OverlapsNet reports whether network matches m and o may select a
+// destination in common. Own listeners (any loopback or unix address)
+// overlap every network match.
+func (m ObjectMatch) OverlapsNet(o ObjectMatch) bool {
+	switch {
+	case !m.IsNet() || !o.IsNet():
+		return false
+	case m.AnyNet || o.AnyNet || m.OwnListener || o.OwnListener:
+		return true
+	case m.Inet != nil && o.Inet != nil:
+		return m.Inet.overlaps(o.Inet)
+	case m.Unix != nil && o.Unix != nil:
+		return m.Unix.covers(o.Unix) || o.Unix.covers(m.Unix)
+	}
+	return false
+}
+
+func (m *InetMatch) covers(o *InetMatch) bool {
+	if m.Proto != 0 && m.Proto != o.Proto {
+		return false
+	}
+	if m.PortLo != 0 || m.PortHi != 0 {
+		if (o.PortLo == 0 && o.PortHi == 0) || o.PortLo < m.PortLo || o.PortHi > m.PortHi {
+			return false
+		}
+	}
+	if m.Prefix.IsValid() {
+		return o.Prefix.IsValid() && m.Prefix.Bits() <= o.Prefix.Bits() && m.Prefix.Contains(o.Prefix.Addr())
+	}
+	return true
+}
+
+func (m *InetMatch) overlaps(o *InetMatch) bool {
+	if m.Proto != 0 && o.Proto != 0 && m.Proto != o.Proto {
+		return false
+	}
+	if (m.PortLo != 0 || m.PortHi != 0) && (o.PortLo != 0 || o.PortHi != 0) && (m.PortHi < o.PortLo || o.PortHi < m.PortLo) {
+		return false
+	}
+	return !m.Prefix.IsValid() || !o.Prefix.IsValid() || m.Prefix.Overlaps(o.Prefix)
+}
+
+func (m *UnixMatch) covers(o *UnixMatch) bool {
+	if m.Abstract != o.Abstract {
+		return false
+	}
+	if m.Abstract {
+		if m.Prefix {
+			return strings.HasPrefix(o.Name, m.Name)
+		}
+		return !o.Prefix && o.Name == m.Name
+	}
+	if m.Prefix {
+		return Under(o.Path, m.Path)
+	}
+	return !o.Prefix && o.Path == m.Path
+}
+
 // ExactNet returns the match for exactly o's destination: one address and
 // port, any protocol, or one unix path or abstract name. Answers use it:
 // the protocol is left out because glibc's getaddrinfo connects a UDP

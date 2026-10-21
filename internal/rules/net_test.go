@@ -135,3 +135,64 @@ func TestExactNet(t *testing.T) {
 		t.Errorf("ExactNet = %q", got)
 	}
 }
+
+func TestCoversNet(t *testing.T) {
+	for _, tc := range []struct {
+		m, o            string
+		covers, overlap bool
+	}{
+		{"all", "tcp:1.2.3.4:443", true, true},
+		{"all", "unix:@x*", true, true},
+		{"tcp:1.2.3.4:443", "all", false, true},
+		{"*", "10.0.0.0/8", true, true},
+		{"*", "[::1]:53", true, true},
+		{"*", "unix:/a", false, false},
+		{"10.0.0.0/8", "10.1.2.3:22", true, true},
+		{"10.0.0.0/8", "10.0.0.0/7", false, true},
+		{"10.0.0.0/8", "11.0.0.1", false, false},
+		{"10.0.0.0/8", "*", false, true},
+		{"10.0.0.0/8", "[::ffff:10.0.0.1]", true, true},
+		{"10.0.0.0/8", "[::1]", false, false},
+		{"[2001:db8::]/32", "[2001:db8::1]:443", true, true},
+		{"*:443", "1.2.3.4:443", true, true},
+		{"*:443", "1.2.3.4", false, true},
+		{"*:443", "1.2.3.4:80", false, false},
+		{"*:8000-8999", "*:8080-8090", true, true},
+		{"*:8000-8999", "*:7000-8000", false, true},
+		{"tcp:*", "udp:*", false, false},
+		{"tcp:*", "*", false, true},
+		{"*", "tcp:1.2.3.4", true, true},
+		{"unix:/run/**", "unix:/run/x.sock", true, true},
+		{"unix:/run/**", "unix:/run/a/**", true, true},
+		{"unix:/run/x.sock", "unix:/run/**", false, true},
+		{"unix:/run/x.sock", "unix:/run/y.sock", false, false},
+		{"unix:/run/x.sock", "unix:@x", false, false},
+		{"unix:@foo*", "unix:@foobar", true, true},
+		{"unix:@foo*", "unix:@fo*", false, true},
+		{"unix:@foo", "unix:@foo*", false, true},
+		{"unix:@foo", "unix:@bar", false, false},
+	} {
+		m, err := ParseNet(tc.m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		o, err := ParseNet(tc.o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := m.CoversNet(o); got != tc.covers {
+			t.Errorf("%s covers %s: %v, want %v", tc.m, tc.o, got, tc.covers)
+		}
+		if got := m.OverlapsNet(o); got != tc.overlap {
+			t.Errorf("%s overlaps %s: %v, want %v", tc.m, tc.o, got, tc.overlap)
+		}
+		if got := o.OverlapsNet(m); got != tc.overlap {
+			t.Errorf("%s overlaps %s: %v, want %v", tc.o, tc.m, got, tc.overlap)
+		}
+	}
+	own := ObjectMatch{OwnListener: true}
+	tcp, _ := ParseNet("tcp:127.0.0.1:80")
+	if own.CoversNet(tcp) || !own.OverlapsNet(tcp) || (ObjectMatch{Path: &PathMatch{Path: "/"}}).OverlapsNet(tcp) {
+		t.Error("own listeners or a path")
+	}
+}
