@@ -62,6 +62,42 @@ type Spec struct {
 	// the replacement of the built-in group of the same name. Members are
 	// programs as in AllowExec, without groups. They need exec in Mediate.
 	Groups map[string][]string `json:"groups,omitempty"`
+	// Rules are rules in the text of a rule file (rules.ParseFile): one
+	// per line, "allow write /workspace/**", "deny connect
+	// 169.254.169.254", "allow exec @git"... A HallpassPolicy has only
+	// these: the fields above with an equivalent rule are refused there
+	// (Structured), and no variables.
+	Rules string `json:"rules,omitempty"`
+
+	// RuleFiles are rule files given on the command line (--rules),
+	// read; Vars expands their variables (and those of Rules), nil for
+	// none.
+	RuleFiles []RuleFile                        `json:"-"`
+	Vars      func(name string) (string, error) `json:"-"`
+}
+
+// RuleFile is the text of a rule file and its name, for errors.
+type RuleFile struct {
+	Name, Text string
+}
+
+// Structured returns the JSON name of the first field of s that a rule
+// in Rules replaces (allowPaths, allowNet...), "" for none: a
+// HallpassPolicy refuses them, the flags still fill them.
+func (s Spec) Structured() string {
+	for _, f := range []struct {
+		name string
+		set  bool
+	}{
+		{"allowPaths", len(s.AllowPaths) > 0}, {"denyPaths", len(s.DenyPaths) > 0}, {"askPaths", len(s.AskPaths) > 0},
+		{"allowNet", len(s.AllowNet) > 0}, {"denyNet", len(s.DenyNet) > 0}, {"askNet", len(s.AskNet) > 0},
+		{"allowExec", len(s.AllowExec) > 0}, {"denyExec", len(s.DenyExec) > 0},
+	} {
+		if f.set {
+			return f.name
+		}
+	}
+	return ""
 }
 
 // Policy is a validated Spec.
@@ -79,6 +115,10 @@ type Policy struct {
 	AllowGroups []string
 	// Groups are the policy's own groups, sorted by name (GroupDefs).
 	Groups []programs.Def
+	// Rules are the rules of Spec.Rules and Spec.RuleFiles, their
+	// variables expanded, but the program groups they allow (in
+	// AllowGroups). Paths are not resolved yet.
+	Rules []rules.Rule
 }
 
 // FieldError is an invalid field of a Spec, named as in JSON. Sources
@@ -176,6 +216,45 @@ func (s Spec) Validate() (Policy, error) {
 		}
 		if *f.out, err = programPaths(f.in, f.groups, known); err != nil {
 			return Policy{}, &FieldError{f.name, err}
+		}
+	}
+	files := s.RuleFiles
+	if s.Rules != "" {
+		files = append([]RuleFile{{Name: "rules", Text: s.Rules}}, files...)
+	}
+	vars := s.Vars
+	if vars == nil {
+		vars = func(name string) (string, error) {
+			return "", fmt.Errorf("$%s: no variables in a policy's rules (paths are the container's)", name)
+		}
+	}
+	for _, f := range files {
+		frs, err := rules.ParseFile(f.Name, f.Text, vars)
+		if err != nil {
+			return Policy{}, &FieldError{"rules", err}
+		}
+		for _, fr := range frs {
+			fail := func(err error) error {
+				return &FieldError{"rules", &rules.FileError{Name: f.Name, Line: fr.Line, Err: err}}
+			}
+			if fr.Group != "" {
+				if p.Mediate&seccomp.Exec == 0 {
+					return Policy{}, fail(errors.New("needs exec in mediate"))
+				}
+				if _, err := programPaths([]string{fr.Group}, &p.AllowGroups, known); err != nil {
+					return Policy{}, fail(err)
+				}
+				continue
+			}
+			r := fr.Rule
+			switch {
+			case r.Ops&rules.OpExec != 0 && p.Mediate&seccomp.Exec == 0:
+				return Policy{}, fail(errors.New("needs exec in mediate"))
+			case r.Ops&rules.OpNet == r.Ops && p.Mediate&seccomp.Connect == 0:
+				// A deny that does nothing must not look like it works.
+				return Policy{}, fail(errors.New("needs connect in mediate"))
+			}
+			p.Rules = append(p.Rules, r)
 		}
 	}
 	return p, nil
@@ -303,5 +382,6 @@ func (p Policy) Defaults(c Context) *defaults.Defaults {
 	for _, m := range p.DenyExec {
 		d.DenyExec(m.Path, m.Tree)
 	}
+	d.AddRules(p.Rules)
 	return d
 }

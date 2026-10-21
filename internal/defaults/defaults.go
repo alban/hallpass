@@ -50,6 +50,9 @@ type Defaults struct {
 	// names of those allowed (--allow-exec=@name).
 	groups     []programs.Group
 	execGroups []string
+	// extra are the rules of AddRules no other field holds (a single
+	// file, a /proc file, an asked program...), their paths resolved.
+	extra []rules.Rule
 }
 
 // warnLoc is a sensitive location: a write under path is still asked about,
@@ -165,6 +168,53 @@ func (d *Defaults) AskNet(m rules.ObjectMatch) { d.netAsk = append(d.netAsk, m) 
 // policy's paths.
 func (d *Defaults) AllowExec(path string, tree bool) {
 	d.execAllow = addProgram(d.execAllow, rules.PathMatch{Path: d.canon(path), Tree: tree})
+}
+
+// AddRules adds rules (of a rule file, rules.ParseFile), their paths
+// resolved like the policy's. Those with the shape of a flag (a tree of
+// files, a program, a destination) are kept as that flag's, so that
+// Summary lists them alike.
+func (d *Defaults) AddRules(rs []rules.Rule) {
+	for _, r := range rs {
+		o := r.Object
+		if p := o.Path; p != nil {
+			switch {
+			case r.Ops == rules.OpExec && r.Verdict == rules.Allow:
+				d.AllowExec(p.Path, p.Tree)
+				continue
+			case r.Ops == rules.OpExec && r.Verdict == rules.Deny:
+				d.DenyExec(p.Path, p.Tree)
+				continue
+			case r.Ops == rules.OpAll && p.Tree && r.Verdict == rules.Allow:
+				d.allow = append(d.allow, d.canon(p.Path))
+				continue
+			case r.Ops == rules.OpAll && p.Tree && r.Verdict == rules.Deny:
+				d.deny = append(d.deny, d.canon(p.Path))
+				continue
+			case r.Ops == rules.OpAll && p.Tree && r.Verdict == rules.Ask:
+				d.AskPath(p.Path)
+				continue
+			}
+			m := *p
+			m.Path = d.canon(p.Path)
+			r.Object.Path = &m
+		} else if o.OwnListener && r.Verdict == rules.Allow {
+			d.AllowOwnListeners()
+			continue
+		} else if r.Ops == rules.OpNet && !o.OwnListener {
+			switch r.Verdict {
+			case rules.Allow:
+				d.AllowNet(o)
+			case rules.Deny:
+				d.DenyNet(o)
+			case rules.Ask:
+				d.AskNet(o)
+			}
+			continue
+		}
+		r.Set = Set
+		d.extra = append(d.extra, r)
+	}
 }
 
 // SetGroups sets the program groups, resolved as the sandbox finds them
@@ -344,7 +394,7 @@ func (d *Defaults) Rules() []rules.Rule {
 		g, _ := d.group(name)
 		rs = append(rs, GroupRules(g, rs, Set)...)
 	}
-	return rs
+	return append(rs, d.extra...)
 }
 
 // GroupRules returns the rules allowing the programs of group g, labelled

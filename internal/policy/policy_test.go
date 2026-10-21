@@ -6,6 +6,7 @@ package policy
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -191,5 +192,58 @@ func TestGroups(t *testing.T) {
 	defs := p.GroupDefs()
 	if defs[0].Name != "@shells" || !reflect.DeepEqual(defs[0].Members, []string{"/usr/bin/dash"}) || defs[len(defs)-1].Name != "@tools" || len(defs) != len(programs.Builtin())+1 {
 		t.Errorf("GroupDefs: %+v", defs)
+	}
+}
+
+// TestRules: the rules text and the rule files, their groups, variables
+// and categories; the rules reach the Defaults' rules.
+func TestRules(t *testing.T) {
+	vars := func(name string) (string, error) {
+		if name == "HOME" {
+			return "/home/me", nil
+		}
+		return "", errors.New("unknown")
+	}
+	p, err := Spec{
+		Mediate:   []string{"write", "exec", "connect"},
+		Rules:     "allow exec @git\ndeny connect 169.254.169.254",
+		RuleFiles: []RuleFile{{Name: "a.rules", Text: "allow write ~/out/**\nask write /etc/x"}},
+		Vars:      vars,
+	}.Validate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var specs []string
+	for _, r := range p.Rules {
+		specs = append(specs, r.Spec())
+	}
+	if want := []string{"deny connect 169.254.169.254", "allow write /home/me/out/**", "ask write /etc/x"}; !reflect.DeepEqual(specs, want) || !reflect.DeepEqual(p.AllowGroups, []string{"@git"}) {
+		t.Errorf("rules %q, groups %v", specs, p.AllowGroups)
+	}
+	d := p.Defaults(Context{Home: "/home/me", Lexical: true})
+	found := map[string]bool{}
+	for _, r := range d.Rules() {
+		found[r.Spec()] = true
+	}
+	for _, want := range []string{"deny connect 169.254.169.254", "allow write /home/me/out/**", "ask write /etc/x"} {
+		if !found[want] {
+			t.Errorf("Defaults lack %q: %v", want, found)
+		}
+	}
+
+	for _, c := range []struct {
+		spec Spec
+		want string
+	}{
+		{Spec{Rules: "allow write $HOME/x"}, "rules: rules:1: $HOME: no variables"},
+		{Spec{RuleFiles: []RuleFile{{Name: "b.rules", Text: "\nallow exec /x"}}, Mediate: []string{"write"}}, "rules: b.rules:2: needs exec in mediate"},
+		{Spec{Rules: "allow connect all"}, "rules: rules:1: needs connect in mediate"},
+		{Spec{Rules: "allow exec @nope"}, `rules: rules:1: "@nope": unknown group`},
+	} {
+		_, err := c.spec.Validate()
+		var fe *FieldError
+		if err == nil || !errors.As(err, &fe) || fe.Field != "rules" || !strings.HasPrefix(err.Error(), c.want) {
+			t.Errorf("%+v: %v, want %s...", c.spec, err, c.want)
+		}
 	}
 }
