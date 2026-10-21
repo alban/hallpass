@@ -85,6 +85,9 @@ func TestGroupsListing(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if err := os.Symlink("dash", filepath.Join(bin, "sh")); err != nil {
+		t.Fatal(err)
+	}
 	resolves := 0
 	f := Finder{
 		Path: strings.Join([]string{dir + "/missing", dir + "/file", first, bin}, ":"),
@@ -96,10 +99,10 @@ func TestGroupsListing(t *testing.T) {
 	// Groups of names only: not @git's absolute directories.
 	defs := slices.DeleteFunc(Builtin(), func(d Def) bool { return d.Name == "@git" })
 	gs := f.Groups(defs)
-	// 4 listings and the 3 names found (cat twice), not one per name and
-	// directory (about 4 × 250).
-	if resolves != 7 {
-		t.Errorf("%d resolves, want 7", resolves)
+	// 4 listings and the symlink sh, not one per name and directory
+	// (about 4 × 250): regular files listed need none.
+	if resolves != 5 {
+		t.Errorf("%d resolves, want 5", resolves)
 	}
 	got := map[string][]string{}
 	for _, g := range gs {

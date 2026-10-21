@@ -184,8 +184,17 @@ func (f Finder) look(name string, idx []listing) (string, bool) {
 		if !path.IsAbs(dir) {
 			continue
 		}
-		if idx != nil && idx[i].names != nil && !idx[i].names[name] {
-			continue
+		if idx != nil && idx[i].names != nil {
+			typ, ok := idx[i].names[name]
+			if !ok {
+				continue
+			}
+			if typ.IsRegular() {
+				if p, ok := f.executable(path.Join(idx[i].dir, name)); ok {
+					return p, true
+				}
+				continue
+			}
 		}
 		if p, ok := f.program(path.Join(dir, name)); ok {
 			return p, true
@@ -194,10 +203,12 @@ func (f Finder) look(name string, idx []listing) (string, bool) {
 	return "", false
 }
 
-// listing is the names in a Path directory; names nil: not listed (look
-// tries every name there).
+// listing is the names in a Path directory and their types; names nil:
+// not listed (look tries every name there). dir is the directory,
+// resolved: a regular file listed there needs no Resolve.
 type listing struct {
-	names map[string]bool
+	dir   string
+	names map[string]fs.FileMode
 }
 
 // index lists the Path directories, one per entry of Path: a group
@@ -226,7 +237,7 @@ func (f Finder) list(dir string) listing {
 		r, err := f.Resolve(dir)
 		if err != nil {
 			if absent(err) {
-				return listing{names: map[string]bool{}}
+				return listing{names: map[string]fs.FileMode{}}
 			}
 			return listing{}
 		}
@@ -235,15 +246,15 @@ func (f Finder) list(dir string) listing {
 	ents, err := os.ReadDir(f.Root + dir)
 	if err != nil {
 		if absent(err) {
-			return listing{names: map[string]bool{}}
+			return listing{names: map[string]fs.FileMode{}}
 		}
 		return listing{}
 	}
-	names := make(map[string]bool, len(ents))
+	names := make(map[string]fs.FileMode, len(ents))
 	for _, e := range ents {
-		names[e.Name()] = true
+		names[e.Name()] = e.Type()
 	}
-	return listing{names: names}
+	return listing{dir: dir, names: names}
 }
 
 // program resolves absolute path p, if it is an executable file.
@@ -258,6 +269,11 @@ func (f Finder) program(p string) (string, bool) {
 		}
 		p = r
 	}
+	return f.executable(p)
+}
+
+// executable returns p if it is an executable file; p is resolved.
+func (f Finder) executable(p string) (string, bool) {
 	st, err := os.Stat(f.Root + p)
 	if err != nil || !st.Mode().IsRegular() || st.Mode().Perm()&0o111 == 0 {
 		return "", false
@@ -320,7 +336,13 @@ func (f Finder) dir(dir string) []string {
 	}
 	var out []string
 	for _, e := range ents {
-		if p, ok := f.program(path.Join(dir, e.Name())); ok {
+		p, ok := "", false
+		if e.Type().IsRegular() {
+			p, ok = f.executable(path.Join(dir, e.Name()))
+		} else {
+			p, ok = f.program(path.Join(dir, e.Name()))
+		}
+		if ok {
 			out = append(out, p)
 		}
 	}
