@@ -94,7 +94,7 @@ func runSession(cfg sessionConfig) (int, error) {
 			return 0, err
 		}
 		defer ks.Close()
-		if err := ks.Mediate(cfg.Mediate&seccomp.Files != 0, cfg.Mediate&seccomp.Exec != 0, cfg.Mediate&seccomp.Network != 0); err != nil {
+		if err := ks.Mediate(cfg.Mediate&seccomp.Write != 0, cfg.Mediate&seccomp.Exec != 0, cfg.Mediate&seccomp.Connect != 0); err != nil {
 			return 0, err
 		}
 		kernel = ks
@@ -120,7 +120,7 @@ func runSession(cfg sessionConfig) (int, error) {
 	if _, err := m.Apply(monitor.Decision{AddRules: protected, Client: "hallpass"}); err != nil {
 		return 0, err
 	}
-	if cfg.Mediate&seccomp.Network != 0 {
+	if cfg.Mediate&seccomp.Connect != 0 {
 		// The web UIs' ports, registered before the sandbox starts, and
 		// while it runs.
 		g := &portGuard{m: m, done: map[uint16]bool{}}

@@ -1,6 +1,6 @@
 # Files
 
-With `files` in `--mediate` (the default), writes outside what your rules allow are paused and asked about. What counts as a write: opening a file for writing or truncating it, creating, deleting, renaming or linking a file, a directory or a symlink, `truncate` and `mknod`. Reads, permissions, owners, extended attributes and timestamps are not mediated.
+With `write` in `--mediate` (the default), writes outside what your rules allow are paused and asked about. What counts as a write: opening a file for writing or truncating it, creating, deleting, renaming or linking a file, a directory or a symlink, `truncate` and `mknod`. Reads, permissions, owners, extended attributes and timestamps are not mediated.
 
 ## Lite mode
 

@@ -287,7 +287,7 @@ message Rule {
   string label = 5;
   google.protobuf.Timestamp expires = 6; // unset: until removed
   string set = 7;
-  // The rule in the text syntax of hallpass answer add (e.g. "allow path
+  // The rule in the text syntax of hallpass answer add (e.g. "allow write
   // /src/**"), without its expiry; set by the server, ignored in requests.
   string spec = 8;
 }

@@ -36,9 +36,9 @@ Rules live as long as the session: nothing is written back to the command line o
 Every rule of a session can be edited, deleted or added, including those from the command line or the policy: from the [web UI](web.md#editing-rules), the [Headlamp plugin](../kubernetes/answer.md#headlamp-plugin), the Ctrl-] menu (`r`) or `hallpass answer`. A change applies to this session only. Rules are written as `VERDICT KIND VALUE [for DURATION]`:
 
 ```
-allow path /home/me/src/**        # a tree; without /**, the file only
+allow write /home/me/src/**       # writing in a tree; without /**, the file only
 deny exec /usr/bin/curl for 1h    # running a program, for an hour
-ask net tcp:140.82.112.21:443     # a destination; unix:/run/x.sock, unix:@name, all...
+ask connect tcp:140.82.112.21:443 # a destination; unix:/run/x.sock, unix:@name, all...
 allow proc oom_score_adj chrome   # /proc/<pid>/oom_score_adj of the processes named chrome
 deny unknown                      # the paths hallpass could not read (lite mode)
 ```
@@ -48,10 +48,10 @@ Editing gives no more power than answering: an allow rule may only grant what `a
 ```console
 $ hallpass answer rules
 ID  RULE                           LABEL
-1   allow path /home/me/proj/**
+1   allow write /home/me/proj/**
 ...
-42  allow path /home/me/.cache/**
-$ hallpass answer edit 42 allow path /home/me/.cache/pip/**
+42  allow write /home/me/.cache/**
+$ hallpass answer edit 42 allow write /home/me/.cache/pip/**
 $ hallpass answer add deny exec /usr/bin/curl
 $ hallpass answer delete 43
 ```

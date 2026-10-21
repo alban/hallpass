@@ -49,7 +49,7 @@ H tagain connect %[1]s
 H udp sendto %[2]s
 H aonce connect %[3]s
 `, nt.tcp, nt.udp, nt.abstract)
-			c := e.cmd(script, "--mode="+mode, "--prompt=answer", "--timeout=20s", "--mediate=files,exec,network",
+			c := e.cmd(script, "--mode="+mode, "--prompt=answer", "--timeout=20s", "--mediate=write,exec,connect",
 				"--allow-net=127.0.0.0/8", "--ask-net=127.0.0.1", "--allow-net=udp:"+nt.udp,
 				"--allow-net=unix:@hallpass-e2e-*", "--ask-net=unix:"+nt.abstract)
 			c.Env = append(c.Env, "HP_SELF="+self)

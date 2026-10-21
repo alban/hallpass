@@ -28,34 +28,34 @@ func TestGrantable(t *testing.T) {
 		spec string
 		want bool
 	}{
-		{"allow path /home/u/src/**", true},
-		{"allow path /home/u/src/proj/**", true},
-		{"allow path /home/u/src/proj/main.go", true},
-		{"allow path /home/u/.cache/go-build/**", true},
-		{"allow path /home/u/.cache/**", true}, // what "always" on ~/.cache/f gives
-		{"allow path /home/u/.config/**", false},
-		{"allow path /home/u/**", false},
-		{"allow path /home/**", false},
-		{"allow path /home/u/.bashrc", false},
-		{"allow path /**", false},
-		{"allow path /opt/**", false}, // holds a denied path
-		{"allow path /etc/**", true},
-		{"allow path /etc/hosts for 10m", true},
+		{"allow write /home/u/src/**", true},
+		{"allow write /home/u/src/proj/**", true},
+		{"allow write /home/u/src/proj/main.go", true},
+		{"allow write /home/u/.cache/go-build/**", true},
+		{"allow write /home/u/.cache/**", true}, // what "always" on ~/.cache/f gives
+		{"allow write /home/u/.config/**", false},
+		{"allow write /home/u/**", false},
+		{"allow write /home/**", false},
+		{"allow write /home/u/.bashrc", false},
+		{"allow write /**", false},
+		{"allow write /opt/**", false}, // holds a denied path
+		{"allow write /etc/**", true},
+		{"allow write /etc/hosts for 10m", true},
 		{"allow exec /usr/bin/git", true},
 		{"allow exec /usr/bin/**", false},
 		{"allow proc oom_score_adj chrome", true},
-		{"allow net tcp:1.2.3.4:443", true},
-		{"allow net [2001:db8::1]:22", true},
-		{"allow net 1.2.3.4", false},
-		{"allow net 1.2.3.0/24:443", false},
-		{"allow net 1.2.3.4:1-1024", false},
-		{"allow net *:443", false},
-		{"allow net unix:/run/x.sock", true},
-		{"allow net unix:/run/**", false},
-		{"allow net unix:@name", true},
-		{"allow net unix:@name*", false},
-		{"allow net own-listeners", false},
-		{"allow net all", false},
+		{"allow connect tcp:1.2.3.4:443", true},
+		{"allow connect [2001:db8::1]:22", true},
+		{"allow connect 1.2.3.4", false},
+		{"allow connect 1.2.3.0/24:443", false},
+		{"allow connect 1.2.3.4:1-1024", false},
+		{"allow connect *:443", false},
+		{"allow connect unix:/run/x.sock", true},
+		{"allow connect unix:/run/**", false},
+		{"allow connect unix:@name", true},
+		{"allow connect unix:@name*", false},
+		{"allow connect own-listeners", false},
+		{"allow connect all", false},
 		{"allow unknown", false},
 	} {
 		if got := Grantable(p, mustSpec(t, tc.spec, now)); got != tc.want {
@@ -67,7 +67,7 @@ func TestGrantable(t *testing.T) {
 	if Grantable(p, r) {
 		t.Errorf("Grantable(exec with args)")
 	}
-	r = mustSpec(t, "allow path /etc/hosts", now)
+	r = mustSpec(t, "allow write /etc/hosts", now)
 	r.Ops |= rules.OpExec
 	if Grantable(p, r) {
 		t.Errorf("Grantable(file and exec ops)")
@@ -77,17 +77,17 @@ func TestGrantable(t *testing.T) {
 func TestCheckRules(t *testing.T) {
 	p := defaults.NewLexical("/home/u", "", nil, nil)
 	now := time.Now()
-	all := mustSpec(t, "allow net all", now)
-	ask := mustSpec(t, "ask path /home/u/.ssh/**", now)
+	all := mustSpec(t, "allow connect all", now)
+	ask := mustSpec(t, "ask write /home/u/.ssh/**", now)
 	for _, tc := range []struct {
 		name    string
 		add, rm []rules.Rule
 		ok, tOK bool // CheckRules, CheckTighten
 	}{
-		{name: "deny", add: []rules.Rule{mustSpec(t, "deny path /**", now)}, ok: true, tOK: true},
-		{name: "grantable", add: []rules.Rule{mustSpec(t, "allow net 1.2.3.4:443", now)}, ok: true},
-		{name: "wide", add: []rules.Rule{mustSpec(t, "allow net 1.2.3.0/24:443", now)}},
-		{name: "narrowed", rm: []rules.Rule{all}, add: []rules.Rule{mustSpec(t, "allow net 1.2.3.0/24:443", now)}, ok: true, tOK: true},
+		{name: "deny", add: []rules.Rule{mustSpec(t, "deny write /**", now)}, ok: true, tOK: true},
+		{name: "grantable", add: []rules.Rule{mustSpec(t, "allow connect 1.2.3.4:443", now)}, ok: true},
+		{name: "wide", add: []rules.Rule{mustSpec(t, "allow connect 1.2.3.0/24:443", now)}},
+		{name: "narrowed", rm: []rules.Rule{all}, add: []rules.Rule{mustSpec(t, "allow connect 1.2.3.0/24:443", now)}, ok: true, tOK: true},
 		{name: "remove an allow", rm: []rules.Rule{all}, ok: true, tOK: true},
 		{name: "remove an ask", rm: []rules.Rule{ask}, ok: true},
 	} {

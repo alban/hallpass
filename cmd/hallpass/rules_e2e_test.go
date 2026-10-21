@@ -52,20 +52,20 @@ func TestAnswerRuleCommands(t *testing.T) {
 		}
 		return out
 	}
-	run("add", "--label", "mine", "deny", "path", e.home+"/secret")
-	id := ruleIDOf(t, run("rules"), "deny path "+e.home+"/secret")
-	run("edit", id, "deny path "+e.home+"/secret/**")
+	run("add", "--label", "mine", "deny", "write", e.home+"/secret")
+	id := ruleIDOf(t, run("rules"), "deny write "+e.home+"/secret")
+	run("edit", id, "deny write "+e.home+"/secret/**")
 	out := run("rules")
-	if !regexp.MustCompile(`deny path ` + regexp.QuoteMeta(e.home) + `/secret/\*\* +mine`).MatchString(out) {
+	if !regexp.MustCompile(`deny write ` + regexp.QuoteMeta(e.home) + `/secret/\*\* +mine`).MatchString(out) {
 		t.Errorf("edit lost the label:\n%s", out)
 	}
-	if out, err := answerCmd(t, e, c, "add", "allow", "path", "/"); err == nil || !strings.Contains(out, `answering "always"`) {
-		t.Errorf("hallpass answer add allow path /: %v\n%s", err, out)
+	if out, err := answerCmd(t, e, c, "add", "allow", "write", "/"); err == nil || !strings.Contains(out, `answering "always"`) {
+		t.Errorf("hallpass answer add allow write /: %v\n%s", err, out)
 	}
-	if out, err := answerCmd(t, e, c, "edit", id, "deny path /x"); err == nil || !strings.Contains(out, "no rule "+id) {
+	if out, err := answerCmd(t, e, c, "edit", id, "deny write /x"); err == nil || !strings.Contains(out, "no rule "+id) {
 		t.Errorf("edit of an edited rule: %v\n%s", err, out)
 	}
-	run("delete", ruleIDOf(t, out, "deny path "+e.home+"/secret/**"))
+	run("delete", ruleIDOf(t, out, "deny write "+e.home+"/secret/**"))
 	if out := run("rules"); strings.Contains(out, "/secret") {
 		t.Errorf("rule not deleted:\n%s", out)
 	}
@@ -94,7 +94,7 @@ func TestTerminalMenuRules(t *testing.T) {
 	waitFor(t, seen("[a] add"), "rules menu")
 	m.Write([]byte("a"))
 	waitFor(t, seen("Rule: _"), "rule field")
-	m.Write([]byte("deny path " + e.home + "/m\r"))
+	m.Write([]byte("deny write " + e.home + "/m\r"))
 	waitFor(t, seen("Label (optional): _"), "label field")
 	m.Write([]byte("menu\r"))
 	waitFor(t, seen("Done."), "the rule added")
@@ -102,7 +102,7 @@ func TestTerminalMenuRules(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id := ruleIDOf(t, out, "deny path "+e.home+"/m")
+	id := ruleIDOf(t, out, "deny write "+e.home+"/m")
 
 	m.Write([]byte("e"))
 	waitFor(t, seen("Edit rule ID: _"), "ID field")
@@ -114,7 +114,7 @@ func TestTerminalMenuRules(t *testing.T) {
 	out, _ = answerCmd(t, e, c, "rules")
 	m.Write([]byte("d"))
 	waitFor(t, seen("Delete rule ID: _"), "ID field")
-	m.Write([]byte(ruleIDOf(t, out, "deny path "+e.home+"/m/**") + "\r"))
+	m.Write([]byte(ruleIDOf(t, out, "deny write "+e.home+"/m/**") + "\r"))
 	waitFor(t, func() bool { return !strings.Contains(scr.text(), "/m/**") }, "the rule deleted")
 	m.Write([]byte("q"))
 	waitFor(t, func() bool { return !strings.Contains(scr.text(), "[a] add") }, "the menu closed")
@@ -170,16 +170,16 @@ done
 			}
 
 			a, b := e.proj+"/a", e.proj+"/b"
-			run("add", "deny", "path", a)
+			run("add", "deny", "write", a)
 			step(1)
 			if mode == "strict" {
 				if out, err := answerCmd(t, e, c, "add", "ask", "exec", "/bin/true"); err == nil || !strings.Contains(out, "not enforceable in strict mode: ask exec ") {
 					t.Errorf("hallpass answer add ask exec: %v\n%s", err, out)
 				}
 			}
-			run("edit", ruleIDOf(t, run("rules"), "deny path "+a), "deny path "+b)
+			run("edit", ruleIDOf(t, run("rules"), "deny write "+a), "deny write "+b)
 			step(2)
-			run("delete", ruleIDOf(t, run("rules"), "deny path "+b))
+			run("delete", ruleIDOf(t, run("rules"), "deny write "+b))
 			step(3)
 			if err := c.Wait(); err != nil {
 				t.Fatalf("hallpass: %v\n%s", err, out.String())

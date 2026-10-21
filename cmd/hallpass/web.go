@@ -39,7 +39,7 @@ through a port-forward (see docs/kubernetes/answer.md):
 
 EXPERIMENTAL: a sandboxed agent can connect to the page too, and pair if
 you confirm its code instead of your browser's. Sessions that mediate the
-network (--mediate=files,exec,network) deny their sandbox connections to
+network (--mediate=write,exec,connect) deny their sandbox connections to
 this port; others do not. See docs/devel/web.md.
 `
 

@@ -14,24 +14,26 @@ import (
 
 // SpecSyntax describes the syntax ParseSpec reads, for help texts.
 const SpecSyntax = `VERDICT KIND VALUE [for DURATION]
-  VERDICT   allow, deny or ask
-  path P    the file P; P/** the tree below P
-  exec P    running the program P; P/** every program below P
-  net N     a destination: tcp:1.2.3.4:443, [2001:db8::1]:22, unix:/run/x.sock, unix:@name, all...
-  proc N C  /proc/<pid>/N of the processes named C
-  unknown   the paths that could not be read (lite mode)
-  DURATION  e.g. 10m or 2h; without it, until removed`
+  VERDICT    allow, deny or ask
+  write P    writing the file P (creating, deleting... it too); P/** the tree below P
+  exec P     running the program P; P/** every program below P
+  connect N  a destination: tcp:1.2.3.4:443, [2001:db8::1]:22, unix:/run/x.sock, unix:@name, all...
+  proc N C   /proc/<pid>/N of the processes named C
+  unknown    the paths that could not be read (lite mode)
+  DURATION   e.g. 10m or 2h; without it, until removed`
 
 // ParseSpec reads a rule written the way Spec writes it, with an optional
 // "for DURATION" suffix setting its expiry from now:
 //
-//	allow path /home/u/src/**
+//	allow write /home/u/src/**
 //	deny exec /usr/bin/curl for 1h
-//	ask net tcp:140.82.112.21:443
+//	ask connect tcp:140.82.112.21:443
 //	allow proc oom_score_adj chrome
 //
-// The ops come from the kind: every file and network op for path, proc
-// and unknown (like an answer), the network ones for net, exec for exec.
+// The kinds are the ops of hallpass-request and the categories of
+// --mediate. The ops come from the kind: every file and network op for
+// write, proc and unknown (like an answer), the network ones for
+// connect, exec for exec.
 func ParseSpec(s string, now time.Time) (Rule, error) {
 	var r Rule
 	s = strings.TrimSpace(s)
@@ -59,7 +61,7 @@ func ParseSpec(s string, now time.Time) (Rule, error) {
 	kind, value, _ := strings.Cut(strings.TrimSpace(rest), " ")
 	value = strings.TrimSpace(value)
 	switch kind {
-	case "path", "exec":
+	case "write", "exec":
 		m, err := parsePathSpec(value)
 		if err != nil {
 			return r, fmt.Errorf("%s %s: %w", verdict, kind, err)
@@ -68,13 +70,13 @@ func ParseSpec(s string, now time.Time) (Rule, error) {
 		if kind == "exec" {
 			r.Ops = OpExec
 		}
-	case "net":
+	case "connect":
 		if value == "own-listeners" {
 			r.Object.OwnListener = true
 		} else {
 			m, err := ParseNet(value)
 			if err != nil {
-				return r, fmt.Errorf("%s net: %w", verdict, err)
+				return r, fmt.Errorf("%s connect: %w", verdict, err)
 			}
 			r.Object = m
 		}
@@ -91,7 +93,7 @@ func ParseSpec(s string, now time.Time) (Rule, error) {
 		}
 		r.Object.Unknown, r.Ops = true, OpAll
 	default:
-		return r, fmt.Errorf("%q: want path, exec, net, proc or unknown after %s", s, verdict)
+		return r, fmt.Errorf("%q: want write, exec, connect, proc or unknown after %s", s, verdict)
 	}
 	return r, nil
 }
@@ -136,7 +138,7 @@ func (r Rule) Spec() string {
 		if r.Ops&OpExec != 0 {
 			s += "exec "
 		} else {
-			s += "path "
+			s += "write "
 		}
 		s += o.Path.Path
 		if o.Path.Tree {
@@ -147,7 +149,7 @@ func (r Rule) Spec() string {
 	case o.Unknown:
 		s += "unknown"
 	case o.IsNet():
-		s += "net " + o.NetString()
+		s += "connect " + o.NetString()
 	default:
 		s += "?"
 	}

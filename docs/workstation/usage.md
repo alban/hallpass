@@ -74,7 +74,7 @@ Exec rules decide which programs start, not what they do once running, so they a
 
 ## Network (experimental)
 
-With `--mediate=files,exec,network`, hallpass also asks before a sandboxed process connects or sends to a destination:
+With `--mediate=write,exec,connect`, hallpass also asks before a sandboxed process connects or sends to a destination:
 
 ```
  hallpass: curl (pid 4242) wants to connect to
@@ -95,7 +95,7 @@ Destinations are shown as addresses, not names: `1.2.3.4:443` with the protocol 
 | `unix:/path`, `unix:/dir/**` | a unix socket file, or every one under `/dir` |
 | `unix:@name`, `unix:@prefix*` | an abstract name, or every one starting with `prefix` |
 
-For example, `hallpass --mediate=files,exec,network --allow-net=tcp:*:443 --deny-net=169.254.169.254 -- copilot` lets the agent reach HTTPS servers, never the cloud metadata service, and asks about the rest.
+For example, `hallpass --mediate=write,exec,connect --allow-net=tcp:*:443 --deny-net=169.254.169.254 -- copilot` lets the agent reach HTTPS servers, never the cloud metadata service, and asks about the rest.
 
 `--ask-net` carves an exception out of what `--allow-net` allows: with `--allow-net=10.0.0.0/8 --ask-net=tcp:10.0.0.1:22`, SSH to `10.0.0.1` is asked about and the rest of the subnet is not. The most specific rule decides, an ask wins over an allow as specific, and `--deny-net` wins over both. This works in both modes: in strict mode, the kernel denies the asked destination unless you answer "once" (or a more specific `--allow-net` allows it).
 
@@ -159,7 +159,7 @@ hallpass never runs anything: the `execve` always fails, and its error number is
 | `ETIMEDOUT` | Connection timed out | nobody answered within `--timeout` |
 | `ENOMSG` | No message of desired type | (check) a request would ask you |
 | `EINVAL`, `ENAMETOOLONG` | Invalid argument, File name too long | malformed request |
-| `ENOSYS` | Function not implemented | the operation's category (files, exec, network) is not mediated (`--mediate`, or a Kubernetes policy's `mediate`): nothing would enforce a grant, so nobody is asked |
+| `ENOSYS` | Function not implemented | the operation's category (write, exec, connect) is not mediated (`--mediate`, or a Kubernetes policy's `mediate`): nothing would enforce a grant, so nobody is asked |
 | `ENOENT` | No such file or directory | no hallpass: the path does not exist |
 | `ECANCELED` | Operation canceled | (release) given back |
 | `ESRCH` | No such process | (release) no grant of a request for exactly that target |

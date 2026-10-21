@@ -8,7 +8,7 @@
 # mount namespace (needs passwordless sudo), so that the card shows a clean
 # path: the demo writes nothing in yours.
 #
-# Exec mediation is off (--mediate=files): the demo is about writes, and
+# Exec mediation is off (--mediate=write): the demo is about writes, and
 # the agent's programs would each be asked about.
 
 Set Shell bash
@@ -35,7 +35,7 @@ Hide
 Sleep 800ms
 Show
 
-Type "hallpass --mediate=files -- sh"
+Type "hallpass --mediate=write -- sh"
 Sleep 300ms
 Enter
 Sleep 800ms

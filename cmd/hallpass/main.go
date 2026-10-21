@@ -186,9 +186,9 @@ func parseFlags(argv []string, printPolicy bool) (o options, code int, ok bool) 
 	fs.StringVar(&o.mode, "mode", "lite", "lite (seccomp only, no root needed) | strict (the kernel enforces the answers with BPF-LSM; root needed to load it)")
 	fs.StringVar(&o.escalate, "escalate", "", "strict mode, when not root: how to run the loader as root: "+strings.Join(privsep.Tools, " | ")+" (default: the saved choice, else ask on a terminal, else auto)")
 	fs.StringVar(&o.wait, "wait", "main", "exit when the main process exits (main), or keep supervising its background processes until they all exit (all)")
-	mediate := fs.String("mediate", seccomp.DefaultCategories.String(), "comma-separated `categories` of syscalls to mediate: files, exec, network (network is experimental)")
+	mediate := fs.String("mediate", seccomp.DefaultCategories.String(), "comma-separated `categories` of syscalls to mediate: write, exec, connect (connect is experimental)")
 	var allowNet, denyNet, askNet listFlag
-	fs.Var(&allowNet, "allow-net", "network `destination` allowed without asking (repeatable; needs --mediate with network): all, [tcp:|udp:]ADDR[/N][:PORT[-PORT]] (ADDR * for any, IPv6 in brackets), unix:/path, unix:/dir/**, unix:@name, unix:@prefix*")
+	fs.Var(&allowNet, "allow-net", "network `destination` allowed without asking (repeatable; needs --mediate with connect): all, [tcp:|udp:]ADDR[/N][:PORT[-PORT]] (ADDR * for any, IPv6 in brackets), unix:/path, unix:/dir/**, unix:@name, unix:@prefix*")
 	fs.Var(&denyNet, "deny-net", "network `destination` always denied (repeatable, same syntax, wins over --allow-net)")
 	fs.Var(&askNet, "ask-net", "network `destination` asked about even inside a less specific --allow-net (repeatable, same syntax; a more specific --allow-net still allows)")
 	var allowExec, denyExec listFlag
@@ -447,7 +447,7 @@ func (o *options) buildPolicy(home string) *defaults.Defaults {
 	if !o.noImplicit {
 		c.Workdir = o.workdir
 		c.Allow = defaults.DefaultAllows()
-		c.OwnListeners = o.policy.Mediate&seccomp.Network != 0
+		c.OwnListeners = o.policy.Mediate&seccomp.Connect != 0
 		if o.policy.Mediate&seccomp.Exec != 0 {
 			c.AllowGroups = programs.Implicit()
 		}

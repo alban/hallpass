@@ -135,7 +135,7 @@ func TestSessionWebProtected(t *testing.T) {
 			e := newEnv(t)
 			t.Setenv("XDG_RUNTIME_DIR", e.runtime)
 			opened := fakeXDGOpen(t, e)
-			flags := []string{"--mode=" + mode, "--mediate=files,exec,network", "--allow-net=all", "--allow-path=/"}
+			flags := []string{"--mode=" + mode, "--mediate=write,exec,connect", "--allow-net=all", "--allow-path=/"}
 			script := fmt.Sprintf(`
 echo ready
 while [ ! -e go ]; do sleep 0.05; done

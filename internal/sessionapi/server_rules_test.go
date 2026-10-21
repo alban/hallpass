@@ -78,26 +78,26 @@ func TestApplyRules(t *testing.T) {
 		remove []string
 		want   codes.Code
 	}{
-		{name: "a folder a prompt offers", add: []string{"allow path /opt/tool/**"}},
-		{name: "a file", add: []string{"allow path /etc/hosts"}},
+		{name: "a folder a prompt offers", add: []string{"allow write /opt/tool/**"}},
+		{name: "a file", add: []string{"allow write /etc/hosts"}},
 		{name: "a program", add: []string{"allow exec /usr/bin/git"}},
-		{name: "a destination", add: []string{"allow net tcp:1.2.3.4:443"}},
-		{name: "a unix socket", add: []string{"allow net unix:/run/x.sock"}},
+		{name: "a destination", add: []string{"allow connect tcp:1.2.3.4:443"}},
+		{name: "a unix socket", add: []string{"allow connect unix:/run/x.sock"}},
 		{name: "a /proc file", add: []string{"allow proc oom_score_adj chrome"}},
-		{name: "deny anything", add: []string{"deny path /**", "deny net all"}},
-		{name: "ask anything", add: []string{"ask path /home/u/**"}},
-		{name: "the root", add: []string{"allow path /**"}, want: codes.PermissionDenied},
-		{name: "home", add: []string{"allow path /home/u/**"}, want: codes.PermissionDenied},
-		{name: "a folder wider than offered", add: []string{"allow path /home/u/.config/**"}, want: codes.PermissionDenied},
+		{name: "deny anything", add: []string{"deny write /**", "deny connect all"}},
+		{name: "ask anything", add: []string{"ask write /home/u/**"}},
+		{name: "the root", add: []string{"allow write /**"}, want: codes.PermissionDenied},
+		{name: "home", add: []string{"allow write /home/u/**"}, want: codes.PermissionDenied},
+		{name: "a folder wider than offered", add: []string{"allow write /home/u/.config/**"}, want: codes.PermissionDenied},
 		{name: "programs below", add: []string{"allow exec /usr/bin/**"}, want: codes.PermissionDenied},
-		{name: "a network", add: []string{"allow net 10.0.0.0/8:443"}, want: codes.PermissionDenied},
-		{name: "every port", add: []string{"allow net 1.2.3.4"}, want: codes.PermissionDenied},
+		{name: "a network", add: []string{"allow connect 10.0.0.0/8:443"}, want: codes.PermissionDenied},
+		{name: "every port", add: []string{"allow connect 1.2.3.4"}, want: codes.PermissionDenied},
 		{name: "unknown paths", add: []string{"allow unknown"}, want: codes.PermissionDenied},
-		{name: "everything", add: []string{"allow net all"}, want: codes.PermissionDenied},
-		{name: "narrow a flag", remove: []string{"allow net all"}, add: []string{"allow net 10.0.0.0/8"}},
-		{name: "narrow a folder", remove: []string{"allow path /srv/**"}, add: []string{"allow path /srv/www/**"}},
-		{name: "widen a folder", remove: []string{"allow path /srv/www/**"}, add: []string{"allow path /**"}, want: codes.PermissionDenied},
-		{name: "a protected rule", remove: []string{"deny path /run/sock/**"}, want: codes.PermissionDenied},
+		{name: "everything", add: []string{"allow connect all"}, want: codes.PermissionDenied},
+		{name: "narrow a flag", remove: []string{"allow connect all"}, add: []string{"allow connect 10.0.0.0/8"}},
+		{name: "narrow a folder", remove: []string{"allow write /srv/**"}, add: []string{"allow write /srv/www/**"}},
+		{name: "widen a folder", remove: []string{"allow write /srv/www/**"}, add: []string{"allow write /**"}, want: codes.PermissionDenied},
+		{name: "a protected rule", remove: []string{"deny write /run/sock/**"}, want: codes.PermissionDenied},
 	} {
 		d := &pb.Decision{Client: "test"}
 		for _, s := range tc.add {
@@ -117,7 +117,7 @@ func TestApplyRules(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := &pb.Decision{RemoveRules: []uint64{id("allow path /srv/www/**")}, AddRules: []*pb.Rule{spec(t, "allow path /srv/www/a/**")}, IfGeneration: snap.Generation + 1}
+	d := &pb.Decision{RemoveRules: []uint64{id("allow write /srv/www/**")}, AddRules: []*pb.Rule{spec(t, "allow write /srv/www/a/**")}, IfGeneration: snap.Generation + 1}
 	if _, err := c.Apply(ctx, d); status.Code(err) != codes.FailedPrecondition {
 		t.Errorf("stale edit: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestApplyRules(t *testing.T) {
 	if _, err := m.Apply(monitor.Decision{AddRules: []rules.Rule{{Ops: rules.OpAll, Verdict: rules.Allow, Object: rules.ObjectMatch{Path: &rules.PathMatch{Path: dir, Tree: true}}, Set: defaults.Set}}}); err != nil {
 		t.Fatal(err)
 	}
-	d = &pb.Decision{RemoveRules: []uint64{id("allow path " + dir + "/**")}, AddRules: []*pb.Rule{spec(t, "allow path "+dir+"/root/**")}}
+	d = &pb.Decision{RemoveRules: []uint64{id("allow write " + dir + "/**")}, AddRules: []*pb.Rule{spec(t, "allow write "+dir+"/root/**")}}
 	if _, err := c.Apply(ctx, d); status.Code(err) != codes.PermissionDenied {
 		t.Errorf("narrowing through a symlink: %v", err)
 	}

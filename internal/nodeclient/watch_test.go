@@ -135,7 +135,7 @@ func TestWatch(t *testing.T) {
 	})
 
 	h.mu.Lock()
-	h.rules = []*pb.Rule{{Id: 7, Label: "r", Spec: "allow path /w/**"}}
+	h.rules = []*pb.Rule{{Id: 7, Label: "r", Spec: "allow write /w/**"}}
 	h.mu.Unlock()
 	h.events["b"] <- &pb.Event{Kind: &pb.Event_Rules{Rules: 2}}
 	st := wait("the rules", func(map[string][]string) bool { return true })
@@ -145,7 +145,7 @@ func TestWatch(t *testing.T) {
 	if st.Sessions[1].Rules[0].Id != 7 || st.Sessions[1].Generation != 2 {
 		t.Errorf("rules of b: %v generation %d", st.Sessions[1].Rules, st.Sessions[1].Generation)
 	}
-	if b, _ := json.Marshal(st); !strings.Contains(string(b), `"generation":"2"`) || !strings.Contains(string(b), `"spec":"allow path /w/**"`) {
+	if b, _ := json.Marshal(st); !strings.Contains(string(b), `"generation":"2"`) || !strings.Contains(string(b), `"spec":"allow write /w/**"`) {
 		t.Errorf("JSON without the generation or the rule's spec: %s", b)
 	}
 

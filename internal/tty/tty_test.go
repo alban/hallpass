@@ -156,7 +156,7 @@ func TestReadLine(t *testing.T) {
 
 	tm, written = testTerm(t, 24, 20)
 	go tm.typeKeys("\r")
-	if line, _ := tm.ReadLine([]string{"rule: "}, "allow path /a/very/long/path"); line != "allow path /a/very/long/path" {
+	if line, _ := tm.ReadLine([]string{"rule: "}, "allow write /a/very/long/path"); line != "allow write /a/very/long/path" {
 		t.Errorf("ReadLine = %q", line)
 	}
 	if out := written(); !strings.Contains(out, "rule: …y/long/path_") {

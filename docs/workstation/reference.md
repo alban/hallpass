@@ -10,7 +10,7 @@ hallpass [flags] [--] [command [args...]]     # default command: $SHELL
 
 ```
       --mode MODE          lite (default, no root) | strict (BPF-LSM enforcement)
-      --mediate LIST       mediated syscall categories: files, exec, network (default files,exec; network is experimental)
+      --mediate LIST       mediated syscall categories: write, exec, connect (default write,exec; connect is experimental)
       --escalate TOOL      strict mode as a regular user: how to run the loader as root:
                            auto | ask | pkexec | sudo | run0 | doas | su | manual | none
                            (default: saved choice, else ask on a terminal, else auto)
@@ -44,7 +44,7 @@ See [Programs](usage.md#programs).
 ## Network (experimental)
 
 ```
-      --allow-net DEST     network destination allowed without asking (repeatable; needs network in --mediate)
+      --allow-net DEST     network destination allowed without asking (repeatable; needs connect in --mediate)
       --deny-net DEST      network destination always denied (repeatable, wins over --allow-net)
       --ask-net DEST       network destination asked about, even inside what --allow-net allows (repeatable)
 ```

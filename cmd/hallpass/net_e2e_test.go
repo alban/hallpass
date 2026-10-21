@@ -42,7 +42,7 @@ func needSockDiag(t *testing.T) {
 	}
 }
 
-// TestMediateExec checks that --mediate without files leaves writes alone,
+// TestMediateExec checks that --mediate without write leaves writes alone,
 // in the filter and, in strict mode, in the kernel.
 func TestMediateExec(t *testing.T) {
 	for _, mode := range modes(t) {
@@ -59,7 +59,7 @@ func TestMediateExec(t *testing.T) {
 
 func TestMediateBad(t *testing.T) {
 	e := newEnv(t)
-	out, err := e.cmd("true", "--mediate=files,dns").CombinedOutput()
+	out, err := e.cmd("true", "--mediate=write,dns").CombinedOutput()
 	if err == nil || !strings.Contains(string(out), `unknown category "dns"`) {
 		t.Errorf("%v\n%s", err, out)
 	}
@@ -274,8 +274,8 @@ func TestNetLite(t *testing.T) {
 			want  string
 		}{
 			{"not mediated", []string{"--prompt=deny"}, "ok"},
-			{"deny", []string{"--prompt=deny", "--mediate=files,exec,network"}, "denied"},
-			{"audit", []string{"--prompt=allow", "--mediate=files,exec,network"}, "ok"},
+			{"deny", []string{"--prompt=deny", "--mediate=write,exec,connect"}, "denied"},
+			{"audit", []string{"--prompt=allow", "--mediate=write,exec,connect"}, "ok"},
 		} {
 			t.Run(mode+"/"+tc.name, func(t *testing.T) {
 				e := newEnv(t)
@@ -310,8 +310,8 @@ func TestNetInside(t *testing.T) {
 			flags []string
 			want  string
 		}{
-			{"implicit", []string{"--prompt=deny", "--mediate=files,exec,network"}, "ok"},
-			{"no-implicit", []string{"--prompt=deny", "--mediate=files,exec,network", "--no-implicit", "--allow-path=" + "/"}, "denied"},
+			{"implicit", []string{"--prompt=deny", "--mediate=write,exec,connect"}, "ok"},
+			{"no-implicit", []string{"--prompt=deny", "--mediate=write,exec,connect", "--no-implicit", "--allow-path=" + "/"}, "denied"},
 		} {
 			t.Run(mode+"/"+tc.name, func(t *testing.T) {
 				if tc.want == "ok" {
@@ -372,7 +372,7 @@ func TestNetAllow(t *testing.T) {
 				e := newEnv(t)
 				nt := listenOutside(t, e.root)
 				log := e.root + "/log"
-				got := e.netCmd(t, nt, append(tc.flags(e), "--prompt=deny", "--mediate=files,exec,network", "--mode="+mode, "--log="+log)...)
+				got := e.netCmd(t, nt, append(tc.flags(e), "--prompt=deny", "--mediate=write,exec,connect", "--mode="+mode, "--log="+log)...)
 				for _, l := range netLabels {
 					want := tc.want[l]
 					if want == "" {
@@ -417,7 +417,7 @@ H u2 sendmsg %[2]s
 H a1 connect %[3]s
 `, nt.tcp, nt.udp, nt.abstract)
 			// --no-implicit: the listener inside is asked about.
-			c := e.cmd(script, "--prompt=answer", "--timeout=20s", "--mediate=files,exec,network", "--no-implicit", "--allow-path=/", "--mode="+mode)
+			c := e.cmd(script, "--prompt=answer", "--timeout=20s", "--mediate=write,exec,connect", "--no-implicit", "--allow-path=/", "--mode="+mode)
 			c.Env = append(c.Env, "HP_SELF="+self)
 			var out strings.Builder
 			c.Stdout, c.Stderr = &out, &out
@@ -477,7 +477,7 @@ H uc udpconnect %[1]s
 H tc connect %[1]s
 `, nt.tcp)
 				// A second prompt is dismissed after the timeout: tc=denied.
-				c := e.cmd(script, "--prompt=answer", "--timeout=5s", "--mediate=files,exec,network", "--mode="+mode)
+				c := e.cmd(script, "--prompt=answer", "--timeout=5s", "--mediate=write,exec,connect", "--mode="+mode)
 				c.Env = append(c.Env, "HP_SELF="+self)
 				var out strings.Builder
 				c.Stdout, c.Stderr = &out, &out

@@ -55,7 +55,7 @@ func defaultsFor(p *Policy, md metadata, cats seccomp.Category, pid int) *defaul
 	c := policy.Context{
 		Home:         home,
 		Allow:        containerAllows(),
-		OwnListeners: cats&seccomp.Network != 0,
+		OwnListeners: cats&seccomp.Connect != 0,
 		Lexical:      true,
 	}
 	pol := p.Policy

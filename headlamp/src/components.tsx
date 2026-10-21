@@ -359,7 +359,7 @@ function RulesTable(props: { hp: Hallpass; agent: AgentState; session: Session }
       fullWidth
       value={value}
       disabled={busy}
-      placeholder="allow path /data/** for 1h"
+      placeholder="allow write /data/** for 1h"
       inputProps={{ 'aria-label': label, spellCheck: false, style: { fontFamily: 'monospace' } }}
       onChange={e => set(e.target.value)}
       onKeyDown={e => {

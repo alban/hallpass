@@ -41,12 +41,12 @@ type Spec struct {
 	// is denied, a Go duration such as "5m"; "0" waits forever. Default
 	// DefaultPromptTimeout.
 	PromptTimeout string `json:"promptTimeout,omitempty"`
-	// Mediate lists the mediated syscall categories: files, exec,
-	// network. Default: seccomp.DefaultCategories.
+	// Mediate lists the mediated syscall categories: write, exec,
+	// connect. Default: seccomp.DefaultCategories.
 	Mediate []string `json:"mediate,omitempty"`
 	// AllowNet and DenyNet are network destinations (rules.ParseNet
 	// syntax: "all", "tcp:10.0.0.0/8:443", "unix:@name"...). They need
-	// network in Mediate. AskNet are destinations asked about even when
+	// connect in Mediate. AskNet are destinations asked about even when
 	// a less specific allow covers them (10.0.0.1:22 inside an allowed
 	// 10.0.0.0/8).
 	AllowNet []string `json:"allowNet,omitempty"`
@@ -128,9 +128,9 @@ func (s Spec) Validate() (Policy, error) {
 		in   []string
 		out  *[]rules.ObjectMatch
 	}{{"allowNet", s.AllowNet, &p.AllowNet}, {"denyNet", s.DenyNet, &p.DenyNet}, {"askNet", s.AskNet, &p.AskNet}} {
-		if len(f.in) > 0 && p.Mediate&seccomp.Network == 0 {
+		if len(f.in) > 0 && p.Mediate&seccomp.Connect == 0 {
 			// A deny that does nothing must not look like it works.
-			return Policy{}, &FieldError{f.name, errors.New("needs network in mediate")}
+			return Policy{}, &FieldError{f.name, errors.New("needs connect in mediate")}
 		}
 		for _, s := range f.in {
 			m, err := rules.ParseNet(s)

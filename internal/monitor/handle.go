@@ -157,7 +157,7 @@ func (m *Monitor) handle(l *listener, n seccomp.Notif) (ask func()) {
 		_ = l.n.Deny(n.ID, int32(unix.EPERM))
 		return
 	}
-	if sc.Category() == seccomp.Network {
+	if sc.Category() == seccomp.Connect {
 		return m.handleNet(l, n, sc)
 	}
 	flags, inRoot, done := m.openFlags(l, n, sc)

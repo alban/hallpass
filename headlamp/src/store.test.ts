@@ -130,11 +130,11 @@ describe('ClusterStore', () => {
     expect(f.conns[1].answers).toEqual([['s1', '7', 'once']]);
     await expect(s.answer('zz', 's1', '7', 'once')).rejects.toThrow();
 
-    await s.rules('a', 's1', { remove: ['3'], add: ['deny path /x'], label: 'l', generation: '5' });
-    await s.rules('a', 's1', { add: ['allow path /y'] });
+    await s.rules('a', 's1', { remove: ['3'], add: ['deny write /x'], label: 'l', generation: '5' });
+    await s.rules('a', 's1', { add: ['allow write /y'] });
     expect(f.conns[1].answers.slice(1)).toEqual([
-      ['s1', 'rules', '3', 'deny path /x', 'l', '5'],
-      ['s1', 'rules', '', 'allow path /y', '', ''],
+      ['s1', 'rules', '3', 'deny write /x', 'l', '5'],
+      ['s1', 'rules', '', 'allow write /y', '', ''],
     ]);
     await expect(s.rules('zz', 's1', { remove: ['3'] })).rejects.toThrow();
   });

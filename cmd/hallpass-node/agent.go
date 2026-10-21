@@ -233,7 +233,7 @@ func (a *agent) attach(st *specs.ContainerProcessState, fd int) error {
 		// The kernel checks what the filter notifies.
 		cats, err := md.categories()
 		if err == nil {
-			err = ks.Mediate(cats&seccomp.Files != 0, cats&seccomp.Exec != 0, cats&seccomp.Network != 0)
+			err = ks.Mediate(cats&seccomp.Write != 0, cats&seccomp.Exec != 0, cats&seccomp.Connect != 0)
 		}
 		if err != nil {
 			ks.Close()

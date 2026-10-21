@@ -33,8 +33,8 @@ func TestNetRuleRoundTrip(t *testing.T) {
 func TestParse(t *testing.T) {
 	now := time.Now()
 	specs := []string{
-		"allow path /w/**", "deny exec /usr/bin/curl", "ask net tcp:10.0.0.1:443",
-		"allow proc environ bash", "deny net unix:@x", "allow path /a for 1h",
+		"allow write /w/**", "deny exec /usr/bin/curl", "ask connect tcp:10.0.0.1:443",
+		"allow proc environ bash", "deny connect unix:@x", "allow write /a for 1h",
 	}
 	got, err := Parse(specs, "web", now)
 	if err != nil {
@@ -43,7 +43,7 @@ func TestParse(t *testing.T) {
 	for i, r := range got {
 		want := specs[i]
 		if i == len(specs)-1 {
-			want = "allow path /a"
+			want = "allow write /a"
 			if !r.GetExpires().AsTime().Equal(now.Add(time.Hour)) {
 				t.Errorf("expires %v", r.GetExpires().AsTime())
 			}
@@ -52,7 +52,7 @@ func TestParse(t *testing.T) {
 			t.Errorf("%q: got %q label %q", specs[i], s, r.GetLabel())
 		}
 	}
-	if _, err := Parse([]string{"allow path rel"}, "", now); err == nil {
+	if _, err := Parse([]string{"allow write rel"}, "", now); err == nil {
 		t.Error("relative path parsed")
 	}
 }

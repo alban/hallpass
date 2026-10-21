@@ -564,13 +564,13 @@ function forText(expires) {
 }
 
 const RULE_SYNTAX = `VERDICT KIND VALUE [for DURATION]
-  VERDICT   allow, deny or ask
-  path P    the file P; P/** the tree below P
-  exec P    running the program P; P/** every program below P
-  net N     a destination: tcp:1.2.3.4:443, [2001:db8::1]:22, unix:/run/x.sock, unix:@name, all...
-  proc N C  /proc/<pid>/N of the processes named C
-  unknown   the paths that could not be read (lite mode)
-  DURATION  e.g. 10m or 2h; without it, until removed
+  VERDICT    allow, deny or ask
+  write P    writing the file P (creating, deleting... it too); P/** the tree below P
+  exec P     running the program P; P/** every program below P
+  connect N  a destination: tcp:1.2.3.4:443, [2001:db8::1]:22, unix:/run/x.sock, unix:@name, all...
+  proc N C   /proc/<pid>/N of the processes named C
+  unknown    the paths that could not be read (lite mode)
+  DURATION   e.g. 10m or 2h; without it, until removed
 An allow rule gives at most what answering "always" would, or narrows the rule it replaces.`; // rules.SpecSyntax
 
 // monitor.ProtectedSet: the server refuses to change these denials.
@@ -609,7 +609,7 @@ function markRulesDirty() { rulesShown = ""; markDirty(); }
 
 function ruleEditor(pid, key, onSave, saveText) {
   const ed = ruleEditors.get(key);
-  const input = el("input", { class: "spec", type: "text", "data-editor": key, placeholder: "allow path /home/me/src/** for 1h", spellcheck: "false" });
+  const input = el("input", { class: "spec", type: "text", "data-editor": key, placeholder: "allow write /home/me/src/** for 1h", spellcheck: "false" });
   input.value = ed.text;
   input.addEventListener("input", () => { ed.text = input.value; });
   const save = async () => {

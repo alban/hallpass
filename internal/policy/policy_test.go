@@ -45,7 +45,7 @@ func TestValidate(t *testing.T) {
 		t.Errorf("promptTimeout 0: %+v, %v", p, err)
 	}
 
-	p, err = Spec{Mediate: []string{"files", "exec", "network"}, AllowNet: []string{"all"}, DenyNet: []string{"tcp:169.254.169.254"}}.Validate()
+	p, err = Spec{Mediate: []string{"write", "exec", "connect"}, AllowNet: []string{"all"}, DenyNet: []string{"tcp:169.254.169.254"}}.Validate()
 	if err != nil || p.Mediate != seccomp.AllCategories || len(p.AllowNet) != 1 || !p.AllowNet[0].AnyNet || p.DenyNet[0].NetString() != "tcp:169.254.169.254" {
 		t.Errorf("network: %+v, %v", p, err)
 	}
@@ -62,15 +62,16 @@ func TestValidate(t *testing.T) {
 		{Spec{PromptTimeout: "soon"}, "promptTimeout"},
 		{Spec{PromptTimeout: "-1s"}, "promptTimeout"},
 		{Spec{Mediate: []string{"dns"}}, "mediate"},
+		{Spec{Mediate: []string{"files"}}, "mediate"},
 		{Spec{Mediate: []string{}}, "mediate"},
 		{Spec{Mediate: []string{""}}, "mediate"},
 		{Spec{AllowNet: []string{"all"}}, "allowNet"},
-		{Spec{Mediate: []string{"network"}, DenyNet: []string{"tcp:nowhere"}}, "denyNet"},
+		{Spec{Mediate: []string{"connect"}, DenyNet: []string{"tcp:nowhere"}}, "denyNet"},
 		{Spec{AskNet: []string{"tcp:*:22"}}, "askNet"},
-		{Spec{Mediate: []string{"network"}, AskNet: []string{"tcp:nowhere"}}, "askNet"},
+		{Spec{Mediate: []string{"connect"}, AskNet: []string{"tcp:nowhere"}}, "askNet"},
 		{Spec{AllowExec: []string{"ls"}}, "allowExec"},
 		{Spec{AllowExec: []string{"/usr/*/ls"}}, "allowExec"},
-		{Spec{Mediate: []string{"files"}, DenyExec: []string{"/usr/bin/curl"}}, "denyExec"},
+		{Spec{Mediate: []string{"write"}, DenyExec: []string{"/usr/bin/curl"}}, "denyExec"},
 		{Spec{AllowExec: []string{"@nope"}}, "allowExec"},
 		{Spec{DenyExec: []string{"@shells"}}, "denyExec"},
 		{Spec{Groups: map[string][]string{"tools": {"/opt/x"}}}, "groups"},
@@ -79,7 +80,7 @@ func TestValidate(t *testing.T) {
 		{Spec{Groups: map[string][]string{"@tools": {"x"}}}, "groups"},
 		{Spec{Groups: map[string][]string{"@tools": {"/opt/*/x"}}}, "groups"},
 		{Spec{Groups: map[string][]string{"@tools": {"@shells"}}}, "groups"},
-		{Spec{Mediate: []string{"files"}, Groups: map[string][]string{"@tools": {"/opt/x"}}}, "groups"},
+		{Spec{Mediate: []string{"write"}, Groups: map[string][]string{"@tools": {"/opt/x"}}}, "groups"},
 		{Spec{Groups: map[string][]string{"@tools": {"/opt/x"}}, AllowExec: []string{"@tool"}}, "allowExec"},
 	} {
 		_, err := tc.spec.Validate()
@@ -95,7 +96,7 @@ func TestDefaults(t *testing.T) {
 		AllowPaths: []string{"/workspace"},
 		DenyPaths:  []string{"/workspace/.git"},
 		AskPaths:   []string{"/workspace/secret"},
-		Mediate:    []string{"files", "network"},
+		Mediate:    []string{"write", "connect"},
 		AllowNet:   []string{"unix:@x"},
 		DenyNet:    []string{"tcp:*:22"},
 		AskNet:     []string{"tcp:10.0.0.1"},

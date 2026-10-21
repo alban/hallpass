@@ -43,7 +43,7 @@ hallpass combines two kernel mechanisms:
 - **seccomp user notification** (lite mode, the default, unprivileged): a seccomp filter pauses the syscalls that modify the filesystem and hands them to hallpass, which resolves the path, applies the policy and, if needed, asks you.
 - **BPF-LSM** (strict mode, `--mode=strict`, root needed only to load it): it still asks like lite mode, and enforces your answers in the kernel on the real file, so a process cannot race the check or hide the target behind symlinks, bind mounts or other mount namespaces.
 
-With `--mediate=files,exec,network` (experimental), hallpass also asks before connections and sends to IP addresses and unix sockets.
+With `--mediate=write,exec,connect` (experimental), hallpass also asks before connections and sends to IP addresses and unix sockets.
 
 ## Get started
 

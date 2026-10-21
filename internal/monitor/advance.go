@@ -31,7 +31,7 @@ import (
 //   - ETIMEDOUT: denied because nobody answered in time
 //     (Decision.TimedOut)
 //   - EINVAL, ENAMETOOLONG: malformed or too long
-//   - ENOSYS: the category asked for (files, exec, network) is not
+//   - ENOSYS: the category asked for (write, exec, connect) is not
 //     mediated (Config.Mediate): nothing would enforce a grant
 //   - ENOMSG: (check only) a request would be needed
 //   - ECANCELED: (release only) the grants were removed
@@ -120,9 +120,9 @@ func (q advanceQuery) category() seccomp.Category {
 	case rules.OpExec:
 		return seccomp.Exec
 	case rules.OpNet:
-		return seccomp.Network
+		return seccomp.Connect
 	}
-	return seccomp.Files
+	return seccomp.Write
 }
 
 // parseAdvance parses raw, an execve path starting with AdvanceDir.
@@ -280,7 +280,7 @@ func (m *Monitor) advance(l *listener, n seccomp.Notif, sc seccomp.Rule, raw str
 		reply(unix.ENOMSG)
 		return nil
 	}
-	if q.op == rules.OpExec && m.mediate&seccomp.Files != 0 {
+	if q.op == rules.OpExec && m.mediate&seccomp.Write != 0 {
 		q.adv.Writable = writable(m.currentRules(), q.path, q.adv.Tree, m.now())
 	}
 	return func() { m.askAdvance(l, n, sc.Name, q, objs, raw) }

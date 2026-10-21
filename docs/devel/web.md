@@ -245,7 +245,7 @@ Measures:
 
   Stops other users and web pages.
 - **Blocked at the source, with network mediation**: a session that
-  mediates the network (`--mediate=files,exec,network`) denies its
+  mediates the network (`--mediate=write,exec,connect`) denies its
   sandbox every connection to the web UI's ports and to the session
   sockets, whatever the rules say (below). Without network mediation,
   `connect` is not looked at (notifying every `connect` in lite mode was
@@ -260,10 +260,10 @@ wins over any allow, `--allow-net=all` and the listener-inside rule
 included, in the rule engine and in the BPF walk, so these denials hold
 even after "allow all networking":
 
-- with files mediated: writes under the socket directory
+- with write mediated: writes under the socket directory
   (`$XDG_RUNTIME_DIR/hallpass`, or `/tmp/hallpass-UID`): no fake or
   removed session socket, no forged port file;
-- with the network mediated: `connect`/`sendto` to the unix sockets under
+- with connect mediated: `connect`/`sendto` to the unix sockets under
   that directory (the sessions' answer sockets, which already reject
   sandboxed peers, now unreachable), and to the TCP/UDP ports registered
   by `hallpass web` and by the sessions' own web UIs, at any address.

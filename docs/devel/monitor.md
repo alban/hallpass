@@ -156,7 +156,7 @@ Lite mode sees syscalls, strict mode sees LSM hooks:
 | Connect | `connect`; `sendto`, `sendmsg`, `sendmmsg` with `MSG_FASTOPEN` | `socket_connect`, `unix_stream_connect` |
 | Send | `sendto` with an address, `sendmsg`, `sendmmsg` | `socket_sendmsg`, `unix_may_send` |
 
-The network ops are notified only with `network` in `--mediate`
+The network ops are notified only with `connect` in `--mediate`
 (`seccomp.Category`). A `sendmsg` without `msg_name` is continued at
 once; for `sendmmsg`, every message with an address is evaluated and the
 call is allowed only if all are.
@@ -584,8 +584,8 @@ const (
   the monitor answers with an errno, so a shell prints it and no program
   runs. Without a monitor the path does not exist (`ENOENT`). The monitor
   parses the query (`EINVAL`, `ENAMETOOLONG` past `PATH_MAX`), fails it
-  with `ENOSYS` when its category (files for `op=write`, exec for
-  `op=exec`, network for `op=connect`) is not in `Config.Mediate`,
+  with `ENOSYS` when its category (the same name as its `op`: write,
+  exec or connect) is not in `Config.Mediate`,
   since nothing would enforce a grant, resolves
   the path like a write's (a `unix:` path destination too), and
   evaluates the rules: covered
@@ -597,7 +597,7 @@ const (
   request has no object, its destinations are `Advance.Net` (an
   `ObjectMatch` from `rules.ParseNet`, inet prefixes masked).
   `Advance.Writable` tells that an exec target may be written without a
-  prompt under the current rules (files mediated only).
+  prompt under the current rules (write mediated only).
   `check?` stops there (`ENOMSG` instead of a request). That
   request is coalesced with identical ones of the same thread group, is
   never settled by rules (the UX answers it: a grant is an `AddRules` of

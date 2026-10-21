@@ -171,10 +171,10 @@ async function main() {
     log(`pod details: editing the rules of ${pod}`);
     await page.goto(`${c}/pods/hallpass-e2e/${pod}`);
     await waitText(page, "Rules of", 60_000);
-    await addRule(page, "deny path /etc/e2e-rule");
+    await addRule(page, "deny write /etc/e2e-rule");
     await waitText(page, "deny /etc/e2e-rule", 30_000);
-    await addRule(page, "allow path /**");
-    await waitText(page, 'add rule: Error: allow path /**: allows more than answering "always" could', 30_000);
+    await addRule(page, "allow write /**");
+    await waitText(page, 'add rule: Error: allow write /**: allows more than answering "always" could', 30_000);
     await screenshot(page, "rules-refused");
     await clickText(page, "Cancel");
     await ruleButton(page, "edit", "/etc/e2e-rule");

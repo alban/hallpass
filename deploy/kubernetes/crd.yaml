@@ -71,21 +71,21 @@ spec:
                   type: string
                 mediate:
                   description: >-
-                    Mediated syscall categories (default files and exec).
-                    network is experimental. Applies to the containers
+                    Mediated syscall categories (default write and exec).
+                    connect is experimental. Applies to the containers
                     created after a change.
                   type: array
                   minItems: 1
                   items:
                     type: string
-                    enum: [files, exec, network]
+                    enum: [write, exec, connect]
                 allowNet:
                   description: >-
                     Network destinations reached without asking: "all"
                     (every destination, unix sockets included),
                     "[tcp:|udp:]ADDR[/N][:PORT[-PORT]]" (ADDR "*" for any,
                     IPv6 in brackets), "unix:/path", "unix:/dir/**",
-                    "unix:@name", "unix:@prefix*". Needs network in mediate.
+                    "unix:@name", "unix:@prefix*". Needs connect in mediate.
                   type: array
                   items:
                     type: string
@@ -149,8 +149,8 @@ spec:
                 - rule: >-
                     (!has(self.allowNet) && !has(self.denyNet) &&
                     !has(self.askNet)) ||
-                    (has(self.mediate) && 'network' in self.mediate)
-                  message: allowNet, denyNet and askNet need network in mediate
+                    (has(self.mediate) && 'connect' in self.mediate)
+                  message: allowNet, denyNet and askNet need connect in mediate
                 - rule: >-
                     (!has(self.allowExec) && !has(self.denyExec) && !has(self.groups)) ||
                     !has(self.mediate) || 'exec' in self.mediate

@@ -7,17 +7,19 @@ import "testing"
 
 func TestCategories(t *testing.T) {
 	for in, want := range map[string]Category{
-		"files,exec": DefaultCategories, "network": Network, " files , network ": Files | Network, "": 0,
+		"write,exec": DefaultCategories, "connect": Connect, " write , connect ": Write | Connect, "": 0,
 	} {
 		got, err := ParseCategories(in)
 		if err != nil || got != want {
 			t.Errorf("ParseCategories(%q) = %v, %v; want %v", in, got, err, want)
 		}
 	}
-	if _, err := ParseCategories("files,dns"); err == nil {
-		t.Error("unknown category accepted")
+	for _, in := range []string{"write,dns", "files", "network"} {
+		if _, err := ParseCategories(in); err == nil {
+			t.Errorf("unknown category %q accepted", in)
+		}
 	}
-	if s := AllCategories.String(); s != "files,exec,network" {
+	if s := AllCategories.String(); s != "write,exec,connect" {
 		t.Errorf("String = %q", s)
 	}
 }
@@ -42,16 +44,16 @@ func TestSelect(t *testing.T) {
 		if has(none, name) {
 			t.Errorf("--mediate=exec kept %s", name)
 		}
-		if !has(Select(all, Files), name) {
-			t.Errorf("--mediate=files lost %s", name)
+		if !has(Select(all, Write), name) {
+			t.Errorf("--mediate=write lost %s", name)
 		}
 	}
 	for _, name := range []string{"connect", "sendto", "sendmsg", "sendmmsg"} {
 		if has(Select(all, DefaultCategories), name) {
 			t.Errorf("default categories kept %s", name)
 		}
-		if !has(Select(all, Network), name) {
-			t.Errorf("--mediate=network lost %s", name)
+		if !has(Select(all, Connect), name) {
+			t.Errorf("--mediate=connect lost %s", name)
 		}
 	}
 }

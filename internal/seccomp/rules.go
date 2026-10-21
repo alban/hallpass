@@ -56,24 +56,28 @@ type Rule struct {
 type Category uint32
 
 const (
-	Files Category = 1 << iota
+	// Write checks the file changes: opens for write, creations,
+	// deletions, renames...
+	Write Category = 1 << iota
 	// Exec checks the programs executed. execve is notified whatever the
 	// categories (see commonRules): the monitor checks the program only
 	// when Exec is mediated.
 	Exec
-	Network
+	// Connect checks the network destinations: connect, and the sends
+	// with an address.
+	Connect
 
-	// DefaultCategories leaves out Network until it is stable.
-	DefaultCategories = Files | Exec
-	AllCategories     = Files | Exec | Network
+	// DefaultCategories leaves out Connect until it is stable.
+	DefaultCategories = Write | Exec
+	AllCategories     = Write | Exec | Connect
 )
 
 var categoryNames = []struct {
 	c    Category
 	name string
-}{{Files, "files"}, {Exec, "exec"}, {Network, "network"}}
+}{{Write, "write"}, {Exec, "exec"}, {Connect, "connect"}}
 
-// String lists c as ParseCategories reads it: "files,exec".
+// String lists c as ParseCategories reads it: "write,exec".
 func (c Category) String() string {
 	var s []string
 	for _, n := range categoryNames {
@@ -84,8 +88,8 @@ func (c Category) String() string {
 	return strings.Join(s, ",")
 }
 
-// ParseCategories reads a comma-separated list of categories: files,
-// exec, network.
+// ParseCategories reads a comma-separated list of categories: write,
+// exec, connect.
 func ParseCategories(s string) (Category, error) {
 	var c Category
 	for _, f := range strings.Split(s, ",") {
@@ -100,7 +104,7 @@ func ParseCategories(s string) (Category, error) {
 			}
 		}
 		if !found {
-			return 0, fmt.Errorf("unknown category %q (want files, exec or network)", f)
+			return 0, fmt.Errorf("unknown category %q (want write, exec or connect)", f)
 		}
 	}
 	return c, nil
@@ -118,11 +122,11 @@ func Select(rs []Rule, cats Category) []Rule {
 	return out
 }
 
-// Category returns r.Cat, or Files for the file syscalls, which leave it
+// Category returns r.Cat, or Write for the file syscalls, which leave it
 // unset.
 func (r Rule) Category() Category {
 	if r.Cat == 0 && len(r.Paths) > 0 && r.Op != "exec" {
-		return Files
+		return Write
 	}
 	return r.Cat
 }
@@ -169,10 +173,10 @@ func commonRules(allowUserns bool) []Rule {
 		// carry one. sendmsg and sendmmsg hide it in struct msghdr:
 		// every call is notified, and the monitor continues the ones
 		// without an address at once.
-		{Nr: unix.SYS_CONNECT, Name: "connect", Kind: Notify, Op: "connect", Cat: Network},
-		{Nr: unix.SYS_SENDTO, Name: "sendto", Kind: NotifyIfSet, FlagsArg: 4, Op: "send", Cat: Network},
-		{Nr: unix.SYS_SENDMSG, Name: "sendmsg", Kind: Notify, Op: "send", Cat: Network},
-		{Nr: unix.SYS_SENDMMSG, Name: "sendmmsg", Kind: Notify, Op: "send", Cat: Network},
+		{Nr: unix.SYS_CONNECT, Name: "connect", Kind: Notify, Op: "connect", Cat: Connect},
+		{Nr: unix.SYS_SENDTO, Name: "sendto", Kind: NotifyIfSet, FlagsArg: 4, Op: "send", Cat: Connect},
+		{Nr: unix.SYS_SENDMSG, Name: "sendmsg", Kind: Notify, Op: "send", Cat: Connect},
+		{Nr: unix.SYS_SENDMMSG, Name: "sendmmsg", Kind: Notify, Op: "send", Cat: Connect},
 	}
 	if !allowUserns {
 		// Inside a private mount namespace a process could bind-mount a

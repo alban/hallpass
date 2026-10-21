@@ -71,10 +71,10 @@ func TestRulesMenu(t *testing.T) {
 	term := &fakeMenuTerm{
 		keys: []byte("aeaaed\x1d"),
 		lines: []func(string) (string, bool){
-			typed("deny path /root/secret for 1h"), typed("secrets"),
+			typed("deny write /root/secret for 1h"), typed("secrets"),
 			func(string) (string, bool) { return ruleID(), true },
-			func(text string) (string, bool) { edited = text; return "deny path /root/secret/**", true },
-			typed("allow path /"), typed(""),
+			func(text string) (string, bool) { edited = text; return "deny write /root/secret/**", true },
+			typed("allow write /"), typed(""),
 			typed("not a rule"), typed(""),
 			typed("999"),
 			func(string) (string, bool) { return ruleID(), true },
@@ -82,7 +82,7 @@ func TestRulesMenu(t *testing.T) {
 	}
 	s.rulesMenu(term)
 
-	if !strings.HasPrefix(edited, "deny path /root/secret for 59m") {
+	if !strings.HasPrefix(edited, "deny write /root/secret for 59m") {
 		t.Errorf("edit started from %q", edited)
 	}
 	var msgs []string
@@ -99,7 +99,7 @@ func TestRulesMenu(t *testing.T) {
 		t.Errorf("messages: %q", msgs)
 	}
 	listed := strings.Join(term.shown[len(term.shown)-2], "\n")
-	if !strings.Contains(listed, "deny path /root/secret/**  (secrets)") {
+	if !strings.Contains(listed, "deny write /root/secret/**  (secrets)") {
 		t.Errorf("edited rule not listed, or its label lost:\n%s", listed)
 	}
 	if _, rs, _ := m.Snapshot(); len(rs) != 0 {
@@ -127,8 +127,8 @@ func TestRulesMenuPages(t *testing.T) {
 	for _, l := range term.shown {
 		got = append(got, l[0][strings.Index(l[0], "page"):][:8]+" "+strings.TrimSpace(l[1]))
 	}
-	want := []string{"page 1/3 1  deny path /root/0", "page 2/3 3  deny path /root/2", "page 3/3 5  deny path /root/4",
-		"page 3/3 5  deny path /root/4", "page 2/3 3  deny path /root/2", "page 1/3 1  deny path /root/0"}
+	want := []string{"page 1/3 1  deny write /root/0", "page 2/3 3  deny write /root/2", "page 3/3 5  deny write /root/4",
+		"page 3/3 5  deny write /root/4", "page 2/3 3  deny write /root/2", "page 1/3 1  deny write /root/0"}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("pages:\n%s", strings.Join(got, "\n"))
 	}

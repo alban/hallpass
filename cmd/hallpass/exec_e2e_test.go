@@ -179,18 +179,18 @@ func TestExecGroupsPrint(t *testing.T) {
 	}
 }
 
-// TestExecNotMediated: with --mediate=files, programs run without rules.
+// TestExecNotMediated: with --mediate=write, programs run without rules.
 func TestExecNotMediated(t *testing.T) {
 	for _, mode := range modes(t) {
 		t.Run(mode, func(t *testing.T) {
 			e := newEnv(t)
 			bin := progs(t, e.root+"/bin", "other")
-			c := e.cmd(checkExec+"check other "+bin+"/other", "--mode="+mode, "--prompt=deny", "--mediate=files")
+			c := e.cmd(checkExec+"check other "+bin+"/other", "--mode="+mode, "--prompt=deny", "--mediate=write")
 			out, err := c.CombinedOutput()
 			if err != nil || !strings.Contains(string(out), "other=allowed\n") {
 				t.Errorf("%v\n%s", err, out)
 			}
-			c = e.cmd("true", "--mediate=files", "--allow-exec="+bin+"/other")
+			c = e.cmd("true", "--mediate=write", "--allow-exec="+bin+"/other")
 			if out, err := c.CombinedOutput(); err == nil || !strings.Contains(string(out), "exec in mediate") {
 				t.Errorf("--allow-exec without exec mediated: %v\n%s", err, out)
 			}

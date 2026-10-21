@@ -6,7 +6,7 @@
 # /tmp/hallpass-demo (or $HALLPASS_DEMO_PROJECT), a fixed path: trust it in
 # copilot once beforehand.
 #
-# Exec mediation is off (--mediate=files): copilot runs many programs, and
+# Exec mediation is off (--mediate=write): copilot runs many programs, and
 # the demo is about a write outside the project.
 
 Require copilot
@@ -32,7 +32,7 @@ Hide
 Sleep 800ms
 Show
 
-Type "hallpass --mediate=files --allow-path ~/.copilot --allow-path ~/.cache/copilot -- copilot --model claude-haiku-4.5 --yolo"
+Type "hallpass --mediate=write --allow-path ~/.copilot --allow-path ~/.cache/copilot -- copilot --model claude-haiku-4.5 --yolo"
 Sleep 3s
 Enter
 Wait+Screen@60s /Check for mistakes/

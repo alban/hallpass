@@ -52,7 +52,7 @@ func TestParsePolicy(t *testing.T) {
 		t.Errorf("defaults: %+v, %v", p, err)
 	}
 
-	p, err = parsePolicy("net", policy.Spec{Mediate: []string{"files", "exec", "network"}, AllowNet: []string{"all"}, DenyNet: []string{"tcp:169.254.169.254"}})
+	p, err = parsePolicy("net", policy.Spec{Mediate: []string{"write", "exec", "connect"}, AllowNet: []string{"all"}, DenyNet: []string{"tcp:169.254.169.254"}})
 	if err != nil || p.Mediate != seccomp.AllCategories || len(p.AllowNet) != 1 || !p.AllowNet[0].AnyNet || p.DenyNet[0].NetString() != "tcp:169.254.169.254" {
 		t.Errorf("network: %+v, %v", p, err)
 	}
@@ -67,7 +67,7 @@ func TestParsePolicy(t *testing.T) {
 		{Mediate: []string{"dns"}},
 		{Mediate: []string{}},
 		{AllowNet: []string{"all"}},
-		{Mediate: []string{"network"}, DenyNet: []string{"tcp:nowhere"}},
+		{Mediate: []string{"connect"}, DenyNet: []string{"tcp:nowhere"}},
 	} {
 		if _, err := parsePolicy("bad", bad); err == nil {
 			t.Errorf("%+v: no error", bad)
@@ -105,7 +105,7 @@ func TestDefaultsFor(t *testing.T) {
 		t.Errorf("ask: %v", ask)
 	}
 
-	p, _ = parsePolicy("net", policy.Spec{Mediate: []string{"files", "network"}, AllowNet: []string{"unix:@x"}, DenyNet: []string{"tcp:*:22"}, AskNet: []string{"unix:@xy"}})
+	p, _ = parsePolicy("net", policy.Spec{Mediate: []string{"write", "connect"}, AllowNet: []string{"unix:@x"}, DenyNet: []string{"tcp:*:22"}, AskNet: []string{"unix:@xy"}})
 	var nets []string
 	for _, r := range defaultsFor(p, metadata{}, p.Mediate, 0).Rules() {
 		if r.Object.Path == nil {
@@ -222,7 +222,7 @@ func TestAdjust(t *testing.T) {
 	if err := json.Unmarshal([]byte(s.ListenerMetadata), &md); err != nil {
 		t.Fatal(err)
 	}
-	if want := (metadata{Namespace: "agents", Pod: "p", PodUID: "uid", Container: "c", Policy: "agent", Home: "/home/agent", Path: "/bin", Mediate: "files,exec"}); md != want {
+	if want := (metadata{Namespace: "agents", Pod: "p", PodUID: "uid", Container: "c", Policy: "agent", Home: "/home/agent", Path: "/bin", Mediate: "write,exec"}); md != want {
 		t.Errorf("metadata %+v, want %+v", md, want)
 	}
 	notify := false
@@ -244,7 +244,7 @@ func TestAdjust(t *testing.T) {
 		t.Fatal(err)
 	}
 	s = adj.GetLinux().GetSeccompPolicy()
-	if err := json.Unmarshal([]byte(s.ListenerMetadata), &md); err != nil || md.Mediate != "files,exec,network" {
+	if err := json.Unmarshal([]byte(s.ListenerMetadata), &md); err != nil || md.Mediate != "write,exec,connect" {
 		t.Errorf("metadata %+v, %v", md, err)
 	}
 	if !slices.ContainsFunc(s.Syscalls, func(sc *api.LinuxSyscall) bool {

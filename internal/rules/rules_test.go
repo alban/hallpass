@@ -173,40 +173,40 @@ func TestCovers(t *testing.T) {
 		old, r string
 		want   bool
 	}{
-		{"allow path /srv/**", "allow path /srv/www/**", true},
-		{"allow path /srv/**", "allow path /srv/www/index.html for 1m", true},
-		{"allow path /srv/**", "allow path /srvx/**", false},
-		{"allow path /srv/www/**", "allow path /srv/**", false},
-		{"allow path /srv/a", "allow path /srv/a", true},
-		{"allow path /srv/a", "allow path /srv/a/**", false},
-		{"allow path /srv/**", "allow exec /srv/bin/x", false},
+		{"allow write /srv/**", "allow write /srv/www/**", true},
+		{"allow write /srv/**", "allow write /srv/www/index.html for 1m", true},
+		{"allow write /srv/**", "allow write /srvx/**", false},
+		{"allow write /srv/www/**", "allow write /srv/**", false},
+		{"allow write /srv/a", "allow write /srv/a", true},
+		{"allow write /srv/a", "allow write /srv/a/**", false},
+		{"allow write /srv/**", "allow exec /srv/bin/x", false},
 		{"allow exec /opt/bin/**", "allow exec /opt/bin/x", true},
-		{"deny path /srv/**", "allow path /srv/www/**", false},
-		{"ask path /srv/**", "allow path /srv/www/**", false},
-		{"allow path /**", "allow net all", false},
-		{"allow net all", "allow path /srv", false},
-		{"allow net all", "allow net 10.0.0.0/8", true},
-		{"allow net all", "allow net unix:@x", true},
-		{"allow net all", "allow net own-listeners", true},
-		{"allow net 10.0.0.0/8", "allow net tcp:10.1.0.0/16:443", true},
-		{"allow net 10.0.0.0/8", "allow net 11.0.0.0/16", false},
-		{"allow net 10.0.0.0/8", "allow net 0.0.0.0/0", false},
-		{"allow net 10.0.0.0/8", "allow net [::ffff:a00:1]", true}, // IPv4-mapped: 10.0.0.1
-		{"allow net 10.0.0.0/8", "allow net [2001:db8::1]", false},
-		{"allow net 0.0.0.0/0", "allow net [2001:db8::1]", false},
-		{"allow net [::]/0", "allow net 10.0.0.1", false},
-		{"allow net tcp:*:443", "allow net tcp:1.2.3.4:443", true},
-		{"allow net tcp:*:443", "allow net udp:1.2.3.4:443", false},
-		{"allow net tcp:*:443", "allow net 1.2.3.4:443", false},
-		{"allow net *:8000-8999", "allow net *:8080", true},
-		{"allow net *:8000-8999", "allow net *", false},
-		{"allow net unix:/run/**", "allow net unix:/run/x.sock", true},
-		{"allow net unix:/run/x.sock", "allow net unix:/run/**", false},
-		{"allow net unix:@x*", "allow net unix:@xy", true},
-		{"allow net unix:@x*", "allow net unix:/x", false},
-		{"allow net own-listeners", "allow net 127.0.0.1:80", false},
-		{"allow net own-listeners", "allow net own-listeners", true},
-		{"allow net own-listeners", "allow net all", false},
+		{"deny write /srv/**", "allow write /srv/www/**", false},
+		{"ask write /srv/**", "allow write /srv/www/**", false},
+		{"allow write /**", "allow connect all", false},
+		{"allow connect all", "allow write /srv", false},
+		{"allow connect all", "allow connect 10.0.0.0/8", true},
+		{"allow connect all", "allow connect unix:@x", true},
+		{"allow connect all", "allow connect own-listeners", true},
+		{"allow connect 10.0.0.0/8", "allow connect tcp:10.1.0.0/16:443", true},
+		{"allow connect 10.0.0.0/8", "allow connect 11.0.0.0/16", false},
+		{"allow connect 10.0.0.0/8", "allow connect 0.0.0.0/0", false},
+		{"allow connect 10.0.0.0/8", "allow connect [::ffff:a00:1]", true}, // IPv4-mapped: 10.0.0.1
+		{"allow connect 10.0.0.0/8", "allow connect [2001:db8::1]", false},
+		{"allow connect 0.0.0.0/0", "allow connect [2001:db8::1]", false},
+		{"allow connect [::]/0", "allow connect 10.0.0.1", false},
+		{"allow connect tcp:*:443", "allow connect tcp:1.2.3.4:443", true},
+		{"allow connect tcp:*:443", "allow connect udp:1.2.3.4:443", false},
+		{"allow connect tcp:*:443", "allow connect 1.2.3.4:443", false},
+		{"allow connect *:8000-8999", "allow connect *:8080", true},
+		{"allow connect *:8000-8999", "allow connect *", false},
+		{"allow connect unix:/run/**", "allow connect unix:/run/x.sock", true},
+		{"allow connect unix:/run/x.sock", "allow connect unix:/run/**", false},
+		{"allow connect unix:@x*", "allow connect unix:@xy", true},
+		{"allow connect unix:@x*", "allow connect unix:/x", false},
+		{"allow connect own-listeners", "allow connect 127.0.0.1:80", false},
+		{"allow connect own-listeners", "allow connect own-listeners", true},
+		{"allow connect own-listeners", "allow connect all", false},
 		{"allow unknown", "allow unknown", true},
 		{"allow proc mem node", "allow proc mem node", true},
 		{"allow proc mem node", "allow proc mem bash", false},
@@ -216,24 +216,24 @@ func TestCovers(t *testing.T) {
 		}
 	}
 
-	old := spec("allow path /srv/** for 1h")
-	if old.Covers(spec("allow path /srv/www/**")) {
+	old := spec("allow write /srv/** for 1h")
+	if old.Covers(spec("allow write /srv/www/**")) {
 		t.Errorf("a temporary allow covers a lasting one")
 	}
-	if old.Covers(spec("allow path /srv/www/** for 2h")) {
+	if old.Covers(spec("allow write /srv/www/** for 2h")) {
 		t.Errorf("a temporary allow covers a longer one")
 	}
-	if !old.Covers(spec("allow path /srv/www/** for 30m")) {
+	if !old.Covers(spec("allow write /srv/www/** for 30m")) {
 		t.Errorf("a temporary allow does not cover a shorter one")
 	}
 	// Files rules from flags have the file ops only.
-	flag := spec("allow path /srv/**")
+	flag := spec("allow write /srv/**")
 	flag.Ops = OpFiles
-	if !flag.Covers(spec("allow path /srv/www/**")) {
+	if !flag.Covers(spec("allow write /srv/www/**")) {
 		t.Errorf("the network ops of a file rule count")
 	}
 	flag.Ops = OpWrite
-	if flag.Covers(spec("allow path /srv/www/**")) {
+	if flag.Covers(spec("allow write /srv/www/**")) {
 		t.Errorf("more ops covered")
 	}
 }

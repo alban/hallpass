@@ -181,7 +181,7 @@ func TestAdvanceNotSettled(t *testing.T) {
 // grant: requests and checks fail with ENOSYS, without asking. The same
 // for programs and network destinations.
 func TestAdvanceNotMediated(t *testing.T) {
-	fx := setupConfig(t, Config{Mediate: seccomp.Exec | seccomp.Network}, false)
+	fx := setupConfig(t, Config{Mediate: seccomp.Exec | seccomp.Connect}, false)
 	for _, q := range []string{"request?op=write&path=" + fx.dir + "/**", "check?op=write&path=" + fx.dir + "/x", "release?op=write&path=" + fx.dir} {
 		fx.f.expect(t, fx.f.advance(q), int32(unix.ENOSYS))
 	}
@@ -191,7 +191,7 @@ func TestAdvanceNotMediated(t *testing.T) {
 		t.Fatalf("event %+v", ev)
 	default:
 	}
-	fx = setupConfig(t, Config{Mediate: seccomp.Files}, false)
+	fx = setupConfig(t, Config{Mediate: seccomp.Write}, false)
 	for _, q := range []string{"request?op=exec&path=/usr/bin/make", "check?op=connect&dest=*:443", "release?op=connect&dest=*:443"} {
 		fx.f.expect(t, fx.f.advance(q), int32(unix.ENOSYS))
 	}

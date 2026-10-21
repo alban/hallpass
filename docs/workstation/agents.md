@@ -55,7 +55,7 @@ line on stderr and exits with:
 | 4 | `ETIMEDOUT` | nobody answered within `--timeout` |
 | 5 | `ENOMSG` | (`check`) a request would ask you |
 | 6 | `EINVAL`, `ENAMETOOLONG` | malformed or too long, or `PROG` not found in `$PATH` |
-| 7 | `ENOSYS` | the operation's category (files, exec, network) is not mediated: nothing to grant |
+| 7 | `ENOSYS` | the operation's category (write, exec, connect) is not mediated: nothing to grant |
 | 8 | `ENOENT` | not running under hallpass |
 | 9 | other | unexpected error |
 | 10 | `ESRCH` | (`release`) no grant of a request matches |

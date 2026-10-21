@@ -72,7 +72,7 @@ iframe { position: absolute; top: ${BAR}px; height: ${H - BAR}px; border: 0; }
 #pointer.click::after { animation: click .5s; }
 @keyframes click { from { opacity: .8; transform: scale(.3); } to { opacity: 0; transform: scale(1.6); } }
 </style></head><body>
-<div class="bar" style="left:0;width:${LEFT}px">Terminal: <b>hallpass --mediate=files -- sh</b></div>
+<div class="bar" style="left:0;width:${LEFT}px">Terminal: <b>hallpass --mediate=write -- sh</b></div>
 <div class="bar" style="left:${LEFT + GAP}px">Browser: <b>hallpass web</b></div>
 <iframe id="term" src="${ttydURL}"></iframe>
 <iframe id="web" src="${webURL}"></iframe>
@@ -281,7 +281,7 @@ async function main() {
     await card("");
     await sleep(1000);
 
-    await line("hallpass --mediate=files -- sh");
+    await line("hallpass --mediate=write -- sh");
     await sleep(1200);
     await webf.waitForFunction(() => document.querySelectorAll("#sessions .session").length > 0, { timeout: 10000 });
     await comment("'Always' allows all of ~/.local");
@@ -327,7 +327,7 @@ async function main() {
     await click(`return [...document.querySelectorAll("#view-rules button")].find(b => b.textContent === "Add rule")`, "Add rule");
     await webf.waitForSelector(".add-rule input.spec", { timeout: 5000 });
     await sleep(1500);
-    await page.keyboard.type("deny path " + home + "/.bashrc", { delay: 40 });
+    await page.keyboard.type("deny write " + home + "/.bashrc", { delay: 40 });
     await sleep(800);
     await editorButton("Add");
     await waitRule("/.bashrc");
@@ -341,7 +341,7 @@ async function main() {
     await click(`return [...document.querySelectorAll("#view-rules button")].find(b => b.textContent === "Add rule")`, "Add rule");
     await webf.waitForSelector(".add-rule input.spec", { timeout: 5000 });
     await sleep(800);
-    await page.keyboard.type("allow path " + home + "/**", { delay: 50 });
+    await page.keyboard.type("allow write " + home + "/**", { delay: 50 });
     await sleep(800);
     await editorButton("Add");
     await webf.waitForFunction(() => /always/.test((document.querySelector(".add-rule .error") || {}).textContent || ""), { timeout: 5000 });

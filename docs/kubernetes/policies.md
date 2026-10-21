@@ -30,7 +30,7 @@ spec:
   askPaths: [/workspace/.git/hooks/**]
   prompt: true         # false: deny without asking
   promptTimeout: 5m    # no answer in time: deny
-  mediate: [files, exec, network]  # default: files, exec
+  mediate: [write, exec, connect]  # default: write, exec
   allowNet: ["tcp:*:443", "unix:@my-service"]
   denyNet: ["169.254.169.254"]
   askNet: ["tcp:10.0.0.1:22"]
@@ -53,16 +53,16 @@ spec:
 - `promptTimeout` (default `5m`): a request with no answer by then is
   denied (`ETIMEDOUT` for a request made in advance). `0` waits forever,
   like `hallpass --timeout=0`.
-- `mediate` (default `[files, exec]`): the syscall categories mediated.
-  `exec` asks about the programs the container runs. `network`
+- `mediate` (default `[write, exec]`): the syscall categories mediated.
+  `exec` asks about the programs the container runs. `connect`
   (experimental) asks about connections and sends, like
   `hallpass --mediate` ([Network](../workstation/usage.md#network-experimental)).
   A request made in advance fails at once with `ENOSYS` when its
-  category is left out (`files` for `write`, `exec`, `network` for
-  `connect`).
+  category is left out (`write`, `exec` or `connect`, as the request's
+  operation).
 - `allowNet` and `denyNet`: destinations in the `--allow-net`
   syntax; `all` is every destination, unix sockets included. They need
-  `network` in `mediate`. Deny wins. Loopback and unix listeners
+  `connect` in `mediate`. Deny wins. Loopback and unix listeners
   started in the container are allowed without asking.
 - `askNet`: destinations asked about even inside what `allowNet`
   allows (`--ask-net`). The most specific rule decides, an ask wins over
@@ -99,7 +99,7 @@ session keeps the policy it started with.
 
 The syscalls mediated are the same as `hallpass`'s: writes, renames,
 links, removals... (see [Files](../how-it-works/files.md)), plus the programs
-run with `exec` in `mediate`, connections and sends with `network`, and new user and
+run with `exec` in `mediate`, connections and sends with `connect`, and new user and
 mount namespaces are refused. The policy is merged into the container's
 own seccomp profile (`RuntimeDefault`, `Localhost` or `Unconfined`):
 hallpass's rules first, the rest kept.

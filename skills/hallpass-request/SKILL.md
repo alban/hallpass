@@ -75,7 +75,7 @@ It prints one line on stderr and exits with:
 | 4 | nobody answered in time (denied) | tell the user; ask again only when they are back |
 | 5 | (`check`) a request would prompt | make the request if you need it |
 | 6 | invalid or too long request | fix the path (no glob but a final `/**`), the destination (an address, not a name) or the duration; or the program was not found in `$PATH` |
-| 7 | this kind of access (files, programs, network) is not mediated in this sandbox | go ahead: there is nothing to grant |
+| 7 | this kind of access (write, exec, connect) is not mediated in this sandbox | go ahead: there is nothing to grant |
 | 8 | not running under hallpass | go ahead: there is nothing to ask |
 | 9 | other error | report the message to the user |
 | 10 | (`release`) no such grant | nothing to give back: check the target is written as in the request |

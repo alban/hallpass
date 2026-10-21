@@ -29,7 +29,7 @@ const (
 // network, no connection to the session sockets nor to the web UI's ports.
 func protectedRules(d *defaults.Defaults, mediate seccomp.Category, sockDir string, ports []uint16) []rules.Rule {
 	var rs []rules.Rule
-	if mediate&seccomp.Files != 0 {
+	if mediate&seccomp.Write != 0 {
 		rs = append(rs, rules.Rule{
 			Ops:     rules.OpFiles,
 			Object:  rules.ObjectMatch{Path: &rules.PathMatch{Path: sockDir, Tree: true}},
@@ -39,7 +39,7 @@ func protectedRules(d *defaults.Defaults, mediate seccomp.Category, sockDir stri
 		})
 		rs = append(rs, d.ProtectedRules(monitor.ProtectedSet)...)
 	}
-	if mediate&seccomp.Network == 0 {
+	if mediate&seccomp.Connect == 0 {
 		return rs
 	}
 	rs = append(rs, rules.Rule{

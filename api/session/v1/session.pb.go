@@ -2184,7 +2184,7 @@ type Rule struct {
 	Label   string                 `protobuf:"bytes,5,opt,name=label,proto3" json:"label,omitempty"`
 	Expires *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=expires,proto3" json:"expires,omitempty"` // unset: until removed
 	Set     string                 `protobuf:"bytes,7,opt,name=set,proto3" json:"set,omitempty"`
-	// The rule in the text syntax of hallpass answer add (e.g. "allow path
+	// The rule in the text syntax of hallpass answer add (e.g. "allow write
 	// /src/**"), without its expiry; set by the server, ignored in requests.
 	Spec          string `protobuf:"bytes,8,opt,name=spec,proto3" json:"spec,omitempty"`
 	unknownFields protoimpl.UnknownFields

@@ -18,7 +18,7 @@ What it protects:
 What it does not protect:
 
 - Reads: a program can read your secrets, and send them away (the network is not mediated by default).
-- Writes done for the sandbox by a service outside it (`systemd-run --user`, a container daemon, D-Bus): `connect` is only mediated with the experimental `--mediate=...,network`. Running a client of such a service (`systemd-run`, `docker`) is asked about, but programs are matched by path only (see [Programs](exec.md)), and a process can talk to the service without its client. This is why hallpass does not contain a hostile program today.
+- Writes done for the sandbox by a service outside it (`systemd-run --user`, a container daemon, D-Bus): `connect` is only mediated with the experimental `--mediate=...,connect`. Running a client of such a service (`systemd-run`, `docker`) is asked about, but programs are matched by path only (see [Programs](exec.md)), and a process can talk to the service without its client. This is why hallpass does not contain a hostile program today.
 - Permissions, owners, extended attributes and timestamps.
 - In lite mode, a deliberate TOCTOU race.
 - Your answers: an `always` on a broad folder allows everything under it. The `by:` line of a prompt is set by the process and proves nothing.

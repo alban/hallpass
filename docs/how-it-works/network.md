@@ -1,6 +1,6 @@
 # Network (experimental)
 
-With `--mediate=files,exec,network` (or `mediate` in a [HallpassPolicy](../kubernetes/policies.md)), connections and sends to an address are mediated like writes. Destinations are IPv4/IPv6 addresses and ports (TCP, UDP), unix socket files and abstract unix names; IPv4-mapped IPv6 addresses are shown and matched as IPv4. Names are not shown: there is no DNS mediation. See [Network](../workstation/usage.md#network-experimental) for the rules and answers.
+With `--mediate=write,exec,connect` (or `mediate` in a [HallpassPolicy](../kubernetes/policies.md)), connections and sends to an address are mediated like writes. Destinations are IPv4/IPv6 addresses and ports (TCP, UDP), unix socket files and abstract unix names; IPv4-mapped IPv6 addresses are shown and matched as IPv4. Names are not shown: there is no DNS mediation. See [Network](../workstation/usage.md#network-experimental) for the rules and answers.
 
 The only destination allowed without asking is a loopback or unix listener started inside the sandbox, such as a test server.
 

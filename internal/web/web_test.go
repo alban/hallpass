@@ -373,22 +373,22 @@ func TestRules(t *testing.T) {
 		}
 	}
 
-	post(`{"add":["deny path /home/u/x"],"label":"mine"}`, http.StatusNoContent)
+	post(`{"add":["deny write /home/u/x"],"label":"mine"}`, http.StatusNoContent)
 	gen, ids := snapshot()
-	id := ids["deny path /home/u/x mine"]
+	id := ids["deny write /home/u/x mine"]
 	if id == "" {
 		t.Fatalf("rules %v", ids)
 	}
-	edit := `{"remove":["` + id + `"],"add":["deny path /home/u/y"],"label":"mine","ifGeneration":"` + gen + `"}`
+	edit := `{"remove":["` + id + `"],"add":["deny write /home/u/y"],"label":"mine","ifGeneration":"` + gen + `"}`
 	post(edit, http.StatusNoContent)
-	if _, ids := snapshot(); ids["deny path /home/u/y mine"] == "" || ids["deny path /home/u/x mine"] != "" {
+	if _, ids := snapshot(); ids["deny write /home/u/y mine"] == "" || ids["deny write /home/u/x mine"] != "" {
 		t.Errorf("after the edit: %v", ids)
 	}
 	post(edit, http.StatusConflict)
-	post(`{"add":["allow path /home/u/**"]}`, http.StatusForbidden)
-	post(`{"add":["allow path /home/u/src/f for 1h"]}`, http.StatusNoContent)
-	post(`{"add":["allow path relative"]}`, http.StatusBadRequest)
-	post(`{"ifGeneration":"x","add":["deny path /a"]}`, http.StatusBadRequest)
+	post(`{"add":["allow write /home/u/**"]}`, http.StatusForbidden)
+	post(`{"add":["allow write /home/u/src/f for 1h"]}`, http.StatusNoContent)
+	post(`{"add":["allow write relative"]}`, http.StatusBadRequest)
+	post(`{"ifGeneration":"x","add":["deny write /a"]}`, http.StatusBadRequest)
 }
 
 // TestWatching: a page tells whether it shows the sessions, connected and

@@ -95,7 +95,7 @@ func TestExecScript(t *testing.T) {
 
 // TestExecNotMediated: without exec in Config.Mediate, execs are continued.
 func TestExecNotMediated(t *testing.T) {
-	fx := setupConfig(t, Config{Mediate: seccomp.Files}, false)
+	fx := setupConfig(t, Config{Mediate: seccomp.Write}, false)
 	p := filepath.Join(fx.dir, "p")
 	writeExec(t, p, "\x7fELF")
 	fx.f.expect(t, fx.f.execve(p), 0)

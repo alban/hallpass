@@ -55,10 +55,10 @@ func TestProtected(t *testing.T) {
 			mediate string
 			want    map[string]string
 		}{
-			{"mediated", "files,exec,network", map[string]string{
+			{"mediated", "write,exec,connect", map[string]string{
 				"web": "denied", "mapped": "denied", "other": "ok", "sock": "denied", "write": "denied", "live": "denied",
 			}},
-			{"not mediated", "files,exec", map[string]string{
+			{"not mediated", "write,exec", map[string]string{
 				"web": "ok", "mapped": "ok", "other": "ok", "sock": "ok", "write": "denied", "live": "ok",
 			}},
 		} {
@@ -87,7 +87,7 @@ while [ ! -e go ]; do sleep 0.05; done
 H live connect 127.0.0.1:%[3]d
 `, web, other, live)
 				flags := []string{"--mode=" + mode, "--prompt=deny", "--mediate=" + tc.mediate, "--allow-path=/"}
-				if strings.Contains(tc.mediate, "network") {
+				if strings.Contains(tc.mediate, "connect") {
 					flags = append(flags, "--allow-net=all")
 				}
 				c := e.cmd(script, flags...)

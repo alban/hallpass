@@ -175,7 +175,7 @@ r urel release exec "$BIN"
 r uwrel release write "$HOME/proj/**"
 r ucheck check exec "$BIN"
 `
-		c := e.cmd(script, "--mode="+mode, "--prompt=answer", "--timeout=20s", "--mediate=files,exec,network", "--allow-exec="+bin, "--log="+e.root+"/log")
+		c := e.cmd(script, "--mode="+mode, "--prompt=answer", "--timeout=20s", "--mediate=write,exec,connect", "--allow-exec="+bin, "--log="+e.root+"/log")
 		c.Env = append(c.Env, "TOOL="+tool, "DEST="+dest, "BIN="+bin, "HP_SELF="+self)
 		var out strings.Builder
 		c.Stdout, c.Stderr = &out, &out
@@ -268,15 +268,15 @@ r rn connect 127.0.0.1:1
 			want  []string
 		}{
 			{[]string{"--prompt=deny"}, []string{requestWant("req", 3, "denied"), requestWant("rx", 3, "denied"), requestWant("rn", 7, "connect is not mediated")}},
-			{[]string{"--prompt=deny", "--mediate=files,exec,network"}, []string{requestWant("rn", 3, "denied")}},
+			{[]string{"--prompt=deny", "--mediate=write,exec,connect"}, []string{requestWant("rn", 3, "denied")}},
 			{[]string{"--prompt=answer", "--timeout=1s"}, []string{requestWant("req", 4, "denied: nobody answered in time")}},
 			{[]string{"--prompt=allow"}, []string{requestWant("req", 0, "granted"), requestWant("rx", 0, "granted"), requestWant("rn", 7, "connect is not mediated")}},
-			{[]string{"--prompt=allow", "--mediate=files,exec,network"}, []string{requestWant("rn", 0, "granted")}},
+			{[]string{"--prompt=allow", "--mediate=write,exec,connect"}, []string{requestWant("rn", 0, "granted")}},
 			{[]string{"--prompt=answer", "--timeout=1s", "--mediate=exec"}, []string{requestWant("req", 7, "write is not mediated")}},
-			{[]string{"--prompt=deny", "--mediate=files"}, []string{requestWant("rx", 7, "exec is not mediated")}},
+			{[]string{"--prompt=deny", "--mediate=write"}, []string{requestWant("rx", 7, "exec is not mediated")}},
 		} {
 			flags := []string{"--mode=" + mode}
-			if !slices.Contains(tc.flags, "--mediate=files") {
+			if !slices.Contains(tc.flags, "--mediate=write") {
 				// Refused without exec mediated.
 				flags = append(flags, "--allow-exec="+bin)
 			}

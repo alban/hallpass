@@ -28,7 +28,7 @@ answer as an errno, as on a workstation (see the
 [list](../workstation/usage.md#asking-in-advance), with the shells' exit
 codes): `EALREADY` granted, `EPERM` denied, `ETIMEDOUT` not
 answered within the policy's `promptTimeout`, and `ENOSYS` when the policy's
-`mediate` leaves out the request's category (`files`, `exec`, `network`),
+`mediate` leaves out the request's category (`write`, `exec`, `connect`),
 without a prompt; a shell exits 126 for
 each of them.
 

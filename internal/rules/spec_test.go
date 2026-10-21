@@ -16,18 +16,18 @@ func TestParseSpec(t *testing.T) {
 		ops      Op
 		expires  time.Duration
 	}{
-		{in: "allow path /home/u/src/**", spec: "allow path /home/u/src/**", ops: OpAll},
-		{in: "  deny path /etc/passwd  ", spec: "deny path /etc/passwd", ops: OpAll},
-		{in: "allow path /**", spec: "allow path /**", ops: OpAll},
-		{in: "allow path /a/../b/", spec: "allow path /b", ops: OpAll},
-		{in: "ask path /x y/z for 10m", spec: "ask path /x y/z", ops: OpAll, expires: 10 * time.Minute},
-		{in: "allow path /d/for x", spec: "allow path /d/for x", ops: OpAll},
+		{in: "allow write /home/u/src/**", spec: "allow write /home/u/src/**", ops: OpAll},
+		{in: "  deny write /etc/passwd  ", spec: "deny write /etc/passwd", ops: OpAll},
+		{in: "allow write /**", spec: "allow write /**", ops: OpAll},
+		{in: "allow write /a/../b/", spec: "allow write /b", ops: OpAll},
+		{in: "ask write /x y/z for 10m", spec: "ask write /x y/z", ops: OpAll, expires: 10 * time.Minute},
+		{in: "allow write /d/for x", spec: "allow write /d/for x", ops: OpAll},
 		{in: "allow exec /usr/bin/git", spec: "allow exec /usr/bin/git", ops: OpExec},
 		{in: "deny exec /opt/bin/** for 1h", spec: "deny exec /opt/bin/**", ops: OpExec, expires: time.Hour},
-		{in: "allow net tcp:1.2.3.4:443", spec: "allow net tcp:1.2.3.4:443", ops: OpNet},
-		{in: "deny net all", spec: "deny net all", ops: OpNet},
-		{in: "allow net own-listeners", spec: "allow net own-listeners", ops: OpNet},
-		{in: "ask net unix:@name*", spec: "ask net unix:@name*", ops: OpNet},
+		{in: "allow connect tcp:1.2.3.4:443", spec: "allow connect tcp:1.2.3.4:443", ops: OpNet},
+		{in: "deny connect all", spec: "deny connect all", ops: OpNet},
+		{in: "allow connect own-listeners", spec: "allow connect own-listeners", ops: OpNet},
+		{in: "ask connect unix:@name*", spec: "ask connect unix:@name*", ops: OpNet},
 		{in: "allow proc oom_score_adj chrome", spec: "allow proc oom_score_adj chrome", ops: OpAll},
 		{in: "allow proc oom_score_adj Web Content", spec: "allow proc oom_score_adj Web Content", ops: OpAll},
 		{in: "deny unknown", spec: "deny unknown", ops: OpAll},
@@ -52,10 +52,11 @@ func TestParseSpec(t *testing.T) {
 		}
 	}
 	for _, in := range []string{
-		"", "allow", "maybe path /x", "allow path", "allow path rel/x", "allow exec ~/bin/x",
-		"allow net nope:1.2.3.4:x", "allow proc", "allow proc a/b c", "deny unknown x",
-		"allow file /x", "allow path /x for -1m",
-		"allow path /src/*.go", "allow path /src/**/x", "deny exec /usr/bin/py?", "allow path /a/[b]/**",
+		"", "allow", "maybe write /x", "allow write", "allow write rel/x", "allow exec ~/bin/x",
+		"allow connect nope:1.2.3.4:x", "allow proc", "allow proc a/b c", "deny unknown x",
+		"allow file /x", "allow write /x for -1m",
+		"allow path /x", "allow net all", // the old names
+		"allow write /src/*.go", "allow write /src/**/x", "deny exec /usr/bin/py?", "allow write /a/[b]/**",
 	} {
 		if r, err := ParseSpec(in, now); err == nil {
 			t.Errorf("ParseSpec(%q) = %v, want an error", in, r)
@@ -113,10 +114,10 @@ func TestEditSpec(t *testing.T) {
 		left time.Duration
 		want string
 	}{
-		{0, "allow path /data/**"},
-		{-time.Minute, "allow path /data/**"},
-		{90*time.Second + 500*time.Millisecond, "allow path /data/** for 90s"},
-		{10*time.Minute - time.Second, "allow path /data/** for 9m"},
+		{0, "allow write /data/**"},
+		{-time.Minute, "allow write /data/**"},
+		{90*time.Second + 500*time.Millisecond, "allow write /data/** for 90s"},
+		{10*time.Minute - time.Second, "allow write /data/** for 9m"},
 	} {
 		r.Expires = time.Time{}
 		if tc.left != 0 {
