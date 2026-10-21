@@ -19,6 +19,19 @@ all:
 hallpass-node:
 	CGO_ENABLED=0 go build -tags '$(GO_TAGS)' -o hallpass-node ./cmd/hallpass-node
 
+# The advance request helper (docs/workstation/agents.md), static with
+# musl: with musl-gcc when installed (musl-tools), with Docker otherwise.
+# MUSL_GCC= forces Docker. Not part of all, which needs neither.
+MUSL_GCC ?= musl-gcc
+HALLPASS_REQUEST_CFLAGS ?= -static -Os -s -Wall -Wextra -Werror
+.PHONY: hallpass-request
+hallpass-request:
+ifneq ($(and $(MUSL_GCC),$(shell command -v $(MUSL_GCC) 2>/dev/null)),)
+	$(MUSL_GCC) $(HALLPASS_REQUEST_CFLAGS) -o hallpass-request cmd/hallpass-request/hallpass-request.c
+else
+	docker build -o type=local,dest=. cmd/hallpass-request
+endif
+
 # End-to-end test of hallpass-node on a kind cluster (see test/kind/e2e.sh).
 # Needs docker, kind, kubectl and network access to Docker Hub.
 .PHONY: test-kind

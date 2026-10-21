@@ -1,5 +1,6 @@
 /hallpass
 /hallpass-node
+/hallpass-request
 
 # MkDocs build output
 /site/
