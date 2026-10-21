@@ -14,6 +14,7 @@ package defaults
 
 import (
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -166,15 +167,14 @@ func (d *Defaults) AllowExec(path string, tree bool) {
 	d.execAllow = addProgram(d.execAllow, rules.PathMatch{Path: d.canon(path), Tree: tree})
 }
 
-// SetGroups sets the program groups, resolved as the sandbox finds them:
-// prompts offer a program's group (Group), AllowGroup allows one.
+// SetGroups sets the program groups, resolved as the sandbox finds them
+// (programs.Finder.Groups): prompts offer a program's group (Group),
+// AllowGroup allows one. The members are not resolved again: a few
+// hundred paths, each a stat per component.
 func (d *Defaults) SetGroups(gs []programs.Group) {
 	d.groups = make([]programs.Group, len(gs))
 	for i, g := range gs {
-		d.groups[i] = programs.Group{Name: g.Name}
-		for _, m := range g.Members {
-			d.groups[i].Members = append(d.groups[i].Members, d.canon(m))
-		}
+		d.groups[i] = programs.Group{Name: g.Name, Members: slices.Clone(g.Members)}
 	}
 }
 
