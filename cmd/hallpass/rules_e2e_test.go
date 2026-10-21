@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // answerCmd runs `hallpass answer PID args...` on the session of c.
@@ -119,5 +120,75 @@ func TestTerminalMenuRules(t *testing.T) {
 	waitFor(t, func() bool { return !strings.Contains(scr.text(), "[a] add") }, "the menu closed")
 	if out, _ := answerCmd(t, e, c, "rules"); strings.Contains(out, e.home+"/m") {
 		t.Errorf("rule left:\n%s", out)
+	}
+}
+
+// TestRuleEditEnforced adds a deny rule with hallpass answer while the
+// session runs, moves it to another file and deletes it, checking writes
+// after each change: in strict mode, the edits reach the kernel.
+func TestRuleEditEnforced(t *testing.T) {
+	for _, mode := range modes(t) {
+		t.Run(mode, func(t *testing.T) {
+			e := newEnv(t)
+			script := `
+check() { if echo x > "$1" 2>/dev/null; then echo "$2 $1=ok"; else echo "$2 $1=denied"; fi; rm -f "$1" 2>/dev/null; }
+for s in 1 2 3; do
+	while [ ! -e go$s ]; do sleep 0.05; done
+	check a $s
+	check b $s
+	touch done$s
+done
+`
+			c := e.cmd(script, "--mode="+mode, "--prompt=answer", "--timeout=20s")
+			var out strings.Builder
+			c.Stdout, c.Stderr = &out, &out
+			if err := c.Start(); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = c.Process.Kill(); _ = c.Wait() })
+			dialPrompts(t, e, c)
+			run := func(args ...string) string {
+				t.Helper()
+				out, err := answerCmd(t, e, c, args...)
+				if err != nil {
+					t.Fatalf("hallpass answer %s: %v\n%s", strings.Join(args, " "), err, out)
+				}
+				return out
+			}
+			step := func(s int) {
+				t.Helper()
+				if err := os.WriteFile(e.proj+"/go"+strconv.Itoa(s), nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				for i := 0; i < 400; i++ {
+					if _, err := os.Stat(e.proj + "/done" + strconv.Itoa(s)); err == nil {
+						return
+					}
+					time.Sleep(25 * time.Millisecond)
+				}
+				t.Fatalf("step %d timed out", s)
+			}
+
+			a, b := e.proj+"/a", e.proj+"/b"
+			run("add", "deny", "path", a)
+			step(1)
+			if mode == "strict" {
+				if out, err := answerCmd(t, e, c, "add", "ask", "exec", "/bin/true"); err == nil || !strings.Contains(out, "not enforceable in strict mode: ask exec ") {
+					t.Errorf("hallpass answer add ask exec: %v\n%s", err, out)
+				}
+			}
+			run("edit", ruleIDOf(t, run("rules"), "deny path "+a), "deny path "+b)
+			step(2)
+			run("delete", ruleIDOf(t, run("rules"), "deny path "+b))
+			step(3)
+			if err := c.Wait(); err != nil {
+				t.Fatalf("hallpass: %v\n%s", err, out.String())
+			}
+			for _, want := range []string{"1 a=denied", "1 b=ok", "2 a=ok", "2 b=denied", "3 a=ok", "3 b=ok"} {
+				if !strings.Contains(out.String(), want+"\n") {
+					t.Errorf("output lacks %q:\n%s", want, out.String())
+				}
+			}
+		})
 	}
 }
