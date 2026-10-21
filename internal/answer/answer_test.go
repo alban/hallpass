@@ -137,6 +137,12 @@ func TestApplyGrantNet(t *testing.T) {
 	if len(rs) != 1 || rs[0].Ops != rules.OpNet || rs[0].Set != monitor.AdvanceSet || rs[0].Object.NetString() != "udp:9.9.9.9:53" || !rs[0].Expires.IsZero() {
 		t.Fatalf("rules %+v", rs)
 	}
+	rs = append(rs,
+		rules.Rule{Ops: rules.OpExec, Object: rules.ObjectMatch{Path: &rules.PathMatch{Path: "/opt/t"}}},
+		rules.Rule{Ops: rules.OpAll, Object: rules.ObjectMatch{Path: &rules.PathMatch{Path: "/w/", Tree: true}}})
+	if got := Released(rs); got != "connect to udp:9.9.9.9:53, exec /opt/t, write /w/**" {
+		t.Errorf("released %q", got)
+	}
 }
 
 // TestApplyGrant: "grant" adds the rule asked for; other allows deny.

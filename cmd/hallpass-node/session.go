@@ -144,6 +144,8 @@ func (s *session) run() {
 				s.log.Debug("decided accesses not counted", "dropped", ev.Dropped)
 			case ev.Warning != "":
 				s.log.Warn(ev.Warning)
+			case ev.Released != nil:
+				s.released(ev.Released)
 			}
 		}
 	}
@@ -170,6 +172,16 @@ func (s *session) decided(d *monitor.Decided) {
 		}
 		return
 	}
+}
+
+// released reports grants the workload gave back.
+func (s *session) released(r *monitor.Released) {
+	what, exe := answer.Released(r.Rules), ""
+	if len(r.Subject.Chain) > 0 {
+		exe = r.Subject.Chain[0].Exe
+	}
+	s.log.Info("released", "rules", len(r.Rules), "what", what, "exe", exe)
+	s.event(false, reasonReleased, fmt.Sprintf("gave back %s by %s", clean(what), clean(exe)))
 }
 
 // objectName names o in an Event.

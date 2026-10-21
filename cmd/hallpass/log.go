@@ -6,6 +6,7 @@ package main
 import (
 	"encoding/json"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/alban/hallpass/internal/answer"
@@ -35,8 +36,35 @@ func logEvents(evs <-chan []monitor.Event, w io.Writer, audit bool, done chan<- 
 			if ev.Decided != nil && !isExec(ev.Decided) {
 				_ = enc.Encode(decidedEntry(ev.Decided, audit))
 			}
+			if r := ev.Released; r != nil {
+				_ = enc.Encode(releasedEntry(r))
+			}
 		}
 	}
+}
+
+// releasedEntry logs grants the workload gave back: decision "release",
+// path or net the scope of each, comma-separated.
+func releasedEntry(r *monitor.Released) logEntry {
+	e := logEntry{Time: time.Now().Format(time.RFC3339Nano), Syscall: "execve", Decision: "release", Reason: "advance"}
+	if ch := r.Subject.Chain; len(ch) > 0 {
+		e.PID, e.Exe = uint32(ch[0].TID), ch[0].Exe
+	}
+	var paths, nets []string
+	for _, rule := range r.Rules {
+		switch o := rule.Object; {
+		case o.IsNet():
+			nets = append(nets, o.NetString())
+		case o.Path != nil:
+			p := o.Path.Path
+			if o.Path.Tree {
+				p = strings.TrimSuffix(p, "/") + "/**"
+			}
+			paths = append(paths, p)
+		}
+	}
+	e.Path, e.Net = strings.Join(paths, ","), strings.Join(nets, ",")
+	return e
 }
 
 // isExec reports an exec, always continued: not logged until exec is

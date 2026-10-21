@@ -46,7 +46,10 @@ func toPBRequest(r *monitor.Request, p *pb.Prompt) *pb.Request {
 		out.Facts = append(out.Facts, &pb.Fact{Kind: f.Kind, Value: f.Value, Trust: pb.Trust(f.Trust)})
 	}
 	if a := r.Advance; a != nil {
-		out.Advance = &pb.Advance{Tree: a.Tree, Reason: a.Reason}
+		out.Advance = &pb.Advance{Tree: a.Tree, Reason: a.Reason, Writable: a.Writable}
+		if a.Net.IsNet() {
+			out.Advance.Dest = a.Net.NetString()
+		}
 		if a.For > 0 {
 			out.Advance.For = durationpb.New(a.For)
 		}

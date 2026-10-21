@@ -34,6 +34,21 @@ func TestAdvanceConv(t *testing.T) {
 	if p := ToPBPrompt(ui.Request{Advance: true}); p.GetGrantFor() != nil {
 		t.Errorf("grant_for: %v", p)
 	}
+	if a := out.GetAdvance(); a.GetDest() != "" || a.GetWritable() {
+		t.Errorf("files: %v", a)
+	}
+	dest, err := rules.ParseNet("tcp:10.0.0.0/8:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	net := toPBRequest(&monitor.Request{Op: rules.OpNet, Advance: &monitor.Advance{Net: dest}}, nil)
+	if net.GetAdvance().GetDest() != "tcp:10.0.0.0/8:443" || len(net.GetObjects()) != 0 {
+		t.Errorf("net: %v", net)
+	}
+	req.Op, req.Advance.Writable = rules.OpExec, true
+	if a := toPBRequest(req, nil).GetAdvance(); !a.GetWritable() {
+		t.Errorf("exec: %v", a)
+	}
 	d, err := fromPBDecision(&pb.Decision{TimedOut: true})
 	if err != nil || !d.TimedOut {
 		t.Errorf("decision %+v %v", d, err)

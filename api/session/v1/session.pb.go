@@ -614,6 +614,7 @@ type Event struct {
 	//	*Event_Decided
 	//	*Event_Warning
 	//	*Event_Dropped
+	//	*Event_Released
 	Kind          isEvent_Kind `protobuf_oneof:"kind"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -710,6 +711,15 @@ func (x *Event) GetDropped() uint64 {
 	return 0
 }
 
+func (x *Event) GetReleased() *Released {
+	if x != nil {
+		if x, ok := x.Kind.(*Event_Released); ok {
+			return x.Released
+		}
+	}
+	return nil
+}
+
 type isEvent_Kind interface {
 	isEvent_Kind()
 }
@@ -738,6 +748,12 @@ type Event_Dropped struct {
 	Dropped uint64 `protobuf:"varint,6,opt,name=dropped,proto3,oneof"`
 }
 
+type Event_Released struct {
+	// The workload gave back grants of requests it made in advance
+	// (hallpass-request release): those rules are removed.
+	Released *Released `protobuf:"bytes,7,opt,name=released,proto3,oneof"`
+}
+
 func (*Event_Opened) isEvent_Kind() {}
 
 func (*Event_Closed) isEvent_Kind() {}
@@ -750,6 +766,60 @@ func (*Event_Warning) isEvent_Kind() {}
 
 func (*Event_Dropped) isEvent_Kind() {}
 
+func (*Event_Released) isEvent_Kind() {}
+
+type Released struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Rules         []*Rule                `protobuf:"bytes,1,rep,name=rules,proto3" json:"rules,omitempty"`
+	Subject       *Subject               `protobuf:"bytes,2,opt,name=subject,proto3" json:"subject,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Released) Reset() {
+	*x = Released{}
+	mi := &file_session_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Released) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Released) ProtoMessage() {}
+
+func (x *Released) ProtoReflect() protoreflect.Message {
+	mi := &file_session_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Released.ProtoReflect.Descriptor instead.
+func (*Released) Descriptor() ([]byte, []int) {
+	return file_session_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *Released) GetRules() []*Rule {
+	if x != nil {
+		return x.Rules
+	}
+	return nil
+}
+
+func (x *Released) GetSubject() *Subject {
+	if x != nil {
+		return x.Subject
+	}
+	return nil
+}
+
 type Request struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	Id      uint64                 `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -760,7 +830,9 @@ type Request struct {
 	Facts   []*Fact                `protobuf:"bytes,6,rep,name=facts,proto3" json:"facts,omitempty"`
 	Prompt  *Prompt                `protobuf:"bytes,7,opt,name=prompt,proto3" json:"prompt,omitempty"`
 	// Set for a request the workload made in advance (see
-	// docs/workstation/usage.md): objects[0] is the path asked for.
+	// docs/workstation/usage.md): objects[0] is the path asked for (op
+	// write or exec); for network destinations (op connect and send),
+	// there is no object, advance.dest says them.
 	Advance       *Advance `protobuf:"bytes,8,opt,name=advance,proto3" json:"advance,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -768,7 +840,7 @@ type Request struct {
 
 func (x *Request) Reset() {
 	*x = Request{}
-	mi := &file_session_proto_msgTypes[9]
+	mi := &file_session_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -780,7 +852,7 @@ func (x *Request) String() string {
 func (*Request) ProtoMessage() {}
 
 func (x *Request) ProtoReflect() protoreflect.Message {
-	mi := &file_session_proto_msgTypes[9]
+	mi := &file_session_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -793,7 +865,7 @@ func (x *Request) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Request.ProtoReflect.Descriptor instead.
 func (*Request) Descriptor() ([]byte, []int) {
-	return file_session_proto_rawDescGZIP(), []int{9}
+	return file_session_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *Request) GetId() uint64 {
@@ -853,17 +925,21 @@ func (x *Request) GetAdvance() *Advance {
 }
 
 type Advance struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Tree          bool                   `protobuf:"varint,1,opt,name=tree,proto3" json:"tree,omitempty"`    // the path and everything below it
-	For           *durationpb.Duration   `protobuf:"bytes,2,opt,name=for,proto3" json:"for,omitempty"`       // unset: the rest of the session
-	Reason        string                 `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"` // written by the workload: untrusted, display only
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Tree   bool                   `protobuf:"varint,1,opt,name=tree,proto3" json:"tree,omitempty"`    // the path and everything below it
+	For    *durationpb.Duration   `protobuf:"bytes,2,opt,name=for,proto3" json:"for,omitempty"`       // unset: the rest of the session
+	Reason string                 `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"` // written by the workload: untrusted, display only
+	Dest   string                 `protobuf:"bytes,4,opt,name=dest,proto3" json:"dest,omitempty"`     // network destinations, in --allow-net's syntax
+	// A program (or folder of programs) the workload may write without
+	// asking: a grant lets it run what it writes there.
+	Writable      bool `protobuf:"varint,5,opt,name=writable,proto3" json:"writable,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Advance) Reset() {
 	*x = Advance{}
-	mi := &file_session_proto_msgTypes[10]
+	mi := &file_session_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -875,7 +951,7 @@ func (x *Advance) String() string {
 func (*Advance) ProtoMessage() {}
 
 func (x *Advance) ProtoReflect() protoreflect.Message {
-	mi := &file_session_proto_msgTypes[10]
+	mi := &file_session_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -888,7 +964,7 @@ func (x *Advance) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Advance.ProtoReflect.Descriptor instead.
 func (*Advance) Descriptor() ([]byte, []int) {
-	return file_session_proto_rawDescGZIP(), []int{10}
+	return file_session_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *Advance) GetTree() bool {
@@ -910,6 +986,20 @@ func (x *Advance) GetReason() string {
 		return x.Reason
 	}
 	return ""
+}
+
+func (x *Advance) GetDest() string {
+	if x != nil {
+		return x.Dest
+	}
+	return ""
+}
+
+func (x *Advance) GetWritable() bool {
+	if x != nil {
+		return x.Writable
+	}
+	return false
 }
 
 // Prompt is what the session's terminal prompt shows about a request.
@@ -942,7 +1032,7 @@ type Prompt struct {
 
 func (x *Prompt) Reset() {
 	*x = Prompt{}
-	mi := &file_session_proto_msgTypes[11]
+	mi := &file_session_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -954,7 +1044,7 @@ func (x *Prompt) String() string {
 func (*Prompt) ProtoMessage() {}
 
 func (x *Prompt) ProtoReflect() protoreflect.Message {
-	mi := &file_session_proto_msgTypes[11]
+	mi := &file_session_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -967,7 +1057,7 @@ func (x *Prompt) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Prompt.ProtoReflect.Descriptor instead.
 func (*Prompt) Descriptor() ([]byte, []int) {
-	return file_session_proto_rawDescGZIP(), []int{11}
+	return file_session_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *Prompt) GetOp() string {
@@ -1091,7 +1181,7 @@ type Object struct {
 
 func (x *Object) Reset() {
 	*x = Object{}
-	mi := &file_session_proto_msgTypes[12]
+	mi := &file_session_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1103,7 +1193,7 @@ func (x *Object) String() string {
 func (*Object) ProtoMessage() {}
 
 func (x *Object) ProtoReflect() protoreflect.Message {
-	mi := &file_session_proto_msgTypes[12]
+	mi := &file_session_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1116,7 +1206,7 @@ func (x *Object) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Object.ProtoReflect.Descriptor instead.
 func (*Object) Descriptor() ([]byte, []int) {
-	return file_session_proto_rawDescGZIP(), []int{12}
+	return file_session_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *Object) GetKind() isObject_Kind {
@@ -1218,7 +1308,7 @@ type InetObject struct {
 
 func (x *InetObject) Reset() {
 	*x = InetObject{}
-	mi := &file_session_proto_msgTypes[13]
+	mi := &file_session_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1230,7 +1320,7 @@ func (x *InetObject) String() string {
 func (*InetObject) ProtoMessage() {}
 
 func (x *InetObject) ProtoReflect() protoreflect.Message {
-	mi := &file_session_proto_msgTypes[13]
+	mi := &file_session_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1243,7 +1333,7 @@ func (x *InetObject) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InetObject.ProtoReflect.Descriptor instead.
 func (*InetObject) Descriptor() ([]byte, []int) {
-	return file_session_proto_rawDescGZIP(), []int{13}
+	return file_session_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *InetObject) GetProto() uint32 {
@@ -1288,7 +1378,7 @@ type UnixObject struct {
 
 func (x *UnixObject) Reset() {
 	*x = UnixObject{}
-	mi := &file_session_proto_msgTypes[14]
+	mi := &file_session_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1300,7 +1390,7 @@ func (x *UnixObject) String() string {
 func (*UnixObject) ProtoMessage() {}
 
 func (x *UnixObject) ProtoReflect() protoreflect.Message {
-	mi := &file_session_proto_msgTypes[14]
+	mi := &file_session_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1313,7 +1403,7 @@ func (x *UnixObject) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnixObject.ProtoReflect.Descriptor instead.
 func (*UnixObject) Descriptor() ([]byte, []int) {
-	return file_session_proto_rawDescGZIP(), []int{14}
+	return file_session_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *UnixObject) GetPath() string {
@@ -1362,7 +1452,7 @@ type PathObject struct {
 
 func (x *PathObject) Reset() {
 	*x = PathObject{}
-	mi := &file_session_proto_msgTypes[15]
+	mi := &file_session_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1374,7 +1464,7 @@ func (x *PathObject) String() string {
 func (*PathObject) ProtoMessage() {}
 
 func (x *PathObject) ProtoReflect() protoreflect.Message {
-	mi := &file_session_proto_msgTypes[15]
+	mi := &file_session_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1387,7 +1477,7 @@ func (x *PathObject) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PathObject.ProtoReflect.Descriptor instead.
 func (*PathObject) Descriptor() ([]byte, []int) {
-	return file_session_proto_rawDescGZIP(), []int{15}
+	return file_session_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *PathObject) GetPath() string {
@@ -1421,7 +1511,7 @@ type ProcObject struct {
 
 func (x *ProcObject) Reset() {
 	*x = ProcObject{}
-	mi := &file_session_proto_msgTypes[16]
+	mi := &file_session_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1433,7 +1523,7 @@ func (x *ProcObject) String() string {
 func (*ProcObject) ProtoMessage() {}
 
 func (x *ProcObject) ProtoReflect() protoreflect.Message {
-	mi := &file_session_proto_msgTypes[16]
+	mi := &file_session_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1446,7 +1536,7 @@ func (x *ProcObject) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProcObject.ProtoReflect.Descriptor instead.
 func (*ProcObject) Descriptor() ([]byte, []int) {
-	return file_session_proto_rawDescGZIP(), []int{16}
+	return file_session_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *ProcObject) GetName() string {
@@ -1472,7 +1562,7 @@ type Subject struct {
 
 func (x *Subject) Reset() {
 	*x = Subject{}
-	mi := &file_session_proto_msgTypes[17]
+	mi := &file_session_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1484,7 +1574,7 @@ func (x *Subject) String() string {
 func (*Subject) ProtoMessage() {}
 
 func (x *Subject) ProtoReflect() protoreflect.Message {
-	mi := &file_session_proto_msgTypes[17]
+	mi := &file_session_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1497,7 +1587,7 @@ func (x *Subject) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Subject.ProtoReflect.Descriptor instead.
 func (*Subject) Descriptor() ([]byte, []int) {
-	return file_session_proto_rawDescGZIP(), []int{17}
+	return file_session_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *Subject) GetChain() []*Task {
@@ -1524,7 +1614,7 @@ type Task struct {
 
 func (x *Task) Reset() {
 	*x = Task{}
-	mi := &file_session_proto_msgTypes[18]
+	mi := &file_session_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1536,7 +1626,7 @@ func (x *Task) String() string {
 func (*Task) ProtoMessage() {}
 
 func (x *Task) ProtoReflect() protoreflect.Message {
-	mi := &file_session_proto_msgTypes[18]
+	mi := &file_session_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1549,7 +1639,7 @@ func (x *Task) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Task.ProtoReflect.Descriptor instead.
 func (*Task) Descriptor() ([]byte, []int) {
-	return file_session_proto_rawDescGZIP(), []int{18}
+	return file_session_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *Task) GetPid() int32 {
@@ -1626,7 +1716,7 @@ type Fact struct {
 
 func (x *Fact) Reset() {
 	*x = Fact{}
-	mi := &file_session_proto_msgTypes[19]
+	mi := &file_session_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1638,7 +1728,7 @@ func (x *Fact) String() string {
 func (*Fact) ProtoMessage() {}
 
 func (x *Fact) ProtoReflect() protoreflect.Message {
-	mi := &file_session_proto_msgTypes[19]
+	mi := &file_session_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1651,7 +1741,7 @@ func (x *Fact) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Fact.ProtoReflect.Descriptor instead.
 func (*Fact) Descriptor() ([]byte, []int) {
-	return file_session_proto_rawDescGZIP(), []int{19}
+	return file_session_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *Fact) GetKind() string {
@@ -1685,7 +1775,7 @@ type Closed struct {
 
 func (x *Closed) Reset() {
 	*x = Closed{}
-	mi := &file_session_proto_msgTypes[20]
+	mi := &file_session_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1697,7 +1787,7 @@ func (x *Closed) String() string {
 func (*Closed) ProtoMessage() {}
 
 func (x *Closed) ProtoReflect() protoreflect.Message {
-	mi := &file_session_proto_msgTypes[20]
+	mi := &file_session_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1710,7 +1800,7 @@ func (x *Closed) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Closed.ProtoReflect.Descriptor instead.
 func (*Closed) Descriptor() ([]byte, []int) {
-	return file_session_proto_rawDescGZIP(), []int{20}
+	return file_session_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *Closed) GetId() uint64 {
@@ -1739,7 +1829,7 @@ type Reason struct {
 
 func (x *Reason) Reset() {
 	*x = Reason{}
-	mi := &file_session_proto_msgTypes[21]
+	mi := &file_session_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1751,7 +1841,7 @@ func (x *Reason) String() string {
 func (*Reason) ProtoMessage() {}
 
 func (x *Reason) ProtoReflect() protoreflect.Message {
-	mi := &file_session_proto_msgTypes[21]
+	mi := &file_session_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1764,7 +1854,7 @@ func (x *Reason) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Reason.ProtoReflect.Descriptor instead.
 func (*Reason) Descriptor() ([]byte, []int) {
-	return file_session_proto_rawDescGZIP(), []int{21}
+	return file_session_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *Reason) GetClient() string {
@@ -1811,7 +1901,7 @@ type Decided struct {
 
 func (x *Decided) Reset() {
 	*x = Decided{}
-	mi := &file_session_proto_msgTypes[22]
+	mi := &file_session_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1823,7 +1913,7 @@ func (x *Decided) String() string {
 func (*Decided) ProtoMessage() {}
 
 func (x *Decided) ProtoReflect() protoreflect.Message {
-	mi := &file_session_proto_msgTypes[22]
+	mi := &file_session_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1836,7 +1926,7 @@ func (x *Decided) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Decided.ProtoReflect.Descriptor instead.
 func (*Decided) Descriptor() ([]byte, []int) {
-	return file_session_proto_rawDescGZIP(), []int{22}
+	return file_session_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *Decided) GetTime() *timestamppb.Timestamp {
@@ -1912,7 +2002,7 @@ type Decision struct {
 
 func (x *Decision) Reset() {
 	*x = Decision{}
-	mi := &file_session_proto_msgTypes[23]
+	mi := &file_session_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1924,7 +2014,7 @@ func (x *Decision) String() string {
 func (*Decision) ProtoMessage() {}
 
 func (x *Decision) ProtoReflect() protoreflect.Message {
-	mi := &file_session_proto_msgTypes[23]
+	mi := &file_session_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1937,7 +2027,7 @@ func (x *Decision) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Decision.ProtoReflect.Descriptor instead.
 func (*Decision) Descriptor() ([]byte, []int) {
-	return file_session_proto_rawDescGZIP(), []int{23}
+	return file_session_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *Decision) GetVerdicts() []*Verdict {
@@ -1999,7 +2089,7 @@ type Verdict struct {
 
 func (x *Verdict) Reset() {
 	*x = Verdict{}
-	mi := &file_session_proto_msgTypes[24]
+	mi := &file_session_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2011,7 +2101,7 @@ func (x *Verdict) String() string {
 func (*Verdict) ProtoMessage() {}
 
 func (x *Verdict) ProtoReflect() protoreflect.Message {
-	mi := &file_session_proto_msgTypes[24]
+	mi := &file_session_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2024,7 +2114,7 @@ func (x *Verdict) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Verdict.ProtoReflect.Descriptor instead.
 func (*Verdict) Descriptor() ([]byte, []int) {
-	return file_session_proto_rawDescGZIP(), []int{24}
+	return file_session_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *Verdict) GetRequest() uint64 {
@@ -2050,7 +2140,7 @@ type ApplyReply struct {
 
 func (x *ApplyReply) Reset() {
 	*x = ApplyReply{}
-	mi := &file_session_proto_msgTypes[25]
+	mi := &file_session_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2062,7 +2152,7 @@ func (x *ApplyReply) String() string {
 func (*ApplyReply) ProtoMessage() {}
 
 func (x *ApplyReply) ProtoReflect() protoreflect.Message {
-	mi := &file_session_proto_msgTypes[25]
+	mi := &file_session_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2075,7 +2165,7 @@ func (x *ApplyReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApplyReply.ProtoReflect.Descriptor instead.
 func (*ApplyReply) Descriptor() ([]byte, []int) {
-	return file_session_proto_rawDescGZIP(), []int{25}
+	return file_session_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *ApplyReply) GetGeneration() uint64 {
@@ -2100,7 +2190,7 @@ type Rule struct {
 
 func (x *Rule) Reset() {
 	*x = Rule{}
-	mi := &file_session_proto_msgTypes[26]
+	mi := &file_session_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2112,7 +2202,7 @@ func (x *Rule) String() string {
 func (*Rule) ProtoMessage() {}
 
 func (x *Rule) ProtoReflect() protoreflect.Message {
-	mi := &file_session_proto_msgTypes[26]
+	mi := &file_session_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2125,7 +2215,7 @@ func (x *Rule) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Rule.ProtoReflect.Descriptor instead.
 func (*Rule) Descriptor() ([]byte, []int) {
-	return file_session_proto_rawDescGZIP(), []int{26}
+	return file_session_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *Rule) GetId() uint64 {
@@ -2195,7 +2285,7 @@ type ObjectMatch struct {
 
 func (x *ObjectMatch) Reset() {
 	*x = ObjectMatch{}
-	mi := &file_session_proto_msgTypes[27]
+	mi := &file_session_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2207,7 +2297,7 @@ func (x *ObjectMatch) String() string {
 func (*ObjectMatch) ProtoMessage() {}
 
 func (x *ObjectMatch) ProtoReflect() protoreflect.Message {
-	mi := &file_session_proto_msgTypes[27]
+	mi := &file_session_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2220,7 +2310,7 @@ func (x *ObjectMatch) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ObjectMatch.ProtoReflect.Descriptor instead.
 func (*ObjectMatch) Descriptor() ([]byte, []int) {
-	return file_session_proto_rawDescGZIP(), []int{27}
+	return file_session_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *ObjectMatch) GetKind() isObjectMatch_Kind {
@@ -2351,7 +2441,7 @@ type InetMatch struct {
 
 func (x *InetMatch) Reset() {
 	*x = InetMatch{}
-	mi := &file_session_proto_msgTypes[28]
+	mi := &file_session_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2363,7 +2453,7 @@ func (x *InetMatch) String() string {
 func (*InetMatch) ProtoMessage() {}
 
 func (x *InetMatch) ProtoReflect() protoreflect.Message {
-	mi := &file_session_proto_msgTypes[28]
+	mi := &file_session_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2376,7 +2466,7 @@ func (x *InetMatch) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InetMatch.ProtoReflect.Descriptor instead.
 func (*InetMatch) Descriptor() ([]byte, []int) {
-	return file_session_proto_rawDescGZIP(), []int{28}
+	return file_session_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *InetMatch) GetProto() uint32 {
@@ -2419,7 +2509,7 @@ type UnixMatch struct {
 
 func (x *UnixMatch) Reset() {
 	*x = UnixMatch{}
-	mi := &file_session_proto_msgTypes[29]
+	mi := &file_session_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2431,7 +2521,7 @@ func (x *UnixMatch) String() string {
 func (*UnixMatch) ProtoMessage() {}
 
 func (x *UnixMatch) ProtoReflect() protoreflect.Message {
-	mi := &file_session_proto_msgTypes[29]
+	mi := &file_session_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2444,7 +2534,7 @@ func (x *UnixMatch) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnixMatch.ProtoReflect.Descriptor instead.
 func (*UnixMatch) Descriptor() ([]byte, []int) {
-	return file_session_proto_rawDescGZIP(), []int{29}
+	return file_session_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *UnixMatch) GetPath() string {
@@ -2485,7 +2575,7 @@ type PathMatch struct {
 
 func (x *PathMatch) Reset() {
 	*x = PathMatch{}
-	mi := &file_session_proto_msgTypes[30]
+	mi := &file_session_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2497,7 +2587,7 @@ func (x *PathMatch) String() string {
 func (*PathMatch) ProtoMessage() {}
 
 func (x *PathMatch) ProtoReflect() protoreflect.Message {
-	mi := &file_session_proto_msgTypes[30]
+	mi := &file_session_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2510,7 +2600,7 @@ func (x *PathMatch) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PathMatch.ProtoReflect.Descriptor instead.
 func (*PathMatch) Descriptor() ([]byte, []int) {
-	return file_session_proto_rawDescGZIP(), []int{30}
+	return file_session_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *PathMatch) GetPath() string {
@@ -2537,7 +2627,7 @@ type ProcMatch struct {
 
 func (x *ProcMatch) Reset() {
 	*x = ProcMatch{}
-	mi := &file_session_proto_msgTypes[31]
+	mi := &file_session_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2549,7 +2639,7 @@ func (x *ProcMatch) String() string {
 func (*ProcMatch) ProtoMessage() {}
 
 func (x *ProcMatch) ProtoReflect() protoreflect.Message {
-	mi := &file_session_proto_msgTypes[31]
+	mi := &file_session_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2562,7 +2652,7 @@ func (x *ProcMatch) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProcMatch.ProtoReflect.Descriptor instead.
 func (*ProcMatch) Descriptor() ([]byte, []int) {
-	return file_session_proto_rawDescGZIP(), []int{31}
+	return file_session_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *ProcMatch) GetName() string {
@@ -2592,7 +2682,7 @@ type AnswerRequest struct {
 
 func (x *AnswerRequest) Reset() {
 	*x = AnswerRequest{}
-	mi := &file_session_proto_msgTypes[32]
+	mi := &file_session_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2604,7 +2694,7 @@ func (x *AnswerRequest) String() string {
 func (*AnswerRequest) ProtoMessage() {}
 
 func (x *AnswerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_proto_msgTypes[32]
+	mi := &file_session_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2617,7 +2707,7 @@ func (x *AnswerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AnswerRequest.ProtoReflect.Descriptor instead.
 func (*AnswerRequest) Descriptor() ([]byte, []int) {
-	return file_session_proto_rawDescGZIP(), []int{32}
+	return file_session_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *AnswerRequest) GetRequest() uint64 {
@@ -2649,7 +2739,7 @@ type AnswerReply struct {
 
 func (x *AnswerReply) Reset() {
 	*x = AnswerReply{}
-	mi := &file_session_proto_msgTypes[33]
+	mi := &file_session_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2661,7 +2751,7 @@ func (x *AnswerReply) String() string {
 func (*AnswerReply) ProtoMessage() {}
 
 func (x *AnswerReply) ProtoReflect() protoreflect.Message {
-	mi := &file_session_proto_msgTypes[33]
+	mi := &file_session_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2674,7 +2764,7 @@ func (x *AnswerReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AnswerReply.ProtoReflect.Descriptor instead.
 func (*AnswerReply) Descriptor() ([]byte, []int) {
-	return file_session_proto_rawDescGZIP(), []int{33}
+	return file_session_proto_rawDescGZIP(), []int{34}
 }
 
 var File_session_proto protoreflect.FileDescriptor
@@ -2712,15 +2802,19 @@ const file_session_proto_rawDesc = "" +
 	"\n" +
 	"EventBatch\x122\n" +
 	"\x06events\x18\x01 \x03(\v2\x1a.hallpass.session.v1.EventR\x06events\x12>\n" +
-	"\bsnapshot\x18\x02 \x01(\v2\".hallpass.session.v1.SnapshotReplyR\bsnapshot\"\x88\x02\n" +
+	"\bsnapshot\x18\x02 \x01(\v2\".hallpass.session.v1.SnapshotReplyR\bsnapshot\"\xc5\x02\n" +
 	"\x05Event\x126\n" +
 	"\x06opened\x18\x01 \x01(\v2\x1c.hallpass.session.v1.RequestH\x00R\x06opened\x125\n" +
 	"\x06closed\x18\x02 \x01(\v2\x1b.hallpass.session.v1.ClosedH\x00R\x06closed\x12\x16\n" +
 	"\x05rules\x18\x03 \x01(\x04H\x00R\x05rules\x128\n" +
 	"\adecided\x18\x04 \x01(\v2\x1c.hallpass.session.v1.DecidedH\x00R\adecided\x12\x1a\n" +
 	"\awarning\x18\x05 \x01(\tH\x00R\awarning\x12\x1a\n" +
-	"\adropped\x18\x06 \x01(\x04H\x00R\adroppedB\x06\n" +
-	"\x04kind\"\xd0\x02\n" +
+	"\adropped\x18\x06 \x01(\x04H\x00R\adropped\x12;\n" +
+	"\breleased\x18\a \x01(\v2\x1d.hallpass.session.v1.ReleasedH\x00R\breleasedB\x06\n" +
+	"\x04kind\"s\n" +
+	"\bReleased\x12/\n" +
+	"\x05rules\x18\x01 \x03(\v2\x19.hallpass.session.v1.RuleR\x05rules\x126\n" +
+	"\asubject\x18\x02 \x01(\v2\x1c.hallpass.session.v1.SubjectR\asubject\"\xd0\x02\n" +
 	"\aRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x04R\x02id\x12\x18\n" +
 	"\asyscall\x18\x02 \x01(\tR\asyscall\x12\x0e\n" +
@@ -2729,11 +2823,13 @@ const file_session_proto_rawDesc = "" +
 	"\asubject\x18\x05 \x01(\v2\x1c.hallpass.session.v1.SubjectR\asubject\x12/\n" +
 	"\x05facts\x18\x06 \x03(\v2\x19.hallpass.session.v1.FactR\x05facts\x123\n" +
 	"\x06prompt\x18\a \x01(\v2\x1b.hallpass.session.v1.PromptR\x06prompt\x126\n" +
-	"\aadvance\x18\b \x01(\v2\x1c.hallpass.session.v1.AdvanceR\aadvance\"b\n" +
+	"\aadvance\x18\b \x01(\v2\x1c.hallpass.session.v1.AdvanceR\aadvance\"\x92\x01\n" +
 	"\aAdvance\x12\x12\n" +
 	"\x04tree\x18\x01 \x01(\bR\x04tree\x12+\n" +
 	"\x03for\x18\x02 \x01(\v2\x19.google.protobuf.DurationR\x03for\x12\x16\n" +
-	"\x06reason\x18\x03 \x01(\tR\x06reason\"\xf0\x02\n" +
+	"\x06reason\x18\x03 \x01(\tR\x06reason\x12\x12\n" +
+	"\x04dest\x18\x04 \x01(\tR\x04dest\x12\x1a\n" +
+	"\bwritable\x18\x05 \x01(\bR\bwritable\"\xf0\x02\n" +
 	"\x06Prompt\x12\x0e\n" +
 	"\x02op\x18\x01 \x01(\tR\x02op\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12\x10\n" +
@@ -2903,7 +2999,7 @@ func file_session_proto_rawDescGZIP() []byte {
 }
 
 var file_session_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_session_proto_msgTypes = make([]protoimpl.MessageInfo, 35)
+var file_session_proto_msgTypes = make([]protoimpl.MessageInfo, 36)
 var file_session_proto_goTypes = []any{
 	(Trust)(0),                    // 0: hallpass.session.v1.Trust
 	(Source)(0),                   // 1: hallpass.session.v1.Source
@@ -2917,93 +3013,97 @@ var file_session_proto_goTypes = []any{
 	(*EventsRequest)(nil),         // 9: hallpass.session.v1.EventsRequest
 	(*EventBatch)(nil),            // 10: hallpass.session.v1.EventBatch
 	(*Event)(nil),                 // 11: hallpass.session.v1.Event
-	(*Request)(nil),               // 12: hallpass.session.v1.Request
-	(*Advance)(nil),               // 13: hallpass.session.v1.Advance
-	(*Prompt)(nil),                // 14: hallpass.session.v1.Prompt
-	(*Object)(nil),                // 15: hallpass.session.v1.Object
-	(*InetObject)(nil),            // 16: hallpass.session.v1.InetObject
-	(*UnixObject)(nil),            // 17: hallpass.session.v1.UnixObject
-	(*PathObject)(nil),            // 18: hallpass.session.v1.PathObject
-	(*ProcObject)(nil),            // 19: hallpass.session.v1.ProcObject
-	(*Subject)(nil),               // 20: hallpass.session.v1.Subject
-	(*Task)(nil),                  // 21: hallpass.session.v1.Task
-	(*Fact)(nil),                  // 22: hallpass.session.v1.Fact
-	(*Closed)(nil),                // 23: hallpass.session.v1.Closed
-	(*Reason)(nil),                // 24: hallpass.session.v1.Reason
-	(*Decided)(nil),               // 25: hallpass.session.v1.Decided
-	(*Decision)(nil),              // 26: hallpass.session.v1.Decision
-	(*Verdict)(nil),               // 27: hallpass.session.v1.Verdict
-	(*ApplyReply)(nil),            // 28: hallpass.session.v1.ApplyReply
-	(*Rule)(nil),                  // 29: hallpass.session.v1.Rule
-	(*ObjectMatch)(nil),           // 30: hallpass.session.v1.ObjectMatch
-	(*InetMatch)(nil),             // 31: hallpass.session.v1.InetMatch
-	(*UnixMatch)(nil),             // 32: hallpass.session.v1.UnixMatch
-	(*PathMatch)(nil),             // 33: hallpass.session.v1.PathMatch
-	(*ProcMatch)(nil),             // 34: hallpass.session.v1.ProcMatch
-	(*AnswerRequest)(nil),         // 35: hallpass.session.v1.AnswerRequest
-	(*AnswerReply)(nil),           // 36: hallpass.session.v1.AnswerReply
-	nil,                           // 37: hallpass.session.v1.SessionInfo.LabelsEntry
-	(*timestamppb.Timestamp)(nil), // 38: google.protobuf.Timestamp
-	(*durationpb.Duration)(nil),   // 39: google.protobuf.Duration
+	(*Released)(nil),              // 12: hallpass.session.v1.Released
+	(*Request)(nil),               // 13: hallpass.session.v1.Request
+	(*Advance)(nil),               // 14: hallpass.session.v1.Advance
+	(*Prompt)(nil),                // 15: hallpass.session.v1.Prompt
+	(*Object)(nil),                // 16: hallpass.session.v1.Object
+	(*InetObject)(nil),            // 17: hallpass.session.v1.InetObject
+	(*UnixObject)(nil),            // 18: hallpass.session.v1.UnixObject
+	(*PathObject)(nil),            // 19: hallpass.session.v1.PathObject
+	(*ProcObject)(nil),            // 20: hallpass.session.v1.ProcObject
+	(*Subject)(nil),               // 21: hallpass.session.v1.Subject
+	(*Task)(nil),                  // 22: hallpass.session.v1.Task
+	(*Fact)(nil),                  // 23: hallpass.session.v1.Fact
+	(*Closed)(nil),                // 24: hallpass.session.v1.Closed
+	(*Reason)(nil),                // 25: hallpass.session.v1.Reason
+	(*Decided)(nil),               // 26: hallpass.session.v1.Decided
+	(*Decision)(nil),              // 27: hallpass.session.v1.Decision
+	(*Verdict)(nil),               // 28: hallpass.session.v1.Verdict
+	(*ApplyReply)(nil),            // 29: hallpass.session.v1.ApplyReply
+	(*Rule)(nil),                  // 30: hallpass.session.v1.Rule
+	(*ObjectMatch)(nil),           // 31: hallpass.session.v1.ObjectMatch
+	(*InetMatch)(nil),             // 32: hallpass.session.v1.InetMatch
+	(*UnixMatch)(nil),             // 33: hallpass.session.v1.UnixMatch
+	(*PathMatch)(nil),             // 34: hallpass.session.v1.PathMatch
+	(*ProcMatch)(nil),             // 35: hallpass.session.v1.ProcMatch
+	(*AnswerRequest)(nil),         // 36: hallpass.session.v1.AnswerRequest
+	(*AnswerReply)(nil),           // 37: hallpass.session.v1.AnswerReply
+	nil,                           // 38: hallpass.session.v1.SessionInfo.LabelsEntry
+	(*timestamppb.Timestamp)(nil), // 39: google.protobuf.Timestamp
+	(*durationpb.Duration)(nil),   // 40: google.protobuf.Duration
 }
 var file_session_proto_depIdxs = []int32{
 	6,  // 0: hallpass.session.v1.ListReply.sessions:type_name -> hallpass.session.v1.SessionInfo
-	38, // 1: hallpass.session.v1.SessionInfo.start_time:type_name -> google.protobuf.Timestamp
-	39, // 2: hallpass.session.v1.SessionInfo.prompt_timeout:type_name -> google.protobuf.Duration
-	37, // 3: hallpass.session.v1.SessionInfo.labels:type_name -> hallpass.session.v1.SessionInfo.LabelsEntry
-	12, // 4: hallpass.session.v1.SnapshotReply.pending:type_name -> hallpass.session.v1.Request
-	29, // 5: hallpass.session.v1.SnapshotReply.rules:type_name -> hallpass.session.v1.Rule
+	39, // 1: hallpass.session.v1.SessionInfo.start_time:type_name -> google.protobuf.Timestamp
+	40, // 2: hallpass.session.v1.SessionInfo.prompt_timeout:type_name -> google.protobuf.Duration
+	38, // 3: hallpass.session.v1.SessionInfo.labels:type_name -> hallpass.session.v1.SessionInfo.LabelsEntry
+	13, // 4: hallpass.session.v1.SnapshotReply.pending:type_name -> hallpass.session.v1.Request
+	30, // 5: hallpass.session.v1.SnapshotReply.rules:type_name -> hallpass.session.v1.Rule
 	11, // 6: hallpass.session.v1.EventBatch.events:type_name -> hallpass.session.v1.Event
 	8,  // 7: hallpass.session.v1.EventBatch.snapshot:type_name -> hallpass.session.v1.SnapshotReply
-	12, // 8: hallpass.session.v1.Event.opened:type_name -> hallpass.session.v1.Request
-	23, // 9: hallpass.session.v1.Event.closed:type_name -> hallpass.session.v1.Closed
-	25, // 10: hallpass.session.v1.Event.decided:type_name -> hallpass.session.v1.Decided
-	15, // 11: hallpass.session.v1.Request.objects:type_name -> hallpass.session.v1.Object
-	20, // 12: hallpass.session.v1.Request.subject:type_name -> hallpass.session.v1.Subject
-	22, // 13: hallpass.session.v1.Request.facts:type_name -> hallpass.session.v1.Fact
-	14, // 14: hallpass.session.v1.Request.prompt:type_name -> hallpass.session.v1.Prompt
-	13, // 15: hallpass.session.v1.Request.advance:type_name -> hallpass.session.v1.Advance
-	39, // 16: hallpass.session.v1.Advance.for:type_name -> google.protobuf.Duration
-	39, // 17: hallpass.session.v1.Prompt.grant_for:type_name -> google.protobuf.Duration
-	18, // 18: hallpass.session.v1.Object.path:type_name -> hallpass.session.v1.PathObject
-	19, // 19: hallpass.session.v1.Object.proc:type_name -> hallpass.session.v1.ProcObject
-	16, // 20: hallpass.session.v1.Object.inet:type_name -> hallpass.session.v1.InetObject
-	17, // 21: hallpass.session.v1.Object.unix:type_name -> hallpass.session.v1.UnixObject
-	20, // 22: hallpass.session.v1.ProcObject.target:type_name -> hallpass.session.v1.Subject
-	21, // 23: hallpass.session.v1.Subject.chain:type_name -> hallpass.session.v1.Task
-	0,  // 24: hallpass.session.v1.Fact.trust:type_name -> hallpass.session.v1.Trust
-	24, // 25: hallpass.session.v1.Closed.why:type_name -> hallpass.session.v1.Reason
-	38, // 26: hallpass.session.v1.Decided.time:type_name -> google.protobuf.Timestamp
-	15, // 27: hallpass.session.v1.Decided.objects:type_name -> hallpass.session.v1.Object
-	20, // 28: hallpass.session.v1.Decided.subject:type_name -> hallpass.session.v1.Subject
-	24, // 29: hallpass.session.v1.Decided.why:type_name -> hallpass.session.v1.Reason
-	1,  // 30: hallpass.session.v1.Decided.source:type_name -> hallpass.session.v1.Source
-	27, // 31: hallpass.session.v1.Decision.verdicts:type_name -> hallpass.session.v1.Verdict
-	29, // 32: hallpass.session.v1.Decision.add_rules:type_name -> hallpass.session.v1.Rule
-	30, // 33: hallpass.session.v1.Rule.object:type_name -> hallpass.session.v1.ObjectMatch
-	2,  // 34: hallpass.session.v1.Rule.verdict:type_name -> hallpass.session.v1.RuleVerdict
-	38, // 35: hallpass.session.v1.Rule.expires:type_name -> google.protobuf.Timestamp
-	33, // 36: hallpass.session.v1.ObjectMatch.path:type_name -> hallpass.session.v1.PathMatch
-	34, // 37: hallpass.session.v1.ObjectMatch.proc:type_name -> hallpass.session.v1.ProcMatch
-	31, // 38: hallpass.session.v1.ObjectMatch.inet:type_name -> hallpass.session.v1.InetMatch
-	32, // 39: hallpass.session.v1.ObjectMatch.unix:type_name -> hallpass.session.v1.UnixMatch
-	3,  // 40: hallpass.session.v1.Session.Info:input_type -> hallpass.session.v1.InfoRequest
-	7,  // 41: hallpass.session.v1.Session.Snapshot:input_type -> hallpass.session.v1.SnapshotRequest
-	9,  // 42: hallpass.session.v1.Session.Events:input_type -> hallpass.session.v1.EventsRequest
-	26, // 43: hallpass.session.v1.Session.Apply:input_type -> hallpass.session.v1.Decision
-	35, // 44: hallpass.session.v1.Session.Answer:input_type -> hallpass.session.v1.AnswerRequest
-	4,  // 45: hallpass.session.v1.Session.List:input_type -> hallpass.session.v1.ListRequest
-	6,  // 46: hallpass.session.v1.Session.Info:output_type -> hallpass.session.v1.SessionInfo
-	8,  // 47: hallpass.session.v1.Session.Snapshot:output_type -> hallpass.session.v1.SnapshotReply
-	10, // 48: hallpass.session.v1.Session.Events:output_type -> hallpass.session.v1.EventBatch
-	28, // 49: hallpass.session.v1.Session.Apply:output_type -> hallpass.session.v1.ApplyReply
-	36, // 50: hallpass.session.v1.Session.Answer:output_type -> hallpass.session.v1.AnswerReply
-	5,  // 51: hallpass.session.v1.Session.List:output_type -> hallpass.session.v1.ListReply
-	46, // [46:52] is the sub-list for method output_type
-	40, // [40:46] is the sub-list for method input_type
-	40, // [40:40] is the sub-list for extension type_name
-	40, // [40:40] is the sub-list for extension extendee
-	0,  // [0:40] is the sub-list for field type_name
+	13, // 8: hallpass.session.v1.Event.opened:type_name -> hallpass.session.v1.Request
+	24, // 9: hallpass.session.v1.Event.closed:type_name -> hallpass.session.v1.Closed
+	26, // 10: hallpass.session.v1.Event.decided:type_name -> hallpass.session.v1.Decided
+	12, // 11: hallpass.session.v1.Event.released:type_name -> hallpass.session.v1.Released
+	30, // 12: hallpass.session.v1.Released.rules:type_name -> hallpass.session.v1.Rule
+	21, // 13: hallpass.session.v1.Released.subject:type_name -> hallpass.session.v1.Subject
+	16, // 14: hallpass.session.v1.Request.objects:type_name -> hallpass.session.v1.Object
+	21, // 15: hallpass.session.v1.Request.subject:type_name -> hallpass.session.v1.Subject
+	23, // 16: hallpass.session.v1.Request.facts:type_name -> hallpass.session.v1.Fact
+	15, // 17: hallpass.session.v1.Request.prompt:type_name -> hallpass.session.v1.Prompt
+	14, // 18: hallpass.session.v1.Request.advance:type_name -> hallpass.session.v1.Advance
+	40, // 19: hallpass.session.v1.Advance.for:type_name -> google.protobuf.Duration
+	40, // 20: hallpass.session.v1.Prompt.grant_for:type_name -> google.protobuf.Duration
+	19, // 21: hallpass.session.v1.Object.path:type_name -> hallpass.session.v1.PathObject
+	20, // 22: hallpass.session.v1.Object.proc:type_name -> hallpass.session.v1.ProcObject
+	17, // 23: hallpass.session.v1.Object.inet:type_name -> hallpass.session.v1.InetObject
+	18, // 24: hallpass.session.v1.Object.unix:type_name -> hallpass.session.v1.UnixObject
+	21, // 25: hallpass.session.v1.ProcObject.target:type_name -> hallpass.session.v1.Subject
+	22, // 26: hallpass.session.v1.Subject.chain:type_name -> hallpass.session.v1.Task
+	0,  // 27: hallpass.session.v1.Fact.trust:type_name -> hallpass.session.v1.Trust
+	25, // 28: hallpass.session.v1.Closed.why:type_name -> hallpass.session.v1.Reason
+	39, // 29: hallpass.session.v1.Decided.time:type_name -> google.protobuf.Timestamp
+	16, // 30: hallpass.session.v1.Decided.objects:type_name -> hallpass.session.v1.Object
+	21, // 31: hallpass.session.v1.Decided.subject:type_name -> hallpass.session.v1.Subject
+	25, // 32: hallpass.session.v1.Decided.why:type_name -> hallpass.session.v1.Reason
+	1,  // 33: hallpass.session.v1.Decided.source:type_name -> hallpass.session.v1.Source
+	28, // 34: hallpass.session.v1.Decision.verdicts:type_name -> hallpass.session.v1.Verdict
+	30, // 35: hallpass.session.v1.Decision.add_rules:type_name -> hallpass.session.v1.Rule
+	31, // 36: hallpass.session.v1.Rule.object:type_name -> hallpass.session.v1.ObjectMatch
+	2,  // 37: hallpass.session.v1.Rule.verdict:type_name -> hallpass.session.v1.RuleVerdict
+	39, // 38: hallpass.session.v1.Rule.expires:type_name -> google.protobuf.Timestamp
+	34, // 39: hallpass.session.v1.ObjectMatch.path:type_name -> hallpass.session.v1.PathMatch
+	35, // 40: hallpass.session.v1.ObjectMatch.proc:type_name -> hallpass.session.v1.ProcMatch
+	32, // 41: hallpass.session.v1.ObjectMatch.inet:type_name -> hallpass.session.v1.InetMatch
+	33, // 42: hallpass.session.v1.ObjectMatch.unix:type_name -> hallpass.session.v1.UnixMatch
+	3,  // 43: hallpass.session.v1.Session.Info:input_type -> hallpass.session.v1.InfoRequest
+	7,  // 44: hallpass.session.v1.Session.Snapshot:input_type -> hallpass.session.v1.SnapshotRequest
+	9,  // 45: hallpass.session.v1.Session.Events:input_type -> hallpass.session.v1.EventsRequest
+	27, // 46: hallpass.session.v1.Session.Apply:input_type -> hallpass.session.v1.Decision
+	36, // 47: hallpass.session.v1.Session.Answer:input_type -> hallpass.session.v1.AnswerRequest
+	4,  // 48: hallpass.session.v1.Session.List:input_type -> hallpass.session.v1.ListRequest
+	6,  // 49: hallpass.session.v1.Session.Info:output_type -> hallpass.session.v1.SessionInfo
+	8,  // 50: hallpass.session.v1.Session.Snapshot:output_type -> hallpass.session.v1.SnapshotReply
+	10, // 51: hallpass.session.v1.Session.Events:output_type -> hallpass.session.v1.EventBatch
+	29, // 52: hallpass.session.v1.Session.Apply:output_type -> hallpass.session.v1.ApplyReply
+	37, // 53: hallpass.session.v1.Session.Answer:output_type -> hallpass.session.v1.AnswerReply
+	5,  // 54: hallpass.session.v1.Session.List:output_type -> hallpass.session.v1.ListReply
+	49, // [49:55] is the sub-list for method output_type
+	43, // [43:49] is the sub-list for method input_type
+	43, // [43:43] is the sub-list for extension type_name
+	43, // [43:43] is the sub-list for extension extendee
+	0,  // [0:43] is the sub-list for field type_name
 }
 
 func init() { file_session_proto_init() }
@@ -3018,15 +3118,16 @@ func file_session_proto_init() {
 		(*Event_Decided)(nil),
 		(*Event_Warning)(nil),
 		(*Event_Dropped)(nil),
+		(*Event_Released)(nil),
 	}
-	file_session_proto_msgTypes[12].OneofWrappers = []any{
+	file_session_proto_msgTypes[13].OneofWrappers = []any{
 		(*Object_Path)(nil),
 		(*Object_Proc)(nil),
 		(*Object_Unknown)(nil),
 		(*Object_Inet)(nil),
 		(*Object_Unix)(nil),
 	}
-	file_session_proto_msgTypes[27].OneofWrappers = []any{
+	file_session_proto_msgTypes[28].OneofWrappers = []any{
 		(*ObjectMatch_Path)(nil),
 		(*ObjectMatch_Proc)(nil),
 		(*ObjectMatch_Unknown)(nil),
@@ -3041,7 +3142,7 @@ func file_session_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_session_proto_rawDesc), len(file_session_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   35,
+			NumMessages:   36,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

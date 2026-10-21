@@ -202,6 +202,12 @@ func (s *service) Events(req *pb.EventsRequest, stream grpc.ServerStreamingServe
 				pe.Kind = &pb.Event_Warning{Warning: ev.Warning}
 			case ev.Dropped != 0:
 				pe.Kind = &pb.Event_Dropped{Dropped: ev.Dropped}
+			case ev.Released != nil:
+				r := &pb.Released{Subject: toPBSubject(ev.Released.Subject)}
+				for _, rule := range ev.Released.Rules {
+					r.Rules = append(r.Rules, toPBRule(rule))
+				}
+				pe.Kind = &pb.Event_Released{Released: r}
 			default:
 				continue
 			}

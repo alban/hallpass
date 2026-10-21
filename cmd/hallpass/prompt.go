@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/alban/hallpass/internal/answer"
@@ -45,6 +46,8 @@ func (s *session) prompts(evs <-chan []monitor.Event, gone chan<- struct{}) {
 				s.cancelPrompt(ev.Closed.ID)
 			case ev.Warning != "":
 				s.notice("hallpass: " + ev.Warning)
+			case ev.Released != nil:
+				s.notice("hallpass: " + releasedBy(ev.Released) + " gave back " + ui.Sanitize(answer.Released(ev.Released.Rules)))
 			}
 		}
 		if changed {
@@ -242,4 +245,17 @@ func wrapList(prefix string, items []string, width int) []string {
 		line += it
 	}
 	return append(lines, line)
+}
+
+// releasedBy names the task that gave grants back, e.g. "make (pid 42)".
+func releasedBy(r *monitor.Released) string {
+	if len(r.Subject.Chain) == 0 {
+		return "the workload"
+	}
+	t := r.Subject.Chain[0]
+	name := t.Comm
+	if t.Exe != "" {
+		name = filepath.Base(t.Exe)
+	}
+	return fmt.Sprintf("%s (pid %d)", ui.Sanitize(name), t.PID)
 }

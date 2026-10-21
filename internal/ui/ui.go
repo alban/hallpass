@@ -217,6 +217,10 @@ func (r Request) Origin() string {
 	return strings.Join(parts, " ← ")
 }
 
+// Sanitize replaces in s, written by the workload, what could mislead a
+// terminal or a reader: control and format characters, invalid UTF-8.
+func Sanitize(s string) string { return sanitize(s) }
+
 func sanitize(s string) string {
 	return strings.Map(func(c rune) rune {
 		if unicode.IsControl(c) || unicode.Is(unicode.Cf, c) || c == utf8.RuneError {

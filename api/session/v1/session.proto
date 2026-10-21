@@ -95,7 +95,15 @@ message Event {
     Decided decided = 4;
     string warning = 5;
     uint64 dropped = 6;
+    // The workload gave back grants of requests it made in advance
+    // (hallpass-request release): those rules are removed.
+    Released released = 7;
   }
+}
+
+message Released {
+  repeated Rule rules = 1;
+  Subject subject = 2;
 }
 
 message Request {
@@ -107,7 +115,9 @@ message Request {
   repeated Fact facts = 6;
   Prompt prompt = 7;
   // Set for a request the workload made in advance (see
-  // docs/workstation/usage.md): objects[0] is the path asked for.
+  // docs/workstation/usage.md): objects[0] is the path asked for (op
+  // write or exec); for network destinations (op connect and send),
+  // there is no object, advance.dest says them.
   Advance advance = 8;
 }
 
@@ -115,6 +125,10 @@ message Advance {
   bool tree = 1; // the path and everything below it
   google.protobuf.Duration for = 2; // unset: the rest of the session
   string reason = 3; // written by the workload: untrusted, display only
+  string dest = 4; // network destinations, in --allow-net's syntax
+  // A program (or folder of programs) the workload may write without
+  // asking: a grant lets it run what it writes there.
+  bool writable = 5;
 }
 
 // Prompt is what the session's terminal prompt shows about a request.

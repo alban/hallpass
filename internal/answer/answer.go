@@ -276,6 +276,30 @@ func Request(p Policy, req *monitor.Request, waiting int) ui.Request {
 	return r
 }
 
+// Released names grants the workload gave back (monitor.Released) as its
+// requests in advance did, e.g. "write /w/**, connect to tcp:10.0.0.0/8".
+func Released(rs []rules.Rule) string {
+	var names []string
+	for _, r := range rs {
+		o := r.Object
+		switch {
+		case o.IsNet():
+			names = append(names, "connect to "+o.NetString())
+		case o.Path != nil:
+			op := "write "
+			if r.Ops == rules.OpExec {
+				op = "exec "
+			}
+			p := o.Path.Path
+			if o.Path.Tree {
+				p = strings.TrimSuffix(p, "/") + "/**"
+			}
+			names = append(names, op+p)
+		}
+	}
+	return strings.Join(names, ", ")
+}
+
 // ProcPath names a /proc object, e.g. /proc/42/mem.
 func ProcPath(p *rules.ProcObject) string {
 	tid := 0

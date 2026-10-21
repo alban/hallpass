@@ -33,6 +33,9 @@ const (
 	reasonPolicyDenied = "HallpassPolicyDenied"
 	// reasonStarted: the container is sandboxed, and how to answer.
 	reasonStarted = "HallpassStarted"
+	// reasonReleased: the workload gave back grants of its requests made
+	// in advance (hallpass-request release).
+	reasonReleased = "HallpassReleased"
 )
 
 // startedMessage is the message of the reasonStarted Event.
