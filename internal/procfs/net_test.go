@@ -129,7 +129,29 @@ func TestSocket(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := (SocketInfo{unix.AF_INET6, unix.SOCK_DGRAM, unix.IPPROTO_UDP}); got != want {
+	if want := (SocketInfo{Domain: unix.AF_INET6, Type: unix.SOCK_DGRAM, Protocol: unix.IPPROTO_UDP}); got != want {
 		t.Errorf("got %+v, want %+v", got, want)
+	}
+}
+
+// TestSocketPeer: the peer of a connected UDP socket, as glibc's resolver
+// connects it to its nameserver.
+func TestSocketPeer(t *testing.T) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(fd)
+	if si, err := Socket(unix.Gettid(), fd); err != nil || si.Peer.IsValid() {
+		t.Errorf("not connected: %+v, %v", si, err)
+	}
+	if err := unix.Connect(fd, &unix.SockaddrInet4{Port: 53, Addr: [4]byte{127, 0, 0, 1}}); err != nil {
+		t.Fatal(err)
+	}
+	si, err := Socket(unix.Gettid(), fd)
+	if err != nil || si.Peer != netip.MustParseAddrPort("127.0.0.1:53") {
+		t.Errorf("connected: %+v, %v", si, err)
 	}
 }

@@ -153,6 +153,9 @@ func readMem(pid uint32, addr uint64, size int) ([]byte, error) {
 // SocketInfo describes a socket of a target.
 type SocketInfo struct {
 	Domain, Type, Protocol int
+	// Peer is the address an AF_INET or AF_INET6 socket is connected
+	// to; not valid otherwise.
+	Peer netip.AddrPort
 }
 
 // Socket returns what socket fd of thread tid is, through a copy of the
@@ -182,5 +185,75 @@ func Socket(tid int, fd int) (SocketInfo, error) {
 			return SocketInfo{}, err
 		}
 	}
+	if si.Domain == unix.AF_INET || si.Domain == unix.AF_INET6 {
+		switch sa := sockname(unix.Getpeername(s)).(type) {
+		case *unix.SockaddrInet4:
+			si.Peer = netip.AddrPortFrom(netip.AddrFrom4(sa.Addr), uint16(sa.Port))
+		case *unix.SockaddrInet6:
+			si.Peer = netip.AddrPortFrom(netip.AddrFrom16(sa.Addr).Unmap(), uint16(sa.Port))
+		}
+	}
 	return si, nil
+}
+
+// sockname drops the error of Getpeername (ENOTCONN).
+func sockname(sa unix.Sockaddr, err error) unix.Sockaddr {
+	if err != nil {
+		return nil
+	}
+	return sa
+}
+
+// ReadMsgData reads the first buffer (iovec) of count struct msghdr (mmsg
+// false) or struct mmsghdr (mmsg true) at addr in the target's memory, at
+// most max bytes of each. A message whose buffer cannot be read is left
+// out.
+func ReadMsgData(pid uint32, addr uint64, count int, mmsg bool, max int) [][]byte {
+	stride := sizeofMsghdr
+	if mmsg {
+		stride = sizeofMmsghdr
+	}
+	if count <= 0 {
+		return nil
+	}
+	// msg_iov and msg_iovlen are at 16 and 24.
+	b, err := readMem(pid, addr, stride*(count-1)+32)
+	if err != nil {
+		return nil
+	}
+	var out [][]byte
+	for i := range count {
+		h := b[i*stride:]
+		iov, iovlen := binary.NativeEndian.Uint64(h[16:]), binary.NativeEndian.Uint64(h[24:])
+		if iov == 0 || iovlen == 0 {
+			continue
+		}
+		if d := ReadBuf(pid, iov, max); d != nil {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// ReadBuf reads the buffer of struct iovec at addr in the target's memory,
+// at most max bytes of it; nil when it cannot be read.
+func ReadBuf(pid uint32, iovec uint64, max int) []byte {
+	v, err := readMem(pid, iovec, 16)
+	if err != nil {
+		return nil
+	}
+	return ReadData(pid, binary.NativeEndian.Uint64(v), int(min(binary.NativeEndian.Uint64(v[8:]), uint64(max))))
+}
+
+// ReadData reads size bytes at addr in the target's memory; nil when it
+// cannot be read.
+func ReadData(pid uint32, addr uint64, size int) []byte {
+	if addr == 0 || size <= 0 {
+		return nil
+	}
+	b, err := readMem(pid, addr, size)
+	if err != nil {
+		return nil
+	}
+	return b
 }
