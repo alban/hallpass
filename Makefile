@@ -98,6 +98,9 @@ KERNEL_VERSION ?= 7.2.8
 TEST_VM_KERNEL ?= ghcr.io/inspektor-gadget/ci-kernels:$(KERNEL_VERSION)
 TEST_VM_PKGS ?= ./...
 TEST_VM_FLAGS ?=
+# go test's default of 10 minutes is too short for cmd/hallpass in a VM: up
+# to ~570 s on 2-core runners, several seconds per hallpass start over 9p.
+TEST_VM_TIMEOUT ?= 25m
 # vimto's default (about 64 MB) is too small for the test packages running in
 # parallel: processes in the sandbox fail with ENOMEM.
 TEST_VM_MEMORY ?= 1G
@@ -108,7 +111,7 @@ test-vm: all
 	HALLPASS_BIN=$(CURDIR)/hallpass \
 	$(if $(MUSL_GCC_FOUND),HALLPASS_REQUEST_BIN=$(CURDIR)/hallpass-request) \
 		$(VIMTO) -smp cpus=2 -memory $(TEST_VM_MEMORY) -sudo -kernel $(TEST_VM_KERNEL) -- \
-		go test -count=1 $(TEST_VM_FLAGS) $(TEST_VM_PKGS)
+		go test -count=1 -timeout $(TEST_VM_TIMEOUT) $(TEST_VM_FLAGS) $(TEST_VM_PKGS)
 
 # Rebuild the BPF objects (needs clang); they are committed.
 .PHONY: generate
