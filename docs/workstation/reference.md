@@ -48,6 +48,7 @@ See [Programs](usage.md#programs).
       --allow-net DEST     network destination allowed without asking (repeatable; needs connect in --mediate)
       --deny-net DEST      network destination always denied (repeatable, wins over --allow-net)
       --ask-net DEST       network destination asked about, even inside what --allow-net allows (repeatable)
+      --dns MODE           observe (default: prompts name the addresses the sandbox's DNS queries resolve to) | off
 ```
 
 See [Network](usage.md#network-experimental).

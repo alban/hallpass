@@ -7,6 +7,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
+	"net/netip"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -16,6 +18,7 @@ import (
 	"time"
 
 	"github.com/alban/hallpass/internal/defaults"
+	"github.com/alban/hallpass/internal/dnsnames"
 	"github.com/alban/hallpass/internal/launch"
 	"github.com/alban/hallpass/internal/lsm"
 	"github.com/alban/hallpass/internal/monitor"
@@ -51,6 +54,9 @@ type sessionConfig struct {
 	Timeout time.Duration
 	// Mediate is the syscall categories mediated (--mediate).
 	Mediate seccomp.Category
+	// DNS names the destinations of connect prompts from the workload's
+	// DNS queries (--dns=observe).
+	DNS bool
 }
 
 // session is hallpass as a client of the monitor: it asks the user about
@@ -99,7 +105,13 @@ func runSession(cfg sessionConfig) (int, error) {
 		}
 		kernel = ks
 	}
-	m, err := monitor.New(monitor.Config{Kernel: kernel, Mediate: cfg.Mediate})
+	mcfg := monitor.Config{Kernel: kernel, Mediate: cfg.Mediate}
+	if cfg.DNS && cfg.Mediate&seccomp.Connect != 0 {
+		mcfg.Names = dnsnames.New(func(ctx context.Context, name string) ([]netip.Addr, error) {
+			return net.DefaultResolver.LookupNetIP(ctx, "ip", name)
+		})
+	}
+	m, err := monitor.New(mcfg)
 	if err != nil {
 		return 0, err
 	}

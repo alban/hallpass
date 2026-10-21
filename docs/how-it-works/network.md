@@ -1,6 +1,6 @@
 # Network (experimental)
 
-With `--mediate=write,exec,connect` (or `mediate` in a [HallpassPolicy](../kubernetes/policies.md)), connections and sends to an address are mediated like writes. Destinations are IPv4/IPv6 addresses and ports (TCP, UDP), unix socket files and abstract unix names; IPv4-mapped IPv6 addresses are shown and matched as IPv4. Names are not shown: there is no DNS mediation. See [Network](../workstation/usage.md#network-experimental) for the rules and answers.
+With `--mediate=write,exec,connect` (or `mediate` in a [HallpassPolicy](../kubernetes/policies.md)), connections and sends to an address are mediated like writes. Destinations are IPv4/IPv6 addresses and ports (TCP, UDP), unix socket files and abstract unix names; IPv4-mapped IPv6 addresses are shown and matched as IPv4. Rules match addresses; prompts also show [names](#names). See [Network](../workstation/usage.md#network-experimental) for the rules and answers.
 
 The only destination allowed without asking is a loopback or unix listener started inside the sandbox, such as a test server.
 
@@ -50,3 +50,14 @@ A loopback TCP connection is allowed without asking when the listeners the kerne
 TOCTOU: closed for the destination: the hooks see the address the kernel copied, and the peer socket.
 
 See [Limitations](limitations.md#network).
+
+## Names
+
+With `--dns=observe` (the default of `hallpass`; not in Kubernetes yet), connect prompts name the address: `github.com (140.82.112.3:443)`.
+
+- hallpass reads the names the sandbox's DNS queries ask about (A, AAAA), in the sends to port 53 it already sees: `sendto`, `sendmsg` or `sendmmsg` with the server's address (musl), and `sendmsg` or `sendmmsg` on a socket connected to port 53 (glibc's `getaddrinfo`).
+- It then looks each name up itself, through the host's resolver, and names an address only with a name that has it: a sandbox asking about `github.com` and connecting elsewhere gets no name. A content delivery network that answers hallpass with other addresses than the sandbox leaves the address unnamed.
+- hallpass looks up only the names of queries it allowed: a sandbox denied DNS cannot use hallpass's lookups to send data out (`<secret>.attacker.example`).
+- A name stays on its addresses for 5 minutes, at least: programs keep answers past their TTL.
+- No name for queries sent with `write`, or `send` and `sendto` without an address (Go's resolver, glibc's single queries), nor through systemd-resolved's varlink socket (Fedora, Arch): not yet seen.
+- Names are display only, in lite and strict mode: rules match addresses, so a rule on a name is not possible yet.

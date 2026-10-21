@@ -84,7 +84,7 @@ With `--mediate=write,exec,connect`, hallpass also asks before a sandboxed proce
  [t] and [a] allow: 140.82.112.3:443
 ```
 
-Destinations are shown as addresses, not names: `1.2.3.4:443` with the protocol (`tcp`, `udp`) below, `[2001:db8::1]:53`, `unix /run/user/1000/bus`, `unix @name` (abstract). Answers cover that destination only, with any protocol. One kind is allowed without asking: a loopback or unix listener started inside the sandbox, such as a test server the agent runs; with `--no-implicit` it is asked, with the note "listener started inside the sandbox".
+Destinations are addresses: `1.2.3.4:443` with the protocol (`tcp`, `udp`) below, `[2001:db8::1]:53`, `unix /run/user/1000/bus`, `unix @name` (abstract). With `--dns=observe` (the default), an address is shown after its host name when the sandbox asked its DNS server about that name: `github.com (140.82.112.3:443)`. The name is for you to read only: answers and rules still cover the address. See [Names](../how-it-works/network.md#names) for where names come from, and when there is none. Answers cover that destination only, with any protocol. One kind is allowed without asking: a loopback or unix listener started inside the sandbox, such as a test server the agent runs; with `--no-implicit` it is asked, with the note "listener started inside the sandbox".
 
 `--allow-net`, `--deny-net` and `--ask-net` take:
 

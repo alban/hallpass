@@ -52,7 +52,7 @@ var flagGroups = []struct {
 	{"Sandbox", []string{"mode", "mediate", "escalate", "allow-userns", "no-implicit", "rules"}},
 	{"Files", []string{"C", "workdir", "allow-path", "deny-path", "ask-path", "allow-tty"}},
 	{"Programs", []string{"allow-exec", "deny-exec", "group"}},
-	{"Network (experimental)", []string{"allow-net", "deny-net", "ask-net"}},
+	{"Network (experimental)", []string{"allow-net", "deny-net", "ask-net", "dns"}},
 	{"Prompts", []string{"prompt", "timeout"}},
 	{"Session", []string{"log", "wait"}},
 }
@@ -138,6 +138,7 @@ type options struct {
 	noImplicit  bool
 	allowTTY    bool
 	wait        string
+	dns         string
 	// policy is the policy the flags give (--allow-path, --deny-path,
 	// --mediate, --allow-net...).
 	policy policy.Policy
@@ -188,6 +189,7 @@ func parseFlags(argv []string, printPolicy bool) (o options, code int, ok bool) 
 	fs.StringVar(&o.logPath, "log", "", "append one JSON line per mediated syscall to `file`")
 	fs.StringVar(&o.mode, "mode", "lite", "lite (seccomp only, no root needed) | strict (the kernel enforces the answers with BPF-LSM; root needed to load it)")
 	fs.StringVar(&o.escalate, "escalate", "", "strict mode, when not root: how to run the loader as root: "+strings.Join(privsep.Tools, " | ")+" (default: the saved choice, else ask on a terminal, else auto)")
+	fs.StringVar(&o.dns, "dns", "observe", "with connect mediated: observe (name the destinations in prompts, from the DNS queries the sandbox sends; hallpass then looks the names up itself) | off")
 	fs.StringVar(&o.wait, "wait", "main", "exit when the main process exits (main), or keep supervising its background processes until they all exit (all)")
 	mediate := fs.String("mediate", seccomp.DefaultCategories.String(), "comma-separated `categories` of syscalls to mediate: write, exec, connect (connect is experimental)")
 	var allowNet, denyNet, askNet listFlag
@@ -229,6 +231,9 @@ func parseFlags(argv []string, printPolicy bool) (o options, code int, ok bool) 
 		if !explicit {
 			o.allowTTY = false
 		}
+	}
+	if o.dns != "observe" && o.dns != "off" {
+		return o, fail(fmt.Errorf("unknown --dns %q (want observe or off)", o.dns)), false
 	}
 	if o.wait != "main" && o.wait != "all" {
 		return o, fail(fmt.Errorf("unknown --wait %q (want main or all)", o.wait)), false
@@ -451,6 +456,7 @@ func runMain(argv []string, printPolicy bool) int {
 		WaitAll:     o.wait == "all",
 		Timeout:     o.timeout,
 		Mediate:     o.policy.Mediate,
+		DNS:         o.dns == "observe",
 	})
 	if pty != nil {
 		pty.Close() // restore the terminal before printing anything
