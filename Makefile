@@ -23,10 +23,11 @@ hallpass-node:
 # musl: with musl-gcc when installed (musl-tools), with Docker otherwise.
 # MUSL_GCC= forces Docker. Not part of all, which needs neither.
 MUSL_GCC ?= musl-gcc
+MUSL_GCC_FOUND = $(and $(MUSL_GCC),$(shell command -v $(MUSL_GCC) 2>/dev/null))
 HALLPASS_REQUEST_CFLAGS ?= -static -Os -s -Wall -Wextra -Werror
 .PHONY: hallpass-request
 hallpass-request:
-ifneq ($(and $(MUSL_GCC),$(shell command -v $(MUSL_GCC) 2>/dev/null)),)
+ifneq ($(MUSL_GCC_FOUND),)
 	$(MUSL_GCC) $(HALLPASS_REQUEST_CFLAGS) -o hallpass-request cmd/hallpass-request/hallpass-request.c
 else
 	docker build -o type=local,dest=. cmd/hallpass-request
@@ -78,8 +79,10 @@ test-headlamp-kind: headlamp
 # active. Needs vimto (CGO_ENABLED=0 go install lmb.io/vimto@latest) and qemu.
 # Without /dev/kvm, qemu emulates the CPU: slower, but it works. Everything is
 # built on the host: vimto runs go test with -exec, and the e2e tests use the
-# binary from HALLPASS_BIN instead of building it in the VM. vimto -sudo runs
-# the tests as root in the VM only, so nothing on the host needs sudo.
+# binaries from HALLPASS_BIN and HALLPASS_REQUEST_BIN (when musl-gcc is
+# installed; otherwise its tests skip) instead of building them in the VM.
+# vimto -sudo runs the tests as root in the VM only, so nothing on the host
+# needs sudo.
 # HALLPASS_REQUIRE_LSM=1 makes the strict-mode tests fail rather than skip.
 VIMTO ?= vimto
 KERNEL_VERSION ?= 7.2.8
@@ -91,8 +94,10 @@ TEST_VM_FLAGS ?=
 TEST_VM_MEMORY ?= 1G
 .PHONY: test-vm
 test-vm: all
+	$(if $(MUSL_GCC_FOUND),$(MAKE) hallpass-request)
 	$(if $(wildcard /dev/kvm),,VIMTO_DISABLE_KVM=1) CGO_ENABLED=0 \
 	HALLPASS_BIN=$(CURDIR)/hallpass \
+	$(if $(MUSL_GCC_FOUND),HALLPASS_REQUEST_BIN=$(CURDIR)/hallpass-request) \
 		$(VIMTO) -smp cpus=2 -memory $(TEST_VM_MEMORY) -sudo -kernel $(TEST_VM_KERNEL) -- \
 		go test -count=1 $(TEST_VM_FLAGS) $(TEST_VM_PKGS)
 

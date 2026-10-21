@@ -23,6 +23,10 @@ jobs:
     - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
         go-version-file: go.mod
+    - name: Install musl-gcc
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y musl-tools
     - name: gofmt
       run: |
         out=$(gofmt -l .)
@@ -31,6 +35,8 @@ jobs:
       run: go vet ./...
     - name: go test
       run: go test -count=1 ./...
+    - name: hallpass-request image
+      run: docker build cmd/hallpass-request
 
   kernel:
     name: Tests on kernel ${{ matrix.kernel }}
@@ -58,10 +64,10 @@ jobs:
     - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
         go-version-file: go.mod
-    - name: Set up QEMU
+    - name: Set up QEMU and musl-gcc
       run: |
         sudo apt-get update
-        sudo apt-get install -y qemu-system-x86
+        sudo apt-get install -y qemu-system-x86 musl-tools
         sudo chmod 666 /dev/kvm
     - name: Install vimto
       run: |
