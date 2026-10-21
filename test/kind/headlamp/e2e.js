@@ -5,8 +5,8 @@
 // requests (see answer.sh): checks the app-bar badge, the pod list column
 // and the pod details section, answers "once" to /etc/once from the pod
 // details and "deny" to /etc/denied from the hallpass view. Then sandboxes
-// the Deployment of SANDBOX_POD with the policy e2e and waits for the
-// session of its new pod.
+// the Deployment of SANDBOX_POD with the policy e2e, waits for the
+// session of its new pod, and adds, edits and deletes one of its rules.
 //
 // Environment:
 //   URL       Headlamp's URL
@@ -63,6 +63,38 @@ async function click(page, label) {
   const sel = `button[aria-label="${label}"]:not([disabled])`;
   await page.waitForSelector(sel, { timeout: TIMEOUT });
   await page.click(sel);
+}
+
+async function waitNoText(page, text, timeout = 30_000) {
+  await page.waitForFunction(t => !document.body.innerText.includes(t),
+    { timeout, polling: 500 }, text);
+}
+
+async function clickText(page, text) {
+  await page.waitForFunction(t =>
+    [...document.querySelectorAll("button")].some(b => b.textContent.trim() === t && !b.disabled),
+  { timeout: 30_000 }, text);
+  await page.evaluate(t =>
+    [...document.querySelectorAll("button")].find(b => b.textContent.trim() === t && !b.disabled).click(), text);
+}
+
+// Adds rule spec with the rules table's "Add rule".
+async function addRule(page, spec) {
+  await clickText(page, "Add rule");
+  await page.waitForSelector('input[aria-label="new rule"]', { timeout: 10_000 });
+  await page.type('input[aria-label="new rule"]', spec);
+  await page.keyboard.press("Enter");
+}
+
+// Clicks the edit or delete button of the rule whose row shows text.
+async function ruleButton(page, action, text) {
+  await page.waitForFunction((action, text) =>
+    [...document.querySelectorAll(`button[aria-label^="${action} rule "]`)]
+      .some(b => !b.disabled && b.closest("tr").innerText.includes(text)),
+  { timeout: 30_000 }, action, text);
+  await page.evaluate((action, text) =>
+    [...document.querySelectorAll(`button[aria-label^="${action} rule "]`)]
+      .find(b => b.closest("tr").innerText.includes(text)).click(), action, text);
 }
 
 async function main() {
@@ -134,6 +166,29 @@ async function main() {
     await page.goto(`${c}/hallpass`);
     await waitText(page, "hallpass-e2e/sandboxed-", 120_000);
     await screenshot(page, "view-sandboxed");
+
+    const pod = await page.evaluate(() => document.body.innerText.match(/hallpass-e2e\/(sandboxed-[\w-]+)/)[1]);
+    log(`pod details: editing the rules of ${pod}`);
+    await page.goto(`${c}/pods/hallpass-e2e/${pod}`);
+    await waitText(page, "Rules of", 60_000);
+    await addRule(page, "deny path /etc/e2e-rule");
+    await waitText(page, "deny /etc/e2e-rule", 30_000);
+    await addRule(page, "allow path /**");
+    await waitText(page, 'add rule: Error: allow path /**: allows more than answering "always" could', 30_000);
+    await screenshot(page, "rules-refused");
+    await clickText(page, "Cancel");
+    await ruleButton(page, "edit", "/etc/e2e-rule");
+    await page.waitForSelector('input[aria-label^="rule "]', { timeout: 10_000 });
+    await page.focus('input[aria-label^="rule "]');
+    await page.keyboard.press("End");
+    for (let i = 0; i < "rule".length; i++) await page.keyboard.press("Backspace");
+    await page.keyboard.type("edited");
+    await page.keyboard.press("Enter");
+    await waitText(page, "deny /etc/e2e-edited", 30_000);
+    await waitNoText(page, "/etc/e2e-rule");
+    await screenshot(page, "rules-edited");
+    await ruleButton(page, "delete", "/etc/e2e-edited");
+    await waitNoText(page, "/etc/e2e-edited");
     if (errors.length) log("page errors:", errors.join("\n"));
     log("ok");
   } catch (e) {
