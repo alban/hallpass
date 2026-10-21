@@ -117,8 +117,13 @@ type Request struct {
 	// inside the sandbox".
 	Note string
 	// Detail, when set, qualifies Path, e.g. "udp" for a network address.
-	Detail  string
-	Waiting int // other requests queued behind this one
+	Detail string
+	// HostNames, when set, are the host names of a network address in
+	// Path, comma-separated and shown before it: "github.com
+	// (140.82.112.4:443)". The workload asked its DNS servers about
+	// them: display only.
+	HostNames string
+	Waiting   int // other requests queued behind this one
 	// More, if not nil, sends the new value of Waiting while the request
 	// is asked about.
 	More <-chan int
@@ -340,6 +345,15 @@ func (r Remote) Ask(ctx context.Context, _ Request) Answer {
 // Close is a no-op.
 func (Remote) Close() error { return nil }
 
+// Target is Path for display, after HostNames when set: "github.com
+// (140.82.112.4:443)".
+func (r Request) Target() string {
+	if r.HostNames != "" {
+		return sanitize(r.HostNames) + " (" + sanitize(r.Path) + ")"
+	}
+	return sanitize(r.Path)
+}
+
 // Wants formats the headline after the process, e.g. "wants to write:"
 // (Path follows on the next line), or "wants to connect to".
 func (r Request) Wants() string {
@@ -369,7 +383,7 @@ func (r Request) Details() string {
 // The agent chooses the paths, so they are sanitized: no terminal escapes.
 func (r Request) Text() (string, map[string]Answer) {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s (pid %d) %s\n  %s\n", sanitize(baseName(r.Exe)), r.PID, r.Wants(), sanitize(r.Path))
+	fmt.Fprintf(&b, "%s (pid %d) %s\n  %s\n", sanitize(baseName(r.Exe)), r.PID, r.Wants(), r.Target())
 	if r.Warn != "" {
 		fmt.Fprintf(&b, "  [!] %s\n", sanitize(r.Warn))
 	}

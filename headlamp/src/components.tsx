@@ -161,7 +161,7 @@ function PendingTable(props: {
       label: 'Path',
       getter: (r: PendingRow) => (
         <>
-          {r.request.prompt?.path}
+          {r.request.prompt?.hostNames ? `${r.request.prompt.hostNames} (${r.request.prompt?.path})` : r.request.prompt?.path}
           {r.request.prompt?.detail && ` · ${r.request.prompt.detail}`}
           {r.request.prompt?.warn && (
             <>

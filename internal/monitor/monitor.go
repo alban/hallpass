@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/alban/hallpass/internal/dnsnames"
 	"github.com/alban/hallpass/internal/lsm"
 	"github.com/alban/hallpass/internal/rules"
 	"github.com/alban/hallpass/internal/seccomp"
@@ -48,6 +49,10 @@ type Config struct {
 	// OpExec, and asked about when none does; without it, they are let
 	// through (in strict mode, the thread is still made a member).
 	Mediate seccomp.Category
+	// Names, when set, names network destinations from the DNS queries
+	// the workload sends (--dns=observe): requests to connect to an
+	// address carry its names (Request.Names).
+	Names *dnsnames.Names
 }
 
 var (
@@ -96,6 +101,10 @@ type Request struct {
 	Objects []rules.Object // one for now: rename and link make one request per object
 	Subject rules.Subject
 	Facts   []Fact
+	// Names are host names of the address of an Inet object, most recent
+	// first: names the workload asked its DNS servers about that have
+	// this address (dnsnames). Display only: rules match addresses.
+	Names []string
 	// Advance is set for a request the workload made in advance (see
 	// AdvanceDir): only a verdict closes it, rules do not.
 	Advance *Advance
@@ -204,6 +213,7 @@ type Monitor struct {
 	kernel   Kernel
 	procRoot bool
 	mediate  seccomp.Category
+	names    *dnsnames.Names
 	table    []seccomp.Rule
 	now      func() time.Time
 
@@ -236,6 +246,7 @@ func New(cfg Config) (*Monitor, error) {
 		kernel:   cfg.Kernel,
 		procRoot: cfg.ProcRoot,
 		mediate:  cfg.Mediate,
+		names:    cfg.Names,
 		table:    syscallTable(),
 		now:      time.Now,
 		pending:  map[uint64]*request{},

@@ -9,7 +9,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
+	"time"
 
+	"github.com/alban/hallpass/internal/dnsnames"
 	"github.com/alban/hallpass/internal/netdiag"
 	"github.com/alban/hallpass/internal/procfs"
 	"github.com/alban/hallpass/internal/rules"
@@ -79,6 +82,15 @@ func (m *Monitor) handleNet(l *listener, n seccomp.Notif, sc seccomp.Rule) (ask 
 		return
 	}
 	if len(d.addrs) == 0 {
+		if m.names != nil && (sc.Name == "sendmsg" || sc.Name == "sendmmsg") {
+			// glibc's resolver connects its socket to the server,
+			// then sends without an address: the connect was decided.
+			if si, err := procfs.Socket(int(n.PID), d.fd); err == nil && si.Type == unix.SOCK_DGRAM && si.Peer.Port() == dnsPort {
+				for _, name := range m.queryNames(n, sc) {
+					m.names.Observe(name)
+				}
+			}
+		}
 		cont()
 		return
 	}
@@ -189,6 +201,17 @@ func (m *Monitor) handleNet(l *listener, n seccomp.Notif, sc seccomp.Rule) (ask 
 		cont()
 		return
 	}
+	if m.names != nil && op == rules.OpSend && siErr == nil && si.Type == unix.SOCK_DGRAM {
+		var names []string
+		for i, it := range items {
+			if it.obj.Inet != nil && it.obj.Inet.Addr.Port() == dnsPort {
+				if names == nil {
+					names = m.queryNames(n, sc)
+				}
+				items[i].dns = names
+			}
+		}
+	}
 	m.markOwnListeners(n, root, op, items)
 	return m.decide(l, n, sc, op, items)
 }
@@ -290,4 +313,50 @@ func errnoOf(err error) unix.Errno {
 		return e
 	}
 	return unix.EFAULT
+}
+
+// dnsPort is where a datagram is a DNS query.
+const dnsPort = 53
+
+// maxQuery bounds the bytes read of a DNS query: its question comes
+// first.
+const maxQuery = 512
+
+// dnsWait bounds how long a prompt waits for hallpass's lookups of the
+// names the workload just asked about (Names.Lookup).
+const dnsWait = 500 * time.Millisecond
+
+// queryNames returns the names the DNS queries that send n carries ask
+// about (dnsnames.QueryNames). Lite mode reads them from the target's
+// memory: the workload chooses them, and they are display only.
+func (m *Monitor) queryNames(n seccomp.Notif, sc seccomp.Rule) []string {
+	var msgs [][]byte
+	switch sc.Name {
+	case "sendto":
+		if b := procfs.ReadData(n.PID, n.Args[1], int(min(n.Args[2], maxQuery))); b != nil {
+			msgs = append(msgs, b)
+		}
+	case "sendmsg":
+		msgs = procfs.ReadMsgData(n.PID, n.Args[1], 1, false, maxQuery)
+	case "sendmmsg":
+		msgs = procfs.ReadMsgData(n.PID, n.Args[1], min(int(uint32(n.Args[2])), procfs.UIOMaxIOV), true, maxQuery)
+	}
+	var out []string
+	for _, b := range msgs {
+		for _, name := range dnsnames.QueryNames(b) {
+			if !slices.Contains(out, name) {
+				out = append(out, name)
+			}
+		}
+	}
+	return out
+}
+
+// namesOf returns the names of the address of obj, an Inet object
+// (Request.Names).
+func (m *Monitor) namesOf(obj rules.Object) []string {
+	if m.names == nil || obj.Inet == nil {
+		return nil
+	}
+	return m.names.Lookup(obj.Inet.Addr.Addr(), dnsWait)
 }

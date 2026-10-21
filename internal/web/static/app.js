@@ -505,7 +505,7 @@ function pendingCard(pid, r) {
   const op = p.op || opName(r.op);
   return el("div", { class: "card" },
     el("div", {}, baseName(p.exe) + " (pid " + (p.pid || 0) + ") wants to " + op + (op.endsWith(" to") ? "" : ":")),
-    el("div", { class: "path" }, p.path || (r.objects || []).map(objectText).join(" → ")),
+    el("div", { class: "path" }, p.path ? (p.hostNames ? p.hostNames + " (" + p.path + ")" : p.path) : (r.objects || []).map(objectText).join(" → ")),
     p.warn ? el("div", { class: "warn" }, p.warn) : null,
     p.note ? el("div", { class: "meta" }, "(" + p.note + ")") : null,
     origin ? el("div", { class: "meta" }, "by: " + origin) : null,

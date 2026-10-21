@@ -180,7 +180,7 @@ func (d *Desktop) Ask(ctx context.Context, r Request) Answer {
 	defer d.mu.Unlock()
 
 	body := fmt.Sprintf("<b>%s</b> (pid %d) %s\n%s",
-		html.EscapeString(sanitize(baseName(r.Exe))), r.PID, html.EscapeString(r.Wants()), html.EscapeString(sanitize(r.Path)))
+		html.EscapeString(sanitize(baseName(r.Exe))), r.PID, html.EscapeString(r.Wants()), html.EscapeString(r.Target()))
 	if r.Warn != "" {
 		body += fmt.Sprintf("\n<b><span foreground=\"#cc0000\">[!] %s</span></b>",
 			html.EscapeString(sanitize(r.Warn)))

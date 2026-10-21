@@ -156,6 +156,10 @@ message Prompt {
   // The program group the "group" answer allows, e.g. "@coreutils (cat,
   // ls, cp, … 104 programs)"; empty: no such answer.
   string group = 15;
+  // The host names of a network address in path, from the workload's DNS
+  // queries, e.g. "github.com": show "github.com (140.82.112.4:443)".
+  // Display only: answers cover the address.
+  string host_names = 16;
 }
 
 message Object {

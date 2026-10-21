@@ -36,6 +36,9 @@ type item struct {
 	path    string // resolved, for the restart cache and grants
 	decided bool
 	why     Reason
+	// dns are the names a send to port 53 asks about: observed once the
+	// send is allowed (Config.Names).
+	dns []string
 }
 
 // receiver receives l's notifications into journal slots and decides each
@@ -279,7 +282,7 @@ func (m *Monitor) ask(l *listener, n seccomp.Notif, sc seccomp.Rule, op rules.Op
 	var subject *rules.Subject
 	var once []int
 	for _, i := range undecided {
-		r, why, decided := m.open(l, n, sc.Name, op, items[i].obj, &subject)
+		r, why, decided := m.open(l, n, sc.Name, op, items[i].obj, m.namesOf(items[i].obj), &subject)
 		if !decided {
 			<-r.done
 			if r.why.Died {
@@ -308,7 +311,7 @@ func (m *Monitor) ask(l *listener, n seccomp.Notif, sc seccomp.Rule, op rules.Op
 // open returns the pending request for obj, opening it (or joining an
 // identical one) unless the current rules decide obj, in which case it
 // returns allow and the reason instead.
-func (m *Monitor) open(l *listener, n seccomp.Notif, syscall string, op rules.Op, obj rules.Object, subject **rules.Subject) (r *request, why Reason, allow bool) {
+func (m *Monitor) open(l *listener, n seccomp.Notif, syscall string, op rules.Op, obj rules.Object, names []string, subject **rules.Subject) (r *request, why Reason, allow bool) {
 	if *subject == nil {
 		s := buildSubject(n.PID, l.root)
 		*subject = &s
@@ -335,6 +338,7 @@ func (m *Monitor) open(l *listener, n seccomp.Notif, syscall string, op rules.Op
 			Op:      op,
 			Objects: []rules.Object{obj},
 			Subject: **subject,
+			Names:   names,
 		},
 		key:     key,
 		op:      op,
@@ -380,6 +384,11 @@ func (m *Monitor) allow(l *listener, n seccomp.Notif, sc seccomp.Rule, op rules.
 	why := make([]Reason, len(items))
 	for i, it := range items {
 		why[i] = it.why
+		if m.names != nil {
+			for _, name := range it.dns {
+				m.names.Observe(name)
+			}
+		}
 	}
 	m.report(n, sc.Name, op, objects(items), true, why)
 	if err := l.n.Continue(n.ID); err != nil && !errors.Is(err, unix.ENOENT) {

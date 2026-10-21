@@ -254,6 +254,8 @@ func Request(p Policy, req *monitor.Request, waiting int) ui.Request {
 		r.Op += " to"
 		r.Path = obj.Inet.Addr.String()
 		r.Detail = rules.ProtoName(obj.Inet.Proto)
+		// The names are display only: answers cover the address.
+		r.HostNames = strings.Join(req.Names[:min(len(req.Names), 2)], ", ")
 		r.Scope, r.Never = r.Path, r.Path
 		if obj.Inet.OwnListener {
 			r.Note = OwnListenerNote

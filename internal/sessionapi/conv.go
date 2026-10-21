@@ -19,7 +19,7 @@ func ToPBPrompt(r ui.Request) *pb.Prompt {
 	p := &pb.Prompt{
 		Op: r.Op, Path: r.Path, Exe: r.Exe, Pid: r.PID,
 		Cmdline: r.Cmdline, Parents: r.Parents,
-		Scope: r.Scope, Never: r.Never, Warn: r.Warn, Note: r.Note, Detail: r.Detail, Group: r.Group,
+		Scope: r.Scope, Never: r.Never, Warn: r.Warn, Note: r.Note, Detail: r.Detail, Group: r.Group, HostNames: r.HostNames,
 		Advance: r.Advance, Reason: r.Reason,
 	}
 	if r.For > 0 {

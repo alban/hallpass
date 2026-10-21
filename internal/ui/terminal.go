@@ -58,7 +58,7 @@ func (a *Terminal) Ask(ctx context.Context, r Request) Answer {
 		}
 		return h
 	}
-	lines := []string{head(r.Waiting), " " + sanitize(r.Path)}
+	lines := []string{head(r.Waiting), " " + r.Target()}
 	if r.Warn != "" {
 		lines = append(lines, " "+redBold("[!] "+sanitize(r.Warn)))
 	}

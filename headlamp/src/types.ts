@@ -32,6 +32,7 @@ export interface Prompt {
   reason?: string; // written by the workload: show it as its claim
   grantFor?: string; // protojson Duration, e.g. "600s"; unset: the session
   group?: string; // the program group "group" allows, e.g. "@git (git: 1 program)"
+  hostNames?: string; // host names of a network address in path, display only
 }
 
 export interface PendingRequest {
