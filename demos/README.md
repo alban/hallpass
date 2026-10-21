@@ -11,6 +11,7 @@ Each demo is a directory with its recording script. The [Makefile](Makefile) fin
 | Exec | [`exec/demo.tape`](exec/demo.tape) | Usage | VHS |
 | Strict | [`strict/demo.tape`](strict/demo.tape) | How it works | VHS, over ssh |
 | Web UI | [`web/record.js`](web/record.js) | Usage | Puppeteer |
+| Rule editing | [`rule-edit/record.js`](rule-edit/record.js) | Answers: web UI | Puppeteer |
 | Headlamp | [`headlamp/record.js`](headlamp/record.js) | Kubernetes | Puppeteer, on kind |
 | Web UI on Kubernetes | [`kube-web/record.js`](kube-web/record.js) | Kubernetes | Puppeteer, on kind |
 
