@@ -72,3 +72,32 @@ func TestRuleString(t *testing.T) {
 		t.Errorf("String() = %q", got)
 	}
 }
+
+func TestEditSpec(t *testing.T) {
+	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	r := Rule{Ops: OpAll, Object: ObjectMatch{Path: &PathMatch{Path: "/data", Tree: true}}, Label: "@build"}
+	for _, tc := range []struct {
+		left time.Duration
+		want string
+	}{
+		{0, "allow path /data/**"},
+		{-time.Minute, "allow path /data/**"},
+		{90*time.Second + 500*time.Millisecond, "allow path /data/** for 90s"},
+		{10*time.Minute - time.Second, "allow path /data/** for 9m"},
+	} {
+		r.Expires = time.Time{}
+		if tc.left != 0 {
+			r.Expires = now.Add(tc.left)
+		}
+		if got := r.EditSpec(now); got != tc.want {
+			t.Errorf("EditSpec, %v left = %q, want %q", tc.left, got, tc.want)
+		}
+	}
+	if l := r.EditLabel(); l != "" {
+		t.Errorf("EditLabel() = %q for a group's rule", l)
+	}
+	r.Label = "SSH keys"
+	if l := r.EditLabel(); l != "SSH keys" {
+		t.Errorf("EditLabel() = %q", l)
+	}
+}

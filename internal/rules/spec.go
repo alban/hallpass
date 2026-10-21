@@ -140,6 +140,33 @@ func (r Rule) Spec() string {
 	return s
 }
 
+// EditSpec writes r for editing: its spec, then the time it has left at now
+// rounded down, so that saving the text unchanged does not extend it.
+func (r Rule) EditSpec(now time.Time) string {
+	s := r.Spec()
+	if r.Expires.IsZero() {
+		return s
+	}
+	secs := int64(r.Expires.Sub(now) / time.Second)
+	switch {
+	case secs <= 0:
+	case secs >= 120:
+		s += " for " + strconv.FormatInt(secs/60, 10) + "m"
+	default:
+		s += " for " + strconv.FormatInt(secs, 10) + "s"
+	}
+	return s
+}
+
+// EditLabel is the label an edit of r keeps: a program group's goes with
+// the rules the group gave.
+func (r Rule) EditLabel() string {
+	if strings.HasPrefix(r.Label, "@") {
+		return ""
+	}
+	return r.Label
+}
+
 // String shows r for people and in errors: its spec, ID, set and expiry.
 func (r Rule) String() string {
 	s := r.Spec()

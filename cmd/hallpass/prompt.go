@@ -209,16 +209,14 @@ func (s *session) menu() {
 		lines = append(lines, " The command exited; its background processes are still supervised.   [s] stop waiting")
 	}
 	lines = append(lines, " Anything else is asked. A folder covers everything below it.")
-	lines = append(lines, " [w] open the web UI   [any key] close")
-	keys := make([]byte, 0, 255)
-	for k := 1; k < 256; k++ {
-		keys = append(keys, byte(k))
-	}
-	switch s.cfg.TTY.Prompt(lines, string(keys), 0, 0, nil, nil) {
+	lines = append(lines, " [r] edit the rules   [w] open the web UI   [any key] close")
+	switch s.cfg.TTY.Prompt(lines, anyKey, 0, 0, nil, nil) {
 	case 's':
 		if s.wait.active.Load() {
 			s.wait.Stop()
 		}
+	case 'r':
+		s.rulesMenu(s.cfg.TTY)
 	case 'w':
 		// Once the menu is closed: pairing asks in this overlay too.
 		go s.openWeb("")

@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -26,8 +27,14 @@ const answerClient = "hallpass answer"
 
 func answerMain(argv []string) int {
 	var path string
-	switch len(argv) {
-	case 0:
+	pid := ""
+	if len(argv) > 0 && !isRuleCmd(argv[0]) {
+		pid, argv = argv[0], argv[1:]
+	}
+	if len(argv) > 0 && !isRuleCmd(argv[0]) {
+		return fail(errors.New("usage: hallpass answer [PID]\n" + ruleCmdUsage))
+	}
+	if pid == "" {
 		matches, _ := filepath.Glob(filepath.Join(sessionapi.SocketDir(), "*.sock"))
 		switch len(matches) {
 		case 0:
@@ -37,19 +44,38 @@ func answerMain(argv []string) int {
 		default:
 			return fail(fmt.Errorf("several sessions; pick one: hallpass answer PID (%s)", strings.Join(matches, " ")))
 		}
-	case 1:
-		var pid int
-		if _, err := fmt.Sscanf(argv[0], "%d", &pid); err != nil {
-			return fail(fmt.Errorf("bad PID %q", argv[0]))
+	} else {
+		var n int
+		if _, err := fmt.Sscanf(pid, "%d", &n); err != nil {
+			return fail(fmt.Errorf("bad PID %q", pid))
 		}
-		path = sessionapi.SocketPath(pid)
-	default:
-		return fail(errors.New("usage: hallpass answer [PID]"))
+		path = sessionapi.SocketPath(n)
+	}
+	if len(argv) > 0 {
+		if err := ruleCmd(path, argv, os.Stdout); err != nil {
+			return fail(err)
+		}
+		return 0
 	}
 	if err := runAnswer(path, os.Stdin, os.Stdout); err != nil {
 		return fail(err)
 	}
 	return 0
+}
+
+// ruleCmd runs the rule command args on the session on path.
+func ruleCmd(path string, args []string, out io.Writer) error {
+	if _, err := os.Stat(path); err != nil {
+		return err
+	}
+	conn, c, err := sessionapi.Dial(path)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return runRuleCmd(ctx, c, args, out)
 }
 
 // runAnswer follows the session on path and asks, one at a time, about its
