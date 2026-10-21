@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -722,21 +723,26 @@ func TestWait(t *testing.T) {
 		t.Run(wait, func(t *testing.T) {
 			e := newEnv(t)
 			logf := e.root + "/log.jsonl"
-			// The limits leave room for hallpass's start, which takes
-			// seconds in the CI's VM (stats over 9p).
-			script := `(sleep 6; echo x > "$HOME/late") </dev/null >/dev/null 2>&1 & exit 3`
+			// The time is taken from the script's start: hallpass's own
+			// start takes seconds in the CI's VM (up to 7 s seen on
+			// 2-core runners), and would hide whether it waited.
+			script := `date +%s%N > started; (sleep 6; echo x > "$HOME/late") </dev/null >/dev/null 2>&1 & exit 3`
 			c := e.cmd(script, "--prompt=deny", "--wait="+wait, "--log="+logf)
-			start := time.Now()
 			out, err := c.CombinedOutput()
 			if ee, ok := err.(*exec.ExitError); !ok || ee.ExitCode() != 3 {
 				t.Fatalf("exit: %v (want 3)\n%s", err, out)
 			}
-			took := time.Since(start)
+			b, err := os.ReadFile(e.proj + "/started")
+			ns, perr := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
+			if err != nil || perr != nil {
+				t.Fatalf("script start: %v %v", err, perr)
+			}
+			took := time.Since(time.Unix(0, ns))
 			time.Sleep(6500 * time.Millisecond) // let a --wait=main orphan try
 			l, logged := findLog(readLog(t, logf), e.home+"/late")
 			switch wait {
 			case "main":
-				if took > 5*time.Second {
+				if took > 4*time.Second {
 					t.Errorf("--wait=main took %v: waited for the background process", took)
 				}
 				if logged {
