@@ -232,6 +232,12 @@ describe('types', () => {
       'network: [::1]:80-90'
     );
     expect(ruleObject({ object: { inet: {} } })).toBe('network: *');
+    expect(ruleObject({ object: { inet: { host: 'githubusercontent.com', hostSuffix: true, portLo: 443, portHi: 443 } } })).toBe(
+      'network: *.githubusercontent.com:443'
+    );
+    expect(ruleObject({ object: { http: { methods: ['GET', 'POST'], host: 'api.github.com', path: '/repos/**' } } })).toBe(
+      'https: GET POST https://api.github.com/repos/**'
+    );
     expect(ruleObject({ object: { unix: { abstract: true, name: 'x', prefix: true } } })).toBe(
       'network: unix:@x*'
     );

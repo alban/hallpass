@@ -48,7 +48,15 @@ export interface Rule {
   object?: {
     path?: { path?: string; tree?: boolean };
     proc?: { name?: string; comm?: string };
-    inet?: { proto?: number; prefix?: string; portLo?: number; portHi?: number };
+    inet?: {
+      proto?: number;
+      prefix?: string;
+      portLo?: number;
+      portHi?: number;
+      host?: string;
+      hostSuffix?: boolean;
+    };
+    http?: { methods?: string[]; host?: string; hostSuffix?: boolean; path?: string };
     unix?: { path?: string; abstract?: boolean; name?: string; prefix?: boolean };
     ownListener?: boolean;
     anyNet?: boolean;
@@ -161,7 +169,7 @@ export function editLabel(r: Rule): string {
   return (r.label || '').startsWith('@') ? '' : r.label || '';
 }
 
-export const ruleSyntax = `VERDICT KIND VALUE [for DURATION]: allow write /data/**, deny exec /usr/bin/curl, ask connect tcp:10.0.0.1:443 for 1h, allow proc environ bash. Quote a value with a blank or another character than letters, digits and /._-+*~@:=%[]: allow write "/data/My Documents/**". An allow rule gives at most what answering "always" would, or narrows the rule it replaces.`;
+export const ruleSyntax = `VERDICT KIND VALUE [for DURATION]: allow write /data/**, deny exec /usr/bin/curl, ask connect tcp:10.0.0.1:443 for 1h, allow connect github.com:443, allow http GET https://api.github.com/**, allow proc environ bash. Quote a value with a blank or another character than letters, digits and /._-+*~@:=%[]: allow write "/data/My Documents/**". An allow rule gives at most what answering "always" would, or narrows the rule it replaces.`;
 
 export function ruleObject(r: Rule): string {
   if (r.object?.path) {
@@ -169,6 +177,11 @@ export function ruleObject(r: Rule): string {
   }
   if (r.object?.proc) {
     return `proc ${r.object.proc.name || r.object.proc.comm || ''}`;
+  }
+  if (r.object?.http) {
+    const h = r.object.http;
+    const methods = h.methods?.length ? h.methods.join(' ') : '*';
+    return `https: ${methods} https://${h.hostSuffix ? '*.' : ''}${h.host || ''}${h.path || ''}`;
   }
   const net = netMatch(r.object);
   return net ? `network: ${net}` : '';
@@ -199,7 +212,9 @@ export function netMatch(o: Rule['object']): string {
     let s = i.proto ? `${protoName(i.proto)}:` : '';
     const [addr, bits] = (i.prefix || '').split('/');
     const v6 = (addr || '').includes(':');
-    if (!addr) {
+    if (i.host) {
+      s += (i.hostSuffix ? '*.' : '') + i.host;
+    } else if (!addr) {
       s += '*';
     } else {
       s += (v6 ? `[${addr}]` : addr) + (bits && bits !== (v6 ? '128' : '32') ? `/${bits}` : '');
