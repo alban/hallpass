@@ -48,7 +48,7 @@ func TestNetAnswers(t *testing.T) {
 	p := defaults.NewLexical("/root", "", nil, nil)
 	obj := rules.Object{Inet: &rules.InetObject{Proto: 6, Addr: netip.MustParseAddrPort("[::1]:443")}}
 	var d monitor.Decision
-	grant(p, &d, nil, rules.OpAll, obj, time.Time{})
+	grant(p, &d, nil, rules.OpAll, obj, nil, time.Time{})
 	if len(d.AddRules) != 1 || d.AddRules[0].Object.NetString() != "[::1]:443" {
 		t.Fatalf("grant: %+v", d.AddRules)
 	}
@@ -65,7 +65,7 @@ func TestGrant(t *testing.T) {
 	p := defaults.NewLexical("/root", "", nil, nil)
 	obj := rules.Object{Path: &rules.PathObject{Path: "/opt/tool/lib/f"}}
 	var d monitor.Decision
-	grant(p, &d, nil, rules.OpAll, obj, time.Time{})
+	grant(p, &d, nil, rules.OpAll, obj, nil, time.Time{})
 	if len(d.AddRules) != 1 || d.AddRules[0].Object.Path.Path != "/opt/tool" || !d.AddRules[0].Object.Path.Tree {
 		t.Fatalf("got %+v", d.AddRules)
 	}
@@ -73,13 +73,13 @@ func TestGrant(t *testing.T) {
 	// A permanent grant on the folder already covers a temp one.
 	rs := []rules.Rule{{ID: 3, Ops: rules.OpAll, Verdict: rules.Allow, Object: d.AddRules[0].Object}}
 	d = monitor.Decision{}
-	grant(p, &d, rs, rules.OpAll, obj, time.Now().Add(time.Hour))
+	grant(p, &d, rs, rules.OpAll, obj, nil, time.Now().Add(time.Hour))
 	if len(d.AddRules)+len(d.RemoveRules) != 0 {
 		t.Errorf("shrinking grant: %+v", d)
 	}
 	// A permanent grant replaces a temp one.
 	rs[0].Expires = time.Now().Add(time.Hour)
-	grant(p, &d, rs, rules.OpAll, obj, time.Time{})
+	grant(p, &d, rs, rules.OpAll, obj, nil, time.Time{})
 	if len(d.RemoveRules) != 1 || d.RemoveRules[0] != 3 || len(d.AddRules) != 1 {
 		t.Errorf("got %+v", d)
 	}
@@ -192,7 +192,7 @@ func TestExecAnswers(t *testing.T) {
 	var d monitor.Decision
 	// A file grant on the folder does not cover running a program there.
 	rs := []rules.Rule{{ID: 3, Ops: rules.OpAll, Verdict: rules.Allow, Object: rules.ObjectMatch{Path: &rules.PathMatch{Path: "/opt/tool/bin/run"}}}}
-	grant(p, &d, rs, answerOps(rules.OpExec), obj, time.Time{})
+	grant(p, &d, rs, answerOps(rules.OpExec), obj, nil, time.Time{})
 	if len(d.AddRules) != 1 || len(d.RemoveRules) != 0 {
 		t.Fatalf("got %+v", d)
 	}
@@ -259,5 +259,43 @@ func TestApplyClosed(t *testing.T) {
 	}
 	if _, _, err := Find(m, 1); !errors.Is(err, monitor.ErrClosed) {
 		t.Errorf("Find: %v", err)
+	}
+}
+
+// TestNamedNetAnswers: a connection to an address with names is answered
+// by name: "always" covers the first name and the port, "domain" the
+// names below its registrable domain; "never" stays on the address.
+func TestNamedNetAnswers(t *testing.T) {
+	p := defaults.NewLexical("/root", "", nil, nil)
+	obj := rules.Object{Inet: &rules.InetObject{Proto: 6, Addr: netip.MustParseAddrPort("140.82.112.6:443")}}
+	req := &monitor.Request{Op: rules.OpConnect, Objects: []rules.Object{obj}, Names: []string{"api.github.com", "github.com"}}
+	r := Request(p, req, 0)
+	if r.Scope != "api.github.com:443" || r.Domain != "*.github.com:443" || r.Never != "140.82.112.6:443" {
+		t.Errorf("request %+v", r)
+	}
+	if !r.Valid(ui.AnswerAllowDomain) {
+		t.Error("domain answer not valid")
+	}
+	var d monitor.Decision
+	grant(p, &d, nil, rules.OpAll, obj, req.Names, time.Time{})
+	if len(d.AddRules) != 1 || d.AddRules[0].Object.NetString() != "api.github.com:443" {
+		t.Fatalf("grant: %+v", d.AddRules)
+	}
+	// The registrable domain itself, a public suffix: no domain answer.
+	for _, name := range []string{"github.com", "github.io", "localhost"} {
+		req.Names = []string{name}
+		if r := Request(p, req, 0); r.Domain != "" || r.Scope != name+":443" {
+			t.Errorf("%s: %+v", name, r)
+		}
+	}
+	// Without names, the address.
+	req.Names = nil
+	if r := Request(p, req, 0); r.Scope != "140.82.112.6:443" || r.Domain != "" || r.Valid(ui.AnswerAllowDomain) {
+		t.Errorf("no names: %+v", r)
+	}
+	// user.github.io: github.io is a public suffix.
+	req.Names = []string{"www.alban.github.io"}
+	if r := Request(p, req, 0); r.Domain != "*.alban.github.io:443" {
+		t.Errorf("github.io: %+v", r)
 	}
 }

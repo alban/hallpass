@@ -47,6 +47,7 @@ const answerHelp: Record<Answer, string> = {
   temp: 'Allow the scope until the session ends',
   always: 'Allow the scope, and remember it in the session',
   group: 'Allow every program of the group, and remember it in the session',
+  domain: 'Allow the host names below the domain, and remember it in the session',
   deny: 'Deny this request only',
   never: 'Deny, and remember it in the session',
   grant: 'Grant what the program asks for in advance, for the time it asks',
@@ -79,10 +80,20 @@ function AnswerButtons(props: {
   return (
     <ButtonGroup size="small" variant="outlined" disabled={busy}>
       {answersFor(request.prompt)
-        // Only execs have a group: no disabled button on every other prompt.
-        .filter(a => a !== 'group' || answerAllowed(a, request.prompt))
+        // Only execs have a group, and named connections a domain: no
+        // disabled button on every other prompt.
+        .filter(a => (a !== 'group' && a !== 'domain') || answerAllowed(a, request.prompt))
         .map(a => (
-          <Tooltip key={a} title={a === 'group' ? `Allow ${request.prompt?.programGroup}` : answerHelp[a]}>
+          <Tooltip
+            key={a}
+            title={
+              a === 'group'
+                ? `Allow ${request.prompt?.programGroup}`
+                : a === 'domain'
+                  ? `Allow ${request.prompt?.domain}`
+                  : answerHelp[a]
+            }
+          >
             <span>
               <Button
                 color={a === 'deny' || a === 'never' ? 'error' : 'primary'}

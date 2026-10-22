@@ -199,6 +199,8 @@ describe('types', () => {
     expect(answerAllowed('group', { scope: '/usr/bin/ls' })).toBe(false);
     expect(answerAllowed('group', { programGroup: '@coreutils (ls: 1 program)' })).toBe(true);
     expect(answerAllowed('group', { advance: true, programGroup: '@x (x: 1 program)' })).toBe(false);
+    expect(answerAllowed('domain', { scope: 'api.github.com:443' })).toBe(false);
+    expect(answerAllowed('domain', { domain: '*.github.com:443' })).toBe(true);
   });
 
   it('answers requests made in advance with grant or deny', () => {

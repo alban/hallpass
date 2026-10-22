@@ -496,6 +496,9 @@ function pendingCard(pid, r) {
   if (p.programGroup) {
     buttons.append(el("button", { class: "allow", onclick: answer("group") }, "Group " + p.programGroup));
   }
+  if (p.domain) {
+    buttons.append(el("button", { class: "allow", onclick: answer("domain") }, "Always " + p.domain));
+  }
   buttons.append(
     el("button", { class: "deny", onclick: answer("deny") }, "Deny"),
     el("button", { class: "deny", onclick: answer("never") }, "Never" + (p.never ? " (" + p.never + ")" : "")));

@@ -44,6 +44,9 @@ const (
 	// AnswerAllowGroup allows the programs of Request.Group for the rest
 	// of the session.
 	AnswerAllowGroup
+	// AnswerAllowDomain allows the host names of Request.Domain (e.g.
+	// "*.github.com:443") for the rest of the session.
+	AnswerAllowDomain
 )
 
 // TempGrant is the duration of AnswerAllowTemp.
@@ -67,6 +70,8 @@ func (a Answer) String() string {
 		return "timeout"
 	case AnswerAllowGroup:
 		return "group"
+	case AnswerAllowDomain:
+		return "domain"
 	default:
 		return "dismiss"
 	}
@@ -92,6 +97,8 @@ func ParseAnswer(s string) Answer {
 		return AnswerTimeout
 	case "group":
 		return AnswerAllowGroup
+	case "domain":
+		return AnswerAllowDomain
 	}
 	return AnswerDismissed
 }
@@ -111,6 +118,9 @@ type Request struct {
 	// e.g. "@coreutils (cat, ls, cp, … 104 programs)"; "" hides that
 	// choice.
 	ProgramGroup string
+	// Domain describes the host names AnswerAllowDomain allows, e.g.
+	// "*.github.com:443"; "" hides that choice.
+	Domain string
 	// Warn, when set, is a warning about the request (e.g. "SSH keys —
 	// secret store"); the prompt shows it in red.
 	Warn string
@@ -263,6 +273,8 @@ func (r Request) Valid(a Answer) bool {
 		return r.Scope != ""
 	case AnswerAllowGroup:
 		return r.ProgramGroup != ""
+	case AnswerAllowDomain:
+		return r.Domain != ""
 	}
 	return true
 }
@@ -282,7 +294,7 @@ func (r Request) Effective(a Answer) Answer {
 // Allows reports whether a allows the access asked about.
 func (a Answer) Allows() bool {
 	switch a {
-	case AnswerAllowOnce, AnswerAllowTemp, AnswerAllowAlways, AnswerGrant, AnswerAllowGroup:
+	case AnswerAllowOnce, AnswerAllowTemp, AnswerAllowAlways, AnswerGrant, AnswerAllowGroup, AnswerAllowDomain:
 		return true
 	}
 	return false
@@ -423,6 +435,10 @@ func (r Request) Text() (string, map[string]Answer) {
 	if r.ProgramGroup != "" {
 		fmt.Fprintf(&b, "[g] group %s  ", sanitize(r.ProgramGroup))
 		keys["g"] = AnswerAllowGroup
+	}
+	if r.Domain != "" {
+		fmt.Fprintf(&b, "[s] always %s  ", sanitize(r.Domain))
+		keys["s"] = AnswerAllowDomain
 	}
 	b.WriteString("[d] deny  [n] never")
 	if r.Never != "" {

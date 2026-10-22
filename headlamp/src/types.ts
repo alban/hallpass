@@ -32,6 +32,7 @@ export interface Prompt {
   reason?: string; // written by the workload: show it as its claim
   grantFor?: string; // protojson Duration, e.g. "600s"; unset: the session
   programGroup?: string; // the program group "group" allows, e.g. "@git (git: 1 program)"
+  domain?: string; // the host names "domain" allows, e.g. "*.github.com:443"
   hostNames?: string; // host names of a network address in path, display only
 }
 
@@ -87,9 +88,9 @@ export interface AgentState extends Agent {
   version?: string;
 }
 
-export type Answer = 'once' | 'temp' | 'always' | 'group' | 'deny' | 'never' | 'grant';
+export type Answer = 'once' | 'temp' | 'always' | 'group' | 'domain' | 'deny' | 'never' | 'grant';
 
-export const answers: Answer[] = ['once', 'temp', 'always', 'group', 'deny', 'never'];
+export const answers: Answer[] = ['once', 'temp', 'always', 'group', 'domain', 'deny', 'never'];
 
 // The answers to a request made in advance.
 export const advanceAnswers: Answer[] = ['grant', 'deny'];
@@ -112,6 +113,9 @@ export function answerAllowed(answer: Answer, prompt?: Prompt): boolean {
   }
   if (answer === 'group') {
     return !!prompt?.programGroup;
+  }
+  if (answer === 'domain') {
+    return !!prompt?.domain;
   }
   return (answer !== 'temp' && answer !== 'always') || !!prompt?.scope;
 }

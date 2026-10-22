@@ -84,7 +84,7 @@ With `--mediate=write,exec,connect`, hallpass also asks before a sandboxed proce
  [t] and [a] allow: 140.82.112.3:443
 ```
 
-Destinations are addresses: `1.2.3.4:443` with the protocol (`tcp`, `udp`) below, `[2001:db8::1]:53`, `unix /run/user/1000/bus`, `unix @name` (abstract). With `--dns=observe` (the default), an address is shown after its host name when the sandbox asked its DNS server about that name: `github.com (140.82.112.3:443)`. The name is for you to read only: answers and rules still cover the address. See [Names](../how-it-works/network.md#names) for where names come from, and when there is none. Answers cover that destination only, with any protocol. One kind is allowed without asking: a loopback or unix listener started inside the sandbox, such as a test server the agent runs; with `--no-implicit` it is asked, with the note "listener started inside the sandbox".
+Destinations are addresses: `1.2.3.4:443` with the protocol (`tcp`, `udp`) below, `[2001:db8::1]:53`, `unix /run/user/1000/bus`, `unix @name` (abstract). With `--dns=observe` (the default), an address is shown after its host name when the sandbox asked its DNS server about that name: `github.com (140.82.112.3:443)`. See [Names](../how-it-works/network.md#names) for where names come from, and when there is none. Answers cover that destination only, with any protocol; for an address with a name, "temp" and "always" cover the name and port instead (`github.com:443`: any address the sandbox's DNS gives that name), and `[s]` (the "domain" answer) every name below its registrable domain (`*.github.com:443`, from the [public suffix list](https://publicsuffix.org/)). "never" stays on the address. One kind is allowed without asking: a loopback or unix listener started inside the sandbox, such as a test server the agent runs; with `--no-implicit` it is asked, with the note "listener started inside the sandbox".
 
 `--allow-connect`, `--deny-connect` and `--ask-connect` take:
 
@@ -92,10 +92,15 @@ Destinations are addresses: `1.2.3.4:443` with the protocol (`tcp`, `udp`) below
 |---|---|
 | `all` | every destination, unix sockets included |
 | `[tcp:\|udp:]ADDR[/N][:PORT[-PORT]]` | addresses, an optional protocol and ports; `*` for any address, IPv6 in brackets: `tcp:*:443`, `10.0.0.0/8`, `udp:[::1]:53` |
+| `[tcp:\|udp:]HOST[:PORT[-PORT]]` | the addresses that have a host name, `github.com:443`, or any name below one, `*.githubusercontent.com:443` (not the name itself) |
 | `unix:/path`, `unix:/dir/**` | a unix socket file, or every one under `/dir` |
 | `unix:@name`, `unix:@prefix*` | an abstract name, or every one starting with `prefix` |
 
 For example, `hallpass --mediate=write,exec,connect --allow-connect=tcp:*:443 --deny-connect=169.254.169.254 -- copilot` lets the agent reach HTTPS servers, never the cloud metadata service, and asks about the rest.
+
+A host rule matches an address when the sandbox's own DNS answer gave it that name (or hallpass's lookup of a name the sandbox asked about, see [Names](../how-it-works/network.md#names)): a program connecting to a hard-coded address, or after a lookup hallpass did not see (DNS over HTTPS), is asked about the address. Names that share an address share the rule: allowing `a.example` on a content delivery network's address allows any site the program reaches at that address. The names stay on an address for 5 minutes at least, or the answer's TTL.
+
+The cloud metadata addresses, `169.254.169.254`, `fd00:ec2::254`, `168.63.129.16` (Azure's WireServer) and `100.100.100.200` (Alibaba Cloud), are denied when `connect` is mediated, even with `--allow-connect=all`: they serve the machine's cloud credentials. A rule naming the address itself overrides that (`--allow-connect=169.254.169.254:80`), not a rule by name, and so does `--no-implicit`. Host rules never match loopback (but `localhost`) nor link-local addresses: a name the sandbox's DNS points there (DNS rebinding) is asked about by address.
 
 `--ask-connect` carves an exception out of what `--allow-connect` allows: with `--allow-connect=10.0.0.0/8 --ask-connect=tcp:10.0.0.1:22`, SSH to `10.0.0.1` is asked about and the rest of the subnet is not. The most specific rule decides, an ask wins over an allow as specific, and `--deny-connect` wins over both. This works in both modes: in strict mode, the kernel denies the asked destination unless you answer "once" (or a more specific `--allow-connect` allows it).
 
@@ -177,7 +182,7 @@ The query string:
 |---|---|
 | `op` | `write` (every file operation hallpass mediates), `exec` (running a program) or `connect` (connecting and sending to network destinations) |
 | `path` | `write`, `exec`: an absolute path; ending in `/**`, the folder and everything below it. No other globs (`*`, `?`, `[`). Percent-encode `&`, `;`, `%` and `+` in it (`%26`...) |
-| `dest` | `connect`: destinations as [`--allow-connect`](#network) takes them, for example `tcp:192.0.2.0/24:443`, `[2001:db8::1]:53`, `unix:/run/x.sock`, `unix:@name`; addresses only, not host names, and not `all` |
+| `dest` | `connect`: destinations as [`--allow-connect`](#network) takes them, for example `tcp:192.0.2.0/24:443`, `github.com:443`, `[2001:db8::1]:53`, `unix:/run/x.sock`, `unix:@name`; not `all`, and a host name only when hallpass names addresses (not with `--dns=off`) |
 | `for` | optional: a duration (`90s`, `10m`, `2h`); without it, the rest of the session |
 | `reason` | optional: why, shown to you as the program's words; `+` or `%20` for spaces |
 

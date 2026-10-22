@@ -114,6 +114,9 @@ func TestDNSNames(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			// With a name, answers cover the name and port; without,
+			// the address.
+			port := dest[strings.LastIndex(dest, ":")+1:]
 			for _, c := range []struct {
 				name, style, server, netFlag, wantName string
 			}{
@@ -139,8 +142,12 @@ func TestDNSNames(t *testing.T) {
 						t.Fatalf("read prompt: %v\n%s", err, out.String())
 					}
 					pr := req.Prompt
-					if pr.GetOp() != "connect to" || pr.GetPath() != dest || pr.GetHostNames() != c.wantName || pr.GetScope() != dest {
-						t.Errorf("prompt %v, want connect to %s named %q, scope the address", pr, dest, c.wantName)
+					scope := dest
+					if c.wantName != "" {
+						scope = c.wantName + ":" + port
+					}
+					if pr.GetOp() != "connect to" || pr.GetPath() != dest || pr.GetHostNames() != c.wantName || pr.GetScope() != scope {
+						t.Errorf("prompt %v, want connect to %s named %q, scope %s", pr, dest, c.wantName, scope)
 					}
 					p.answer(req.Id, "deny")
 					if err := cmd.Wait(); err != nil {

@@ -18,6 +18,7 @@ import (
 	"github.com/alban/hallpass/internal/programs"
 	"github.com/alban/hallpass/internal/rules"
 	"github.com/alban/hallpass/internal/ui"
+	"golang.org/x/net/publicsuffix"
 )
 
 // maxParents bounds the parent chain shown in prompts.
@@ -80,10 +81,15 @@ func Apply(m *monitor.Monitor, p Policy, req *monitor.Request, a ui.Answer, rs [
 		allow = true
 	case ui.AnswerAllowTemp:
 		allow = true
-		grant(p, &d, rs, ops, obj, time.Now().Add(ui.TempGrant))
+		grant(p, &d, rs, ops, obj, req.Names, time.Now().Add(ui.TempGrant))
 	case ui.AnswerAllowAlways:
 		allow = true
-		grant(p, &d, rs, ops, obj, time.Time{})
+		grant(p, &d, rs, ops, obj, req.Names, time.Time{})
+	case ui.AnswerAllowDomain:
+		// Valid: a connection to an address with names.
+		allow = true
+		_, m, _ := hostScopes(obj, req.Names)
+		addGrant(&d, rs, ops, m, time.Time{})
 	case ui.AnswerAllowGroup:
 		// Valid: an exec of a program of a group.
 		allow = true
@@ -128,10 +134,9 @@ func answerOps(op rules.Op) rules.Op {
 }
 
 // grant adds to d the rule an "allow temp/always" answer gives obj for
-// ops: its folder (the program itself for an exec), or its kind of /proc
-// file. A grant never shrinks: an existing grant on the same scope lasting
-// longer is kept.
-func grant(p Policy, d *monitor.Decision, rs []rules.Rule, ops rules.Op, obj rules.Object, expires time.Time) {
+// ops: its folder (the program itself for an exec), its kind of /proc
+// file, or for a network address with names, its first name and port.
+func grant(p Policy, d *monitor.Decision, rs []rules.Rule, ops rules.Op, obj rules.Object, names []string, expires time.Time) {
 	var m rules.ObjectMatch
 	switch {
 	case obj.Path != nil && ops == rules.OpExec:
@@ -145,11 +150,21 @@ func grant(p Policy, d *monitor.Decision, rs []rules.Rule, ops rules.Op, obj rul
 	case obj.Proc != nil:
 		m.Proc = &rules.ProcMatch{Name: obj.Proc.Name, Comm: comm(obj.Proc)}
 	case obj.IsNet():
+		if h, _, ok := hostScopes(obj, names); ok {
+			m = h
+			break
+		}
 		// The address alone: no subject or subtree answers yet.
 		m = rules.ExactNet(obj)
 	default:
 		return
 	}
+	addGrant(d, rs, ops, m, expires)
+}
+
+// addGrant adds to d an allow of m for ops until expires. A grant never
+// shrinks: an existing grant on the same scope lasting longer is kept.
+func addGrant(d *monitor.Decision, rs []rules.Rule, ops rules.Op, m rules.ObjectMatch, expires time.Time) {
 	for _, r := range rs {
 		if r.Set != "" || r.Verdict != rules.Allow || r.Ops != ops || !sameMatch(r.Object, m) {
 			continue
@@ -160,6 +175,29 @@ func grant(p Policy, d *monitor.Decision, rs []rules.Rule, ops rules.Op, obj rul
 		d.RemoveRules = append(d.RemoveRules, r.ID)
 	}
 	d.AddRules = append(d.AddRules, rules.Rule{Ops: ops, Verdict: rules.Allow, Object: m, Expires: expires})
+}
+
+// hostScopes returns what the answers to a connection to inet object
+// obj, whose address has names (most recent first), cover: "always" its
+// first name and port ("api.github.com:443"), "domain" the names below
+// its registrable domain ("*.github.com:443"), from the public suffix
+// list: no list of services in hallpass. ok is false without names;
+// domain is zero when the name is the registrable domain itself, or has
+// none (a public suffix, a single label).
+func hostScopes(obj rules.Object, names []string) (always, domain rules.ObjectMatch, ok bool) {
+	if obj.Inet == nil || len(names) == 0 {
+		return always, domain, false
+	}
+	name, _, err := rules.ParseHost(names[0])
+	if err != nil {
+		return always, domain, false
+	}
+	port := obj.Inet.Addr.Port()
+	always = rules.ObjectMatch{Inet: &rules.InetMatch{Host: name, PortLo: port, PortHi: port}}
+	if reg, err := publicsuffix.EffectiveTLDPlusOne(name); err == nil && reg != name {
+		domain = rules.ObjectMatch{Inet: &rules.InetMatch{Host: reg, HostSuffix: true, PortLo: port, PortHi: port}}
+	}
+	return always, domain, true
 }
 
 // exact matches obj alone, for "never".
@@ -260,6 +298,13 @@ func Request(p Policy, req *monitor.Request, waiting int) ui.Request {
 			r.ReverseNames = strings.Join(req.UnverifiedNames[:min(len(req.UnverifiedNames), 2)], ", ")
 		}
 		r.Scope, r.Never = r.Path, r.Path
+		if always, domain, ok := hostScopes(obj, req.Names); ok {
+			// Answers by name: the address is one of many.
+			r.Scope = always.NetString()
+			if domain.Inet != nil {
+				r.Domain = domain.NetString()
+			}
+		}
 		if obj.Inet.OwnListener {
 			r.Note = OwnListenerNote
 		}

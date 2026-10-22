@@ -88,6 +88,11 @@ func (a *Terminal) Ask(ctx context.Context, r Request) Answer {
 			keys += fmt.Sprintf("  %s group", bold("[g]"))
 			accept += "gG"
 		}
+		if r.Domain != "" {
+			lines = append(lines, fmt.Sprintf(" [s] allows always: %s", sanitize(r.Domain)))
+			keys += fmt.Sprintf("  %s domain", bold("[s]"))
+			accept += "sS"
+		}
 		keys += fmt.Sprintf("  %s deny  %s never", bold("[d]"), bold("[n]"))
 	}
 	if a.OnWeb != nil {
@@ -176,6 +181,8 @@ func (a *Terminal) answer(ctx context.Context, r Request, key byte, shown time.D
 			return AnswerGrant
 		}
 		return AnswerAllowGroup
+	case 's', 'S':
+		return AnswerAllowDomain
 	case 'o', 'O':
 		return AnswerAllowOnce
 	case 't', 'T':
