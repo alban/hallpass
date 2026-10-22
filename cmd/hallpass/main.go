@@ -53,7 +53,7 @@ var flagGroups = []struct {
 	{"Sandbox", []string{"mode", "mediate", "escalate", "allow-userns", "no-implicit", "rules"}},
 	{"Files", []string{"C", "workdir", "allow-path", "deny-path", "ask-path", "allow-tty"}},
 	{"Programs", []string{"allow-exec", "deny-exec", "group"}},
-	{"Network (experimental)", []string{"allow-connect", "deny-connect", "ask-connect", "dns", "allow-http", "ask-http", "deny-http"}},
+	{"Network (experimental)", []string{"allow-connect", "deny-connect", "ask-connect", "dns", "allow-http", "ask-http", "deny-http", "credential"}},
 	{"Prompts", []string{"prompt", "timeout"}},
 	{"Session", []string{"log", "wait", "version"}},
 }
@@ -204,6 +204,8 @@ func parseFlags(argv []string, printPolicy bool) (o options, code int, ok bool) 
 	fs.Var(&allowHTTP, "allow-http", "HTTPS `request`s allowed through hallpass's proxy, as `GET https://api.github.com/**` (methods, comma-separated, or *; the path a glob): the host's connections on port 443 go through the proxy (repeatable; needs connect in --mediate)")
 	fs.Var(&askHTTP, "ask-http", "HTTPS `request`s asked about (repeatable, same syntax)")
 	fs.Var(&denyHTTP, "deny-http", "HTTPS `request`s denied (repeatable, same syntax)")
+	var credentials listFlag
+	fs.Var(&credentials, "credential", "credential `profile` the HTTPS proxy injects, e.g. gh: the sandbox gets a placeholder, the proxy puts the real value on the wire to the profile's hosts only (repeatable; needs connect in --mediate; profiles: built-in, or config:NAME for ~/.config/hallpass/credentials.d/NAME.toml)")
 	var ruleFiles listFlag
 	fs.Var(&ruleFiles, "rules", "rule `file`: one rule per line, as `allow write ~/.cache/go-build/**`, `deny connect 169.254.169.254`, `allow exec @git`, or a group, `group @build /usr/bin/make /usr/bin/cc`; quote values with blanks (repeatable; see the docs, Rule files)")
 	var groupFlags listFlag
@@ -232,7 +234,7 @@ func parseFlags(argv []string, printPolicy bool) (o options, code int, ok bool) 
 	if spec.RuleFiles, spec.Vars, err = readRuleFiles(ruleFiles, o.workdir); err != nil {
 		return o, fail(err), false
 	}
-	if err = httpFlags(&spec, allowHTTP, askHTTP, denyHTTP); err != nil {
+	if err = httpFlags(&spec, allowHTTP, askHTTP, denyHTTP, credentials); err != nil {
 		return o, fail(err), false
 	}
 	if o.policy, err = spec.Validate(); err != nil {
@@ -474,6 +476,8 @@ func runMain(argv []string, printPolicy bool) int {
 		Timeout:     o.timeout,
 		Mediate:     o.policy.Mediate,
 		DNS:         o.dns == "observe",
+		Credentials: o.policy.Credentials,
+		Profiles:    filepath.Join(cfgDir, "credentials.d"),
 	})
 	if pty != nil {
 		pty.Close() // restore the terminal before printing anything

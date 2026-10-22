@@ -36,7 +36,10 @@ type item struct {
 	obj     rules.Object
 	path    string // resolved, for the restart cache and grants
 	decided bool
-	why     Reason
+	// proxy are the names of an address proxied for a credential: once
+	// allowed, the connection goes to the proxy (see toProxy).
+	proxy []string
+	why   Reason
 	// dns are the names a send to port 53 asks about: observed once the
 	// send is allowed (Config.Names).
 	dns []string
@@ -407,6 +410,19 @@ func (m *Monitor) allow(l *listener, n seccomp.Notif, sc seccomp.Rule, op rules.
 	if op == rules.OpConnect && m.relayed(l, n, sc, items) {
 		m.report(n, sc.Name, op, objects(items), true, why)
 		return
+	}
+	if op == rules.OpConnect && len(items) == 1 && items[0].proxy != nil {
+		// Proxied for a credential: unswapped, the connect would go
+		// out with the placeholder only, and fail at the host; deny it
+		// instead, with a reason. A socket of another network
+		// namespace is decided by the rules, as in toProxy.
+		switch m.swapToProxy(l, n, sc, items[0], items[0].proxy, why[0]) {
+		case swapped, swapAnswered:
+			return
+		case swapFailed:
+			m.deny(l, n, sc, op, objects(items), []Reason{{Builtin: "proxy-failed"}})
+			return
+		}
 	}
 	m.report(n, sc.Name, op, objects(items), true, why)
 	if err := l.n.Continue(n.ID); err != nil && !errors.Is(err, unix.ENOENT) {

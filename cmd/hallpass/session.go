@@ -47,6 +47,10 @@ type sessionConfig struct {
 	LSM *lsm.LSM
 	// Env is added to the sandbox's environment (KEY=value).
 	Env []string
+	// Credentials are the credential profiles the proxy injects, found
+	// in Profiles (a directory) or built in.
+	Credentials []string
+	Profiles    string
 	// WaitAll keeps supervising after the command exits, until every
 	// process of the sandbox has exited (the notify fd reports POLLHUP,
 	// Linux 5.9+) or the user stops waiting.
@@ -177,22 +181,28 @@ func runSession(cfg sessionConfig) (int, error) {
 		}
 	}
 
-	if hosts := httpHosts(cfg.Defaults.Rules()); len(hosts) > 0 {
+	environ := os.Environ()
+	if hosts := httpHosts(cfg.Defaults.Rules()); len(hosts) > 0 || len(cfg.Credentials) > 0 {
 		if mcfg.Names == nil {
-			return 0, errors.New("http rules need hallpass to name addresses (--dns=observe, and connect in --mediate)")
+			return 0, errors.New("http rules and credentials need hallpass to name addresses (--dns=observe, and connect in --mediate)")
 		}
-		env, stop, err := startProxy(m, hosts, s.notice)
+		creds, err := loadCredentials(cfg.Profiles, cfg.Credentials)
+		if err != nil {
+			return 0, err
+		}
+		env, stop, err := startProxy(m, hosts, creds, s.notice)
 		if err != nil {
 			return 0, fmt.Errorf("https proxy: %w", err)
 		}
 		defer stop()
-		cfg.Env = append(cfg.Env, env...)
+		environ = creds.strip(environ)
+		cfg.Env = append(append(cfg.Env, env...), creds.env...)
 	}
 
 	spec := launch.ProcSpec{
 		Args:        cfg.Args,
 		Dir:         cfg.Dir,
-		Env:         append(append(os.Environ(), "HALLPASS=1"), cfg.Env...),
+		Env:         append(append(environ, "HALLPASS=1"), cfg.Env...),
 		Files:       []*os.File{os.Stdin, os.Stdout, os.Stderr},
 		AllowUserns: cfg.AllowUserns,
 		Mediate:     cfg.Mediate,

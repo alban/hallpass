@@ -78,3 +78,18 @@ func WriteTrust(dir string, system []byte, ca *CA) ([]string, error) {
 
 // Covers reports whether p can terminate TLS for name (monitor.Proxy).
 func (p *Proxy) Covers(name string) bool { return p.CA.Covers(name) }
+
+// Injects reports whether p has a credential for name: its connections
+// go through p even without http rules (monitor.Proxy).
+func (p *Proxy) Injects(name string) bool {
+	for i := range p.Credentials {
+		if p.Credentials[i].forHost(name) {
+			return true
+		}
+	}
+	return false
+}
+
+// HasCredentials reports whether p has a credential for any host: the
+// names of the addresses connected to are needed (monitor.Proxy).
+func (p *Proxy) HasCredentials() bool { return len(p.Credentials) > 0 }

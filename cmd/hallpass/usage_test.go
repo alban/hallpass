@@ -39,19 +39,20 @@ func TestHelpGroups(t *testing.T) {
 	}
 }
 
-// TestHTTPFlagsNeedConnect: the --*-http flags without connect mediated
-// are refused by their own name, not the rule file's.
+// TestHTTPFlagsNeedConnect: --credential and the --*-http flags without
+// connect mediated are refused by their own name, not the rule file's.
 func TestHTTPFlagsNeedConnect(t *testing.T) {
 	for _, c := range []struct {
 		mediate []string
+		creds   []string
 		deny    []string
 		want    string
 	}{
-		{nil, []string{"GET https://h/x"}, "--deny-http GET https://h/x: needs connect in --mediate (--mediate=write,exec,connect)"},
-		{[]string{"write"}, []string{"GET https://h/x"}, "--deny-http GET https://h/x: needs connect in --mediate (--mediate=write,connect)"},
-		{[]string{"write", "connect"}, []string{"GET https://h/x"}, ""},
+		{nil, []string{"gh"}, nil, "--credential gh: needs connect in --mediate (--mediate=write,exec,connect)"},
+		{[]string{"write"}, nil, []string{"GET https://h/x"}, "--deny-http GET https://h/x: needs connect in --mediate (--mediate=write,connect)"},
+		{[]string{"write", "connect"}, []string{"gh"}, nil, ""},
 	} {
-		err := httpFlags(&policy.Spec{Mediate: c.mediate}, nil, nil, c.deny)
+		err := httpFlags(&policy.Spec{Mediate: c.mediate}, nil, nil, c.deny, c.creds)
 		if got := fmt.Sprint(err); (c.want == "" && err != nil) || (c.want != "" && got != c.want) {
 			t.Errorf("mediate %v: got %v, want %q", c.mediate, err, c.want)
 		}

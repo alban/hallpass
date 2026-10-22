@@ -21,6 +21,11 @@ type Proxy interface {
 	Serve(conn net.Conn, dst netip.AddrPort, names []string, subject any)
 	// Covers reports whether the proxy can terminate TLS for name.
 	Covers(name string) bool
+	// Injects reports whether the proxy has a credential for name.
+	Injects(name string) bool
+	// HasCredentials reports whether the proxy has a credential for any
+	// host.
+	HasCredentials() bool
 }
 
 // SetProxy makes the monitor send connections to port 443 of the
@@ -33,21 +38,27 @@ func (m *Monitor) SetProxy(p Proxy) {
 }
 
 // proxiedNames returns the names of inet object o that make a connection
-// to it go through the proxy: port 443 over TCP, a host with an http
-// rule in rs that the proxy covers. None: a direct connection.
-func (m *Monitor) proxiedNames(rs []rules.Rule, o *rules.InetObject) []string {
+// to it go through the proxy: port 443 over TCP, a host the proxy covers
+// with an http rule in rs (byRules), or a credential. None: a direct
+// connection.
+func (m *Monitor) proxiedNames(rs []rules.Rule, o *rules.InetObject) (names []string, byRules bool) {
 	m.mu.Lock()
 	p := m.proxy
 	m.mu.Unlock()
 	if p == nil || o == nil || o.Addr.Port() != 443 || (o.Proto != 6 && o.Proto != 17) || len(o.Names) == 0 {
-		return nil
+		return nil, false
 	}
 	for _, n := range o.Names {
 		if rules.ProxiedBy(rs, []string{n}) && p.Covers(n) {
-			return o.Names
+			return o.Names, true
 		}
 	}
-	return nil
+	for _, n := range o.Names {
+		if p.Injects(n) && p.Covers(n) {
+			return o.Names, false
+		}
+	}
+	return nil, false
 }
 
 // DecideHTTP decides request obj (rules.OpHTTP) of the proxy, made by
@@ -61,6 +72,12 @@ func (m *Monitor) DecideHTTP(ctx context.Context, subject any, obj rules.HTTPObj
 	if m.closed {
 		m.mu.Unlock()
 		return false, "the session ended"
+	}
+	if !rules.ProxiedBy(m.rules, []string{obj.Host}) {
+		// Proxied for a credential only: the connect was decided as
+		// any other, its requests are not.
+		m.mu.Unlock()
+		return true, "no http rule for the host"
 	}
 	if v, id, ok := rules.Eval(m.rules, rules.OpHTTP, o, m.now()); ok && v != rules.Ask {
 		m.mu.Unlock()

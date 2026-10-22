@@ -1,0 +1,11 @@
+# The GitHub CLI, and git over HTTPS with gh as its credential helper
+# (gh auth setup-git): the token, read with gh, goes to GitHub only.
+name   = "gh"
+hosts  = ["github.com", "api.github.com", "uploads.github.com"]
+source = "cmd:gh auth token"
+mode   = "mask"
+prefix = "ghp_"
+chars  = "A-Za-z0-9"
+length = 36
+env    = { GH_TOKEN = "{placeholder}" }
+strip  = ["GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"]

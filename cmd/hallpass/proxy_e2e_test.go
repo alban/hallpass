@@ -42,8 +42,15 @@ func httpsHelper(args []string) int {
 			return d.DialContext(ctx, "tcp4", addr)
 		},
 	}}
+	if os.Getenv("E2E_SECRET") != "" {
+		fmt.Println("the secret is in the environment")
+	}
 	for _, m := range []string{"GET", "POST"} {
 		req, _ := http.NewRequest(m, "https://localhost"+args[1], strings.NewReader("x"))
+		if tok := os.Getenv("E2E_TOKEN"); tok != "" {
+			req.Header.Set("Authorization", "token "+tok)
+			fmt.Println("token " + tok)
+		}
 		resp, err := c.Do(req)
 		if err != nil {
 			fmt.Printf("%s=%v\n", m, err)
@@ -170,19 +177,13 @@ func dnsQuery(server, name string) int {
 	return 0
 }
 
-// TestProxy: with an http rule for localhost, the sandbox's HTTPS
-// connections to it go through hallpass's proxy: an allowed request gets
-// the server's answer, another a 403 from hallpass, and the server never
-// sees it. The server's certificate is verified with hallpass's roots
-// (SSL_CERT_FILE here); the sandbox trusts the session CA through the
-// variables hallpass sets.
-func TestProxy(t *testing.T) {
+// httpsServer serves https://localhost on 127.0.0.1:443, with a
+// certificate from its own CA (file caFile), answering "upstream METHOD
+// PATH" and the Authorization it got; seen gets each request.
+func httpsServer(t *testing.T) (caFile string, seen chan string) {
+	t.Helper()
 	if os.Geteuid() != 0 {
 		t.Skip("binds port 443")
-	}
-	servers, _ := dnsnames.Servers("/etc/resolv.conf")
-	if len(servers) == 0 || !servers[0].Is4() {
-		t.Skipf("no IPv4 name server in /etc/resolv.conf: %v", servers)
 	}
 	l, err := net.Listen("tcp4", "127.0.0.1:443")
 	if err != nil {
@@ -196,20 +197,41 @@ func TestProxy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	seen := make(chan string, 10)
+	seen = make(chan string, 10)
 	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seen <- r.Method + " " + r.URL.Path
-		fmt.Fprintf(w, "upstream %s %s\n", r.Method, r.URL.Path)
+		fmt.Fprintf(w, "upstream %s %s %s\n", r.Method, r.URL.Path, r.Header.Get("Authorization"))
 	}), TLSConfig: &tls.Config{Certificates: []tls.Certificate{*leaf}}}
 	go srv.ServeTLS(l, "", "")
-	defer srv.Close()
-	caFile := filepath.Join(t.TempDir(), "ca.pem")
+	t.Cleanup(func() { srv.Close() })
+	caFile = filepath.Join(t.TempDir(), "ca.pem")
 	if err := os.WriteFile(caFile, ca.PEM(), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := x509.SystemCertPool(); err != nil {
 		t.Skip(err)
 	}
+	return caFile, seen
+}
+
+func ipv4Server(t *testing.T) string {
+	t.Helper()
+	servers, _ := dnsnames.Servers("/etc/resolv.conf")
+	if len(servers) == 0 || !servers[0].Is4() {
+		t.Skipf("no IPv4 name server in /etc/resolv.conf: %v", servers)
+	}
+	return servers[0].String()
+}
+
+// TestProxy: with an http rule for localhost, the sandbox's HTTPS
+// connections to it go through hallpass's proxy: an allowed request gets
+// the server's answer, another a 403 from hallpass, and the server never
+// sees it. The server's certificate is verified with hallpass's roots
+// (SSL_CERT_FILE here); the sandbox trusts the session CA through the
+// variables hallpass sets.
+func TestProxy(t *testing.T) {
+	ns := ipv4Server(t)
+	caFile, seen := httpsServer(t)
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -217,8 +239,8 @@ func TestProxy(t *testing.T) {
 	for _, mode := range modes(t) {
 		t.Run(mode, func(t *testing.T) {
 			e := newEnv(t)
-			script := fmt.Sprintf(`HALLPASS_E2E_HELPER=https "$HP_SELF" %s /repos/x`, servers[0])
-			cmd := e.cmd(script, "--prompt=deny", "--mediate=write,exec,connect", "--allow-connect=udp:"+servers[0].String()+":53",
+			script := fmt.Sprintf(`HALLPASS_E2E_HELPER=https "$HP_SELF" %s /repos/x`, ns)
+			cmd := e.cmd(script, "--prompt=deny", "--mediate=write,exec,connect", "--allow-connect=udp:"+ns+":53",
 				"--allow-http=GET https://localhost/repos/**", "--mode="+mode)
 			cmd.Env = append(cmd.Env, "HP_SELF="+self, "SSL_CERT_FILE="+caFile)
 			out, err := cmd.CombinedOutput()
@@ -226,7 +248,7 @@ func TestProxy(t *testing.T) {
 				t.Fatalf("hallpass: %v\n%s", err, out)
 			}
 			o := string(out)
-			if !strings.Contains(o, "GET=200 upstream GET /repos/x\n") || !strings.Contains(o, "POST=403 hallpass: denied: POST https://localhost/repos/x") {
+			if !strings.Contains(o, "GET=200 upstream GET /repos/x \n") || !strings.Contains(o, "POST=403 hallpass: denied: POST https://localhost/repos/x") {
 				t.Errorf("output:\n%s", o)
 			}
 			select {
@@ -246,6 +268,48 @@ func TestProxy(t *testing.T) {
 	}
 }
 
+// TestCredential: with a credential profile, the sandbox holds a
+// placeholder, never the value or its variable; the server gets the
+// value. Its host has no http rule: the connect is decided as any other
+// (allowed here), its requests are not asked about.
+func TestCredential(t *testing.T) {
+	ns := ipv4Server(t)
+	caFile, seen := httpsServer(t)
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range modes(t) {
+		t.Run(mode, func(t *testing.T) {
+			e := newEnv(t)
+			dir := filepath.Join(e.home, ".config/hallpass/credentials.d")
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			profile := "name = \"e2e\"\nhosts = [\"localhost\"]\nsource = \"env:E2E_SECRET\"\nprefix = \"e2e_\"\nchars = \"a-z\"\nlength = 24\nenv = { E2E_TOKEN = \"{placeholder}\" }\n"
+			if err := os.WriteFile(filepath.Join(dir, "e2e.toml"), []byte(profile), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			script := fmt.Sprintf(`HALLPASS_E2E_HELPER=https "$HP_SELF" %s /user`, ns)
+			cmd := e.cmd(script, "--prompt=deny", "--mediate=write,exec,connect", "--allow-connect=udp:"+ns+":53",
+				"--allow-connect=tcp:localhost:443", "--credential=config:e2e", "--mode="+mode)
+			cmd.Env = append(cmd.Env, "HP_SELF="+self, "SSL_CERT_FILE="+caFile, "E2E_SECRET=s3cret-value", "XDG_CONFIG_HOME="+e.home+"/.config")
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("hallpass: %v\n%s", err, out)
+			}
+			o := string(out)
+			if strings.Contains(o, "the secret is in the environment") || !strings.Contains(o, "token e2e_") ||
+				!strings.Contains(o, "GET=200 upstream GET /user token s3cret-value\n") || !strings.Contains(o, "POST=200 upstream POST /user token s3cret-value\n") {
+				t.Errorf("output:\n%s", o)
+			}
+			for range 2 {
+				<-seen
+			}
+		})
+	}
+}
+
 // TestProxySwapChecks: a connect on a socket swapped already, or
 // listening, fails with
 // EISCONN, as the kernel's would, instead of being swapped again; a
@@ -254,14 +318,8 @@ func TestProxy(t *testing.T) {
 // unshare still is; a non-blocking socket stays non-blocking once
 // swapped.
 func TestProxySwapChecks(t *testing.T) {
-	if os.Geteuid() != 0 {
-		t.Skip("needs root")
-	}
-	servers, _ := dnsnames.Servers("/etc/resolv.conf")
-	if len(servers) == 0 || !servers[0].Is4() {
-		t.Skipf("no IPv4 name server in /etc/resolv.conf: %v", servers)
-	}
-	ns := servers[0].String()
+	ns := ipv4Server(t)
+	_, _ = httpsServer(t)
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)

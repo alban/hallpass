@@ -214,24 +214,31 @@ func (m *Monitor) handleNet(l *listener, n seccomp.Notif, sc seccomp.Rule) (ask 
 	}
 	m.markOwnListeners(n, root, op, items)
 	m.nameItems(items)
-	if len(items) == 1 && items[0].obj.Inet != nil && m.toProxy(l, n, sc, op, items[0]) {
+	if len(items) == 1 && items[0].obj.Inet != nil && m.toProxy(l, n, sc, op, &items[0]) {
 		return nil
 	}
 	return m.decide(l, n, sc, op, items)
 }
 
-// toProxy answers a connect to port 443 of a proxied host (see
+// toProxy answers a connect to port 443 of a host with http rules (see
 // proxiedNames), and reports true: a deny rule on the destination still
 // denies it; otherwise the connection is swapped to the proxy, which
-// decides each request: the address itself is not asked about. A send
-// to UDP port 443 (QUIC) or a TCP Fast Open sendto would go around the
-// proxy: it is denied. It reports false for any other connect.
-func (m *Monitor) toProxy(l *listener, n seccomp.Notif, sc seccomp.Rule, op rules.Op, it item) bool {
+// decides each request: the address itself is not asked about. A host
+// proxied for a credential only is decided as any connect, and swapped
+// once allowed (it.proxy, see allow). It reports false for any other
+// connect, or when it could not swap (the connect is then decided as
+// usual).
+func (m *Monitor) toProxy(l *listener, n seccomp.Notif, sc seccomp.Rule, op rules.Op, it *item) bool {
 	rs := m.currentRules()
-	names := m.proxiedNames(rs, it.obj.Inet)
+	names, byRules := m.proxiedNames(rs, it.obj.Inet)
 	tcpConnect := sc.Name == "connect" && it.obj.Inet.Proto == 6
 	switch {
 	case names == nil:
+		return false
+	case !byRules:
+		if tcpConnect {
+			it.proxy = names
+		}
 		return false
 	case !tcpConnect:
 		// QUIC (UDP 443) or TCP Fast Open to a host with http rules
@@ -244,7 +251,7 @@ func (m *Monitor) toProxy(l *listener, n seccomp.Notif, sc seccomp.Rule, op rule
 		m.deny(l, n, sc, rules.OpConnect, []rules.Object{it.obj}, []Reason{{Rule: id}})
 		return true
 	}
-	switch m.swapToProxy(l, n, sc, it, names) {
+	switch m.swapToProxy(l, n, sc, *it, names, Reason{Builtin: "proxy"}) {
 	case swapOtherNetns:
 		return false
 	case swapFailed:
@@ -283,7 +290,7 @@ const (
 // sockets could not, if it is connected again. A socket connected
 // already, or connecting, is answered as the kernel would (EISCONN,
 // EALREADY), never swapped nor continued.
-func (m *Monitor) swapToProxy(l *listener, n seccomp.Notif, sc seccomp.Rule, it item, names []string) swapResult {
+func (m *Monitor) swapToProxy(l *listener, n seccomp.Notif, sc seccomp.Rule, it item, names []string, why Reason) swapResult {
 	r, ok := l.n.(fdReplacer)
 	if !ok || !l.n.IDValid(n.ID) {
 		return swapFailed
@@ -348,7 +355,7 @@ func (m *Monitor) swapToProxy(l *listener, n seccomp.Notif, sc seccomp.Rule, it 
 	if err := r.Return(n.ID, 0); err != nil && !errors.Is(err, unix.ENOENT) {
 		m.warn("proxy: " + err.Error())
 	}
-	m.report(n, sc.Name, rules.OpConnect, []rules.Object{it.obj}, true, []Reason{{Builtin: "proxy"}})
+	m.report(n, sc.Name, rules.OpConnect, []rules.Object{it.obj}, true, []Reason{why})
 	m.mu.Lock()
 	p := m.proxy
 	m.mu.Unlock()
@@ -357,11 +364,15 @@ func (m *Monitor) swapToProxy(l *listener, n seccomp.Notif, sc seccomp.Rule, it 
 }
 
 // nameItems sets the names of the inet items (InetObject.Names), for the
-// host rules: only when a rule has a host, waiting at most dnsWait for
-// the lookups in progress (the workload connects as soon as its own
-// answer comes).
+// host rules and the proxy: only when a rule has a host or the proxy a
+// credential (whose host's connects it takes, whatever rule allows
+// them), waiting at most dnsWait for the lookups in progress (the
+// workload connects as soon as its own answer comes).
 func (m *Monitor) nameItems(items []item) {
-	if m.names == nil || !needNames(m.currentRules()) {
+	m.mu.Lock()
+	p := m.proxy
+	m.mu.Unlock()
+	if m.names == nil || !needNames(m.currentRules()) && (p == nil || !p.HasCredentials()) {
 		return
 	}
 	for _, it := range items {

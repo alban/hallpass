@@ -131,6 +131,36 @@ deny  http *    https://api.github.com/repos/*/*/pulls/*/merge
 - HTTP/1.1 only: clients offering HTTP/2 fall back. The hosts are those of the `http` rules when the session starts. GraphQL (`POST /graphql`) cannot be told read from write by its URL.
 - Not on Kubernetes yet: a HallpassPolicy with `http` rules is refused.
 
+### Credentials (experimental)
+
+`--credential NAME` (or a `credential NAME` line in a rule file) keeps a token out of the sandbox: the sandbox gets a placeholder of the same shape, and the proxy puts the real value on the wire, only in requests to the credential's hosts, only over TLS it verified.
+
+```sh
+hallpass --mediate=write,exec,connect --allow-connect=github.com:443,api.github.com:443 --credential gh -- copilot
+```
+
+- A profile says, as data, which hosts a credential is for, where its value comes from, and which variables give the tool its placeholder. The built-in `gh` profile reads the token with `gh auth token` (outside the sandbox, when the session starts), sets `GH_TOKEN` to the placeholder, and keeps `GITHUB_TOKEN` from the sandbox; git gets it too with `gh auth setup-git`. Your own profiles go in `~/.config/hallpass/credentials.d/NAME.toml`, which the sandbox cannot write, and are named `config:NAME` (`--credential config:ghe`). A plain name is a built-in profile only, `config:NAME` your file only: yours never shadows a built-in profile, and a built-in one added later never takes yours.
+
+  ```toml
+  name   = "ghe"
+  hosts  = ["ghe.example.com"]
+  source = "env:GHE_TOKEN"          # or file:PATH, or cmd:COMMAND ARGS
+  mode   = "mask"                   # pass: the sandbox gets the value itself
+  prefix = "ghp_"                   # the placeholder: this prefix,
+  chars  = "A-Za-z0-9"              # then random characters of these,
+  length = 36                       # this many
+  env    = { GH_ENTERPRISE_TOKEN = "{placeholder}" }
+  strip  = ["GITHUB_TOKEN"]
+  ```
+
+  Without `prefix`, `chars` or `length`, the placeholder has `hallpass_`, `a-z0-9`, `32`; it needs 96 random bits or more.
+
+- The proxy replaces the placeholder in request headers, and inside Basic authorization (git sends the token as a password); not in bodies.
+- A request carrying the placeholder, or the value, to another host the proxy sees is refused (`403`) and reported on the terminal. A tripwire, not the protection: it sees only the requests through the proxy (hosts with `http` rules or credentials), only their headers and Basic authorization, only the literal string; an encoding, a body, another host or DNS go around it. The placeholder is a strong sign (only hallpass hands it out, and it is useless elsewhere); the value catches only the naive case (mode `pass`, or a token the sandbox read from a file, see below). The protection is the placeholder (mode `mask`) and the `connect` and `http` rules.
+- The credential's hosts go through the proxy; without `http` rules for them, their connections are asked about and allowed as any others, and their requests are not. An allowed connection that cannot be handed to the proxy is denied (reason `proxy-failed`), not sent with the placeholder.
+- The proxy knows a connection is for a credential's host only by the names of its address (see [Names](../how-it-works/network.md#names)): one the session made to an address without a name (a hard-coded address, a name resolved by DNS over HTTPS or `/etc/hosts`) goes out directly, with the placeholder, and the server refuses it (`401`).
+- The sandbox can still read the value where it lives (`~/.config/gh/hosts.yml`) unless reads of it are denied.
+
 ## Rule files
 
 `--rules FILE` (repeatable) adds the rules of a file, one per line, in the syntax of `hallpass answer add`:

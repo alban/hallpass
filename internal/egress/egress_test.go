@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"io"
 	"net"
 	"net/http"
@@ -35,7 +36,17 @@ func upstream(t *testing.T, host string) (netip.AddrPort, *x509.CertPool) {
 		if r.URL.Path == "/slow" {
 			time.Sleep(200 * time.Millisecond)
 		}
+		if e := r.Header.Get("X-Echo"); e != "" {
+			w.Header().Set("X-Echoed", e)
+		}
+		a := r.Header.Get("Authorization")
+		if a != "" {
+			w.Header().Set("X-Auth", a)
+		}
 		io.WriteString(w, r.Method+" "+r.Host+" "+r.URL.RequestURI())
+		if a != "" {
+			io.WriteString(w, " auth="+a)
+		}
 	}))
 	srv.TLS = &tls.Config{Certificates: []tls.Certificate{*leaf}}
 	srv.StartTLS()
@@ -46,8 +57,9 @@ func upstream(t *testing.T, host string) (netip.AddrPort, *x509.CertPool) {
 }
 
 type decision struct {
-	mu   sync.Mutex
-	seen []Request
+	mu    sync.Mutex
+	seen  []Request
+	leaks []string
 }
 
 func (d *decision) decide(_ context.Context, owner any, r Request) (bool, string) {
@@ -63,14 +75,19 @@ func (d *decision) decide(_ context.Context, owner any, r Request) (bool, string
 // session starts a proxy for api.example.test and returns a client for a
 // connection to dst, as the sandbox would make one, trusting the session
 // CA and naming the server sni.
-func session(t *testing.T, dst netip.AddrPort, roots *x509.CertPool, names []string, sni string) (*http.Client, *decision, *CA) {
+func session(t *testing.T, dst netip.AddrPort, roots *x509.CertPool, names []string, sni string, creds ...Credential) (*http.Client, *decision, *CA) {
 	t.Helper()
 	ca, err := NewCA("hallpass session", []Host{{Name: "api.example.test"}}, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
 	d := &decision{}
-	p := &Proxy{CA: ca, Decide: d.decide, Roots: roots, Warn: func(s string) { t.Log(s) }}
+	p := &Proxy{CA: ca, Decide: d.decide, Roots: roots, Warn: func(s string) { t.Log(s) }, Credentials: creds,
+		Leak: func(owner any, r Request, name string) {
+			d.mu.Lock()
+			d.leaks = append(d.leaks, name+" "+r.URL())
+			d.mu.Unlock()
+		}}
 	trust := x509.NewCertPool()
 	trust.AddCert(ca.cert)
 	c := &http.Client{Transport: &http.Transport{
@@ -321,6 +338,72 @@ func TestProxyHalfCloseBody(t *testing.T) {
 				t.Error("Serve did not return")
 			}
 		})
+	}
+}
+
+// TestCredentials: the placeholder in a request to the credential's host
+// becomes the value, in a header or inside Basic authorization; in a
+// request to another host, the request is refused and reported, never
+// decided.
+func TestCredentials(t *testing.T) {
+	dst, roots := upstream(t, "api.example.test")
+	const ph, value = "ghp_PLACEHOLDERPLACEHOLDERPLACEHOLDER1", "ghp_REALVALUE"
+	get := func(c *http.Client, auth string) (int, string) {
+		req, _ := http.NewRequest("GET", "https://api.example.test/user", nil)
+		req.Header.Set("Authorization", auth)
+		resp, err := c.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+	own := Credential{Name: "gh", Hosts: []Host{{Name: "api.example.test"}}, Placeholder: ph, Value: value}
+	c, _, _ := session(t, dst, roots, []string{"api.example.test"}, "api.example.test", own)
+	if code, b := get(c, "token "+ph); code != 200 || !strings.HasSuffix(b, "auth=token "+value) {
+		t.Errorf("header: %d %q", code, b)
+	}
+	// A response header echoing the value gets the placeholder back.
+	req0, _ := http.NewRequest("GET", "https://api.example.test/user", nil)
+	req0.Header.Set("Authorization", "token "+ph)
+	resp0, err := c.Do(req0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp0.Body.Close()
+	if got := resp0.Header.Get("X-Auth"); got != "token "+ph {
+		t.Errorf("echoed authorization %q", got)
+	}
+	basic := "Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:"+ph))
+	want := "Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:"+value))
+	if code, b := get(c, basic); code != 200 || !strings.HasSuffix(b, "auth="+want) {
+		t.Errorf("basic: %d %q", code, b)
+	}
+	// Another header keeps the placeholder.
+	req, _ := http.NewRequest("GET", "https://api.example.test/user", nil)
+	req.Header.Set("X-Echo", ph)
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if got := resp.Header.Get("X-Echoed"); got != ph {
+		t.Errorf("X-Echo became %q", got)
+	}
+	// The same credential, for another host only: a leak.
+	other := own
+	other.Hosts = []Host{{Name: "other.example.test"}}
+	c, d, _ := session(t, dst, roots, []string{"api.example.test"}, "api.example.test", other)
+	for _, auth := range []string{"token " + ph, basic, "token " + value} {
+		if code, b := get(c, auth); code != 403 || !strings.Contains(b, "carries the gh credential") {
+			t.Errorf("%s to another host: %d %q", auth, code, b)
+		}
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(d.leaks) != 3 || d.leaks[0] != "gh https://api.example.test/user" || len(d.seen) != 0 {
+		t.Errorf("leaks %q, decided %v", d.leaks, d.seen)
 	}
 }
 

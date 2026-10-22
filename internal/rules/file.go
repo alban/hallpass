@@ -20,6 +20,20 @@ type FileRule struct {
 	// Members.
 	Group   string
 	Members []string // programs as in --allow-exec, for a definition
+	// Credential names a credential profile the proxy injects
+	// ("credential gh", or "credential config:ghe" for one of the
+	// user's own), instead of a rule.
+	Credential string
+}
+
+// validProfile reports whether s can name a credential profile: a
+// lowercase word of letters, digits, '-' and '_', after "config:" for
+// one of the user's own (see internal/egress/profiles).
+func validProfile(s string) bool {
+	s = strings.TrimPrefix(s, "config:")
+	return s != "" && len(s) <= 64 && !strings.ContainsFunc(s, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' || r == '_')
+	})
 }
 
 // FileError is an invalid line of a rule file.
@@ -47,6 +61,12 @@ func ParseFile(name, text string, expand Expand) ([]FileRule, error) {
 		}
 		switch {
 		case len(ws) == 0:
+			continue
+		case ws[0].s == "credential":
+			if len(ws) != 2 || !validProfile(ws[1].s) {
+				return nil, fail(errors.New("credential: want credential NAME, a credential profile (gh, or config:NAME for one of yours)"))
+			}
+			out = append(out, FileRule{Line: n, Credential: ws[1].s})
 			continue
 		case ws[0].s == "group":
 			if len(ws) < 3 || !strings.HasPrefix(ws[1].s, "@") {

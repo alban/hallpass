@@ -9,14 +9,18 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 	"unsafe"
 
 	"github.com/alban/hallpass/internal/dnsnames"
+	"github.com/alban/hallpass/internal/egress"
 	"github.com/alban/hallpass/internal/netdiag"
+	"github.com/alban/hallpass/internal/procfs"
 	"github.com/alban/hallpass/internal/rules"
 	"golang.org/x/sys/unix"
 )
@@ -318,4 +322,77 @@ func TestNetHost(t *testing.T) {
 			f.expect(t, id, int32(unix.EACCES))
 		})
 	}
+}
+
+// credProxy is a Proxy with a credential for credHost.
+type credProxy struct{ served chan []string }
+
+const credHost = "api.github.com"
+
+func (p *credProxy) Serve(conn net.Conn, _ netip.AddrPort, names []string, _ any) {
+	conn.Close()
+	p.served <- names
+}
+func (p *credProxy) Covers(string) bool       { return true }
+func (p *credProxy) Injects(name string) bool { return name == credHost }
+func (p *credProxy) HasCredentials() bool     { return true }
+
+// TestNetCredential: a connect to a host the proxy has a credential for
+// is swapped to the proxy once allowed, by an address rule or by an
+// answer, without a host or http rule.
+func TestNetCredential(t *testing.T) {
+	netns, err := procfs.Netns()
+	if err != nil {
+		t.Skip(err)
+	}
+	for _, byRule := range []bool{true, false} {
+		t.Run(fmt.Sprint("byRule=", byRule), func(t *testing.T) {
+			names := dnsnames.New(nil, nil)
+			names.Answer(credHost, []netip.Addr{netip.MustParseAddr("192.0.2.10")}, 0)
+			fx := setupConfig(t, Config{Names: names, Netns: netns, Pair: func(int) (*net.TCPConn, *net.TCPConn, error) { return egress.Pair() }}, false)
+			p := &credProxy{served: make(chan []string, 1)}
+			fx.m.SetProxy(p)
+			if byRule {
+				if _, err := fx.m.Apply(rulesDecision(netRule(t, "tcp:192.0.2.0/24:443", rules.Allow))); err != nil {
+					t.Fatal(err)
+				}
+			}
+			tcp := sock(t, unix.AF_INET, unix.SOCK_STREAM)
+			id := fx.f.connect(tcp, sockaddrInet("192.0.2.10:443"))
+			if !byRule {
+				req := fx.next(t, opened).Opened
+				if _, err := fx.m.Apply(Decision{Verdicts: []Verdict{{req.ID, true}}}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			fx.f.expect(t, id, 0)
+			select {
+			case got := <-p.served:
+				if !slices.Equal(got, []string{credHost}) {
+					t.Errorf("served names %q", got)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("not swapped to the proxy")
+			}
+		})
+	}
+}
+
+// TestNetCredentialSwapFailed: a connect to a credential host that cannot
+// be swapped to the proxy is denied, not continued with the placeholder.
+func TestNetCredentialSwapFailed(t *testing.T) {
+	netns, err := procfs.Netns()
+	if err != nil {
+		t.Skip(err)
+	}
+	names := dnsnames.New(nil, nil)
+	names.Answer(credHost, []netip.Addr{netip.MustParseAddr("192.0.2.10")}, 0)
+	pair := func(int) (*net.TCPConn, *net.TCPConn, error) { return nil, nil, errors.New("no pair") }
+	fx := setupConfig(t, Config{Names: names, Netns: netns, Pair: pair}, false)
+	fx.m.SetProxy(&credProxy{served: make(chan []string, 1)})
+	if _, err := fx.m.Apply(rulesDecision(netRule(t, "tcp:192.0.2.0/24:443", rules.Allow))); err != nil {
+		t.Fatal(err)
+	}
+	tcp := sock(t, unix.AF_INET, unix.SOCK_STREAM)
+	fx.f.expect(t, fx.f.connect(tcp, sockaddrInet("192.0.2.10:443")), int32(unix.EACCES))
 }

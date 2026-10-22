@@ -119,6 +119,9 @@ type Policy struct {
 	// variables expanded, but the program groups they allow (in
 	// AllowGroups). Paths are not resolved yet.
 	Rules []rules.Rule
+	// Credentials are the credential profiles of the "credential NAME"
+	// lines, in order, each once.
+	Credentials []string
 }
 
 // FieldError is an invalid field of a Spec, named as in JSON. Sources
@@ -266,6 +269,15 @@ func (s Spec) Validate() (Policy, error) {
 				return &FieldError{"rules", &rules.FileError{Name: f.Name, Line: fr.Line, Err: err}}
 			}
 			if fr.Members != nil {
+				continue
+			}
+			if fr.Credential != "" {
+				if p.Mediate&seccomp.Connect == 0 {
+					return Policy{}, fail(errors.New("needs connect in mediate"))
+				}
+				if !slices.Contains(p.Credentials, fr.Credential) {
+					p.Credentials = append(p.Credentials, fr.Credential)
+				}
 				continue
 			}
 			if fr.Group != "" {

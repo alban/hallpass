@@ -53,6 +53,13 @@ type Proxy struct {
 	Dial func(ctx context.Context, addr netip.AddrPort) (net.Conn, error)
 	// Warn logs what fails.
 	Warn func(string)
+	// Credentials are put on the wire in place of their placeholders,
+	// for their hosts only.
+	Credentials []Credential
+	// Leak reports a request refused because it carried a credential's
+	// placeholder or value to another host than its own: an attempt
+	// caught by a tripwire, which a careful one goes around (see leaked).
+	Leak func(owner any, r Request, credential string)
 }
 
 // Serve serves conn, the proxy's end of a connection the sandbox opened
@@ -117,6 +124,10 @@ func (p *Proxy) Serve(conn net.Conn, dst netip.AddrPort, names []string, owner a
 			r.Out.Host = sni
 		},
 		Transport: upstream,
+		ModifyResponse: func(resp *http.Response) error {
+			scrub(p.Credentials, resp.Header)
+			return nil
+		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			p.warn("%s https://%s%s: %v", r.Method, sni, r.URL.Path, err)
 			http.Error(w, "hallpass: the server could not be reached: "+err.Error(), http.StatusBadGateway)
@@ -158,11 +169,19 @@ func (p *Proxy) Serve(conn net.Conn, dst netip.AddrPort, names []string, owner a
 			http.Error(w, "hallpass: refused: "+r.Method+" "+req.URL()+": the path has a . or .. segment, an empty segment, or an encoded / or \\", http.StatusBadRequest)
 			return
 		}
+		if c := leaked(p.Credentials, sni, r.Header); c != nil {
+			if p.Leak != nil {
+				p.Leak(owner, req, c.Name)
+			}
+			http.Error(w, "hallpass: denied: "+r.Method+" "+req.URL()+": it carries the "+c.Name+" credential, which is not for "+sni, http.StatusForbidden)
+			return
+		}
 		allow, why := p.Decide(r.Context(), owner, req)
 		if !allow {
 			http.Error(w, "hallpass: denied: "+r.Method+" "+req.URL()+": "+why, http.StatusForbidden)
 			return
 		}
+		inject(p.Credentials, sni, r.Header)
 		rp.ServeHTTP(w, r)
 	})
 	l := &oneConn{c: hc, done: make(chan struct{})}
