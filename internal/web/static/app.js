@@ -541,9 +541,99 @@ function activityRow(a) {
     el("td", { class: "nowrap" }, sessionName(a.pid)),
     el("td", { class: "nowrap " + (d.allowed ? "allow" : "deny") }, d.allowed ? "allow" : "deny"),
     el("td", { class: "nowrap" }, d.op ? opName(d.op) : (d.syscall || "")),
-    el("td", {}, (d.objects || []).map(objectText).join(" → ")),
+    el("td", {}, (d.objects || []).map(objectText).join(" → "),
+      d.objects && d.objects.length === 1 && d.objects[0].http
+        ? [" ", el("button", { onclick: () => openBuilder(a.pid, d.objects[0].http) }, "Make a rule")] : []),
     el("td", {}, processText(d.subject)),
     el("td", {}, reasonText(d.why)));
+}
+
+// The rule builder: a rule for HTTPS requests made from a past one, its
+// path cut at a segment or with segments made "*", and the past requests
+// of the session it would match, as the plan's rule editor UX says.
+let builder = null; // {pid, host, segs: [], wild: Set, cut: index or -1, methods: Set, verdict}
+const METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"];
+
+function openBuilder(pid, http) {
+  const segs = (http.path || "/").split("/").filter(x => x);
+  builder = { pid, host: http.host || "", segs, wild: new Set(), cut: -1, methods: new Set([http.method]), verdict: "allow", error: "" };
+  renderBuilder();
+}
+
+// globSeg mirrors rules.segMatch: "*" matches within one segment.
+function globSeg(g, s) {
+  const re = new RegExp("^" + g.split("*").map(x => x.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join("[^/]*") + "$");
+  return re.test(s);
+}
+
+// builderPath is the rule's path glob.
+function builderPath(b) {
+  const segs = b.segs.map((s, i) => b.wild.has(i) ? "*" : s);
+  if (b.cut >= 0) {
+    const head = segs.slice(0, b.cut).join("/");
+    return head ? "/" + head + "/**" : "/**";
+  }
+  return "/" + segs.join("/");
+}
+
+function builderText(b) {
+  const methods = b.methods.size === METHODS.length || b.methods.size === 0 ? "*" : [...b.methods].join(" ");
+  return b.verdict + " http " + methods + " https://" + b.host + builderPath(b);
+}
+
+// builderMatches counts the session's past requests the rule matches.
+function builderMatches(b) {
+  const want = b.segs.map((s, i) => b.wild.has(i) ? "*" : s);
+  let n = 0;
+  for (const a of activity) {
+    const o = a.pid === b.pid && a.d && a.d.objects && a.d.objects.length === 1 && a.d.objects[0].http;
+    if (!o || o.host !== b.host) continue;
+    if (b.methods.size && b.methods.size !== METHODS.length && !b.methods.has(o.method)) continue;
+    const segs = (o.path || "/").split("/").filter(x => x);
+    const g = b.cut >= 0 ? want.slice(0, b.cut) : want;
+    if (b.cut >= 0 ? segs.length < g.length : segs.length !== g.length) continue;
+    if (g.every((x, i) => globSeg(x, segs[i]))) n++;
+  }
+  return n;
+}
+
+function renderBuilder() {
+  const box = document.getElementById("builder");
+  if (!builder) { box.hidden = true; box.replaceChildren(); return; }
+  const b = builder;
+  box.hidden = false;
+  const verdict = el("select", { onchange: e => { b.verdict = e.target.value; renderBuilder(); } },
+    ...["allow", "ask", "deny"].map(v => { const o = el("option", { value: v }, v); o.selected = v === b.verdict; return o; }));
+  const methods = el("span", {}, ...METHODS.map(m => el("button", {
+    class: b.methods.has(m) ? "chip on" : "chip",
+    onclick: () => { b.methods.has(m) ? b.methods.delete(m) : b.methods.add(m); renderBuilder(); },
+  }, m)));
+  const path = el("span", { class: "path" }, "https://" + b.host);
+  b.segs.forEach((s, i) => {
+    if (b.cut >= 0 && i >= b.cut) return;
+    path.append("/", el("button", {
+      class: b.wild.has(i) ? "chip on" : "chip", title: "Any value of this segment",
+      onclick: () => { b.wild.has(i) ? b.wild.delete(i) : b.wild.add(i); renderBuilder(); },
+    }, b.wild.has(i) ? "*" : s));
+    path.append(el("button", { class: "below", title: "Everything below", onclick: () => { b.cut = i + 1; renderBuilder(); } }, "/**"));
+  });
+  if (b.cut >= 0) path.append("/**", el("button", { onclick: () => { b.cut = -1; renderBuilder(); } }, "Exact"));
+  const text = builderText(b);
+  box.replaceChildren(
+    el("h3", {}, "Make a rule"),
+    el("div", {}, verdict, " ", methods),
+    el("div", {}, path),
+    el("pre", {}, text),
+    el("div", { class: "meta" }, "Matches " + builderMatches(b) + " of this session's past requests (in this page's activity)."),
+    el("button", {
+      onclick: async () => {
+        b.error = "";
+        if (await changeRules(b.pid, { add: [text] }, b)) { builder = null; markRulesDirty(); }
+        renderBuilder();
+      },
+    }, "Add rule"), " ",
+    el("button", { onclick: () => { builder = null; renderBuilder(); } }, "Cancel"),
+    el("span", { class: "error" }, b.error || ""));
 }
 
 function renderActivity() {
@@ -572,7 +662,8 @@ const RULE_SYNTAX = `VERDICT KIND VALUE [for DURATION]
   VERDICT    allow, deny or ask
   write P    writing the file P (creating, deleting... it too); P/** the tree below P
   exec P     running the program P; P/** every program below P
-  connect N  a destination: tcp:1.2.3.4:443, [2001:db8::1]:22, unix:/run/x.sock, unix:@name, all...
+  connect N  a destination: tcp:1.2.3.4:443, github.com:443, *.github.com:443, [2001:db8::1]:22, unix:/run/x.sock, all...
+  http M U   HTTPS requests through the proxy: methods (GET POST, or *), then https://HOST/PATH (* a segment, /** below)
   proc N C   /proc/<pid>/N of the processes named C
   unknown    the paths that could not be read (lite mode)
   DURATION   e.g. 10m or 2h; without it, until removed
@@ -639,6 +730,7 @@ function ruleRow(pid, r) {
   else if (o.proc) obj = "/proc: " + (o.proc.name || "*") + (o.proc.comm ? " of " + o.proc.comm : "");
   else if (o.unknown) obj = "(unknown paths)";
   else if (o.anyNet || o.ownListener || o.inet || o.unix) obj = "network: " + netMatchText(o);
+  else if (o.http) obj = "https: " + ((o.http.methods || []).join(" ") || "*") + " https://" + (o.http.hostSuffix ? "*." : "") + (o.http.host || "") + (o.http.path || "");
   const verdict = (r.verdict || "ALLOW").toLowerCase();
   const key = editorKey(pid, r.id);
   const s = sessions.get(pid);

@@ -41,3 +41,7 @@ input.spec { flex: 1; min-width: 20em; font: 13px monospace; padding: .2em; }
 td.nowrap { white-space: nowrap; word-break: normal; }
 .session { max-width: 40em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 h2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#builder { border: 1px solid #ccc; padding: 0.5em; margin-bottom: 1em; }
+.chip { margin: 0 0.1em; }
+.chip.on { background: #1f6feb; color: #fff; }
+.below { font-size: smaller; margin-right: 0.3em; }
