@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/alban/hallpass/internal/rules"
+	"golang.org/x/net/publicsuffix"
 )
 
 // ErrTooWide is returned by CheckRules for a rule allowing more than an
@@ -133,6 +134,10 @@ func Grantable(p Policy, r rules.Rule) bool {
 		return false
 	case o.Path != nil && r.Ops&rules.OpExec != 0:
 		return r.Ops == rules.OpExec && !o.Path.Tree
+	case o.HTTP != nil:
+		// "always" to an HTTPS request: its method and URL.
+		h := o.HTTP
+		return r.Ops == rules.OpHTTP && len(h.Methods) == 1 && !h.HostSuffix && !strings.Contains(h.Path, "*")
 	case r.Ops&^rules.OpAll != 0:
 		return false
 	case o.Path != nil:
@@ -145,6 +150,19 @@ func Grantable(p Policy, r rules.Rule) bool {
 		return f != "" && rules.Under(o.Path.Path, f)
 	case o.Proc != nil:
 		return true
+	case o.Inet != nil && o.Inet.Host != "":
+		// "always" to a named connection: its name and port; "domain":
+		// the names below its registrable domain (hostScopes), so any
+		// suffix that is not a public suffix.
+		i := o.Inet
+		if i.PortLo == 0 || i.PortLo != i.PortHi {
+			return false
+		}
+		if !i.HostSuffix {
+			return true
+		}
+		_, err := publicsuffix.EffectiveTLDPlusOne(i.Host)
+		return err == nil
 	case o.Inet != nil:
 		i := o.Inet
 		return i.Prefix.IsValid() && i.Prefix.Bits() == i.Prefix.Addr().BitLen() && i.PortLo != 0 && i.PortLo == i.PortHi
