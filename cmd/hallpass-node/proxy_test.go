@@ -194,11 +194,84 @@ func TestCredentials(t *testing.T) {
 	for _, bad := range []policy.Spec{
 		{Mediate: []string{"connect"}, Rules: "credential gh"},
 		{Mediate: []string{"connect"}, Credentials: map[string]policy.CredentialSource{"gh": {SecretRef: &policy.SecretRef{Name: "a", Key: "b"}}}},
-		{Mediate: []string{"connect"}, Rules: "credential nope", Credentials: map[string]policy.CredentialSource{"nope": {SecretRef: &policy.SecretRef{Name: "a", Key: "b"}}}},
+		{Mediate: []string{"connect"}, Rules: "credential No.pe", Credentials: map[string]policy.CredentialSource{"No.pe": {SecretRef: &policy.SecretRef{Name: "a", Key: "b"}}}},
 	} {
 		if _, err := parsePolicy("bad", bad); err == nil {
 			t.Errorf("%+v: no error", bad)
 		}
+	}
+}
+
+// TestCredentialProfiles: config:NAME is the profiles ConfigMap's
+// NAME.toml, and a plain name the built-in profile, even when the
+// ConfigMap has one of that name; a policy naming a profile that is
+// nowhere is accepted, but its containers are refused.
+func TestCredentialProfiles(t *testing.T) {
+	trustRoot = t.TempDir()
+	const acme = `name = "acme"
+hosts = ["api.acme.test"]
+source = "env:ACME_TOKEN"
+mode = "mask"
+prefix = "acme_"
+chars = "a-z0-9"
+length = 20
+env = { ACME_TOKEN = "{placeholder}" }
+`
+	const gh = `name = "gh"
+hosts = ["github.example.test"]
+source = "env:GH_TOKEN"
+mode = "mask"
+prefix = "ghp_"
+chars = "A-Za-z0-9"
+length = 36
+env = { GH_ENTERPRISE_TOKEN = "{placeholder}" }
+`
+	pols := map[string]*Policy{}
+	for _, c := range []string{"config:acme", "gh", "config:gh", "acme", "config:nope"} {
+		pol, err := parsePolicy(c, policy.Spec{Mediate: []string{"write", "connect"}, Rules: "credential " + c,
+			Credentials: map[string]policy.CredentialSource{c: {SecretRef: &policy.SecretRef{Name: "tok", Key: "v"}}}})
+		if err != nil {
+			t.Fatalf("%s: %v", c, err)
+		}
+		pols[c] = pol
+	}
+	p := &plugin{
+		cluster: fakeCluster{
+			selected: map[string]bool{"ci": true},
+			policies: pols,
+			secrets:  map[string]string{"ci/tok/v": "value"},
+			profiles: map[string]string{"acme.toml": acme, "gh.toml": gh},
+		},
+		listenerPath: "/run/hallpass/agent.sock",
+		log:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+		trust:        &trustStore{},
+	}
+	create := func(pol, id string) (map[string]string, error) {
+		pod := &api.PodSandbox{Namespace: "ci", Name: "p", Uid: "uid", Annotations: map[string]string{PolicyAnnotation: pol}}
+		adj, _, err := p.CreateContainer(t.Context(), pod, &api.Container{Id: id, Name: "c"})
+		if err != nil {
+			return nil, err
+		}
+		env := map[string]string{}
+		for _, kv := range adj.Env {
+			env[kv.Key] = kv.Value
+		}
+		return env, nil
+	}
+	if env, err := create("config:acme", "c1"); err != nil || !strings.HasPrefix(env["ACME_TOKEN"], "acme_") || len(env["ACME_TOKEN"]) != 25 {
+		t.Errorf("config:acme: %v %v", env, err)
+	}
+	if env, err := create("gh", "c2"); err != nil || !strings.HasPrefix(env["GH_TOKEN"], "ghp_") || env["GH_ENTERPRISE_TOKEN"] != "" {
+		t.Errorf("gh, with a gh.toml in the ConfigMap: %v %v", env, err)
+	}
+	if env, err := create("config:gh", "c3"); err != nil || !strings.HasPrefix(env["GH_ENTERPRISE_TOKEN"], "ghp_") || env["GH_TOKEN"] != "" {
+		t.Errorf("config:gh: %v %v", env, err)
+	}
+	if _, err := create("acme", "c4"); err == nil || !strings.Contains(err.Error(), `"config:acme"`) {
+		t.Errorf("acme: %v", err)
+	}
+	if _, err := create("config:nope", "c5"); err == nil || !strings.Contains(err.Error(), "no ConfigMap") {
+		t.Errorf("config:nope: %v", err)
 	}
 }
 

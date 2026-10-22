@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/alban/hallpass/internal/egress/profiles"
 	"github.com/alban/hallpass/internal/policy"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -45,7 +46,16 @@ type cluster interface {
 	Policy(name string) (*Policy, error)
 	// Secret returns the value of key of Secret name in namespace ns.
 	Secret(ns, name, key string) (string, error)
+	// Profile returns credential profile ref: built in ("gh"), or
+	// "config:NAME" from the profiles ConfigMap (profilesConfigMap).
+	Profile(ref string) (*profiles.Profile, error)
 }
+
+// profilesConfigMap is the ConfigMap of the credential profiles, in
+// hallpass-node's namespace ($POD_NAMESPACE): one key NAME.toml per
+// profile, as in ~/.config/hallpass/credentials.d, which a policy names
+// config:NAME.
+const profilesConfigMap = "hallpass-credential-profiles"
 
 // errNotSynced fails the lookups until the caches have synced.
 var errNotSynced = errors.New("namespace and HallpassPolicy caches not synced yet")
@@ -57,6 +67,13 @@ type kube struct {
 	namespaces listersv1.NamespaceLister
 	policies   cache.GenericLister
 	synced     atomic.Bool
+	// profiles reads profilesConfigMap; profilesSynced is set once its
+	// cache synced (it may never: without the ConfigMap's namespace or
+	// the RBAC to read it, the containers with config: credentials are
+	// refused).
+	profiles       listersv1.ConfigMapLister
+	profilesNS     string
+	profilesSynced atomic.Bool
 }
 
 // newKube starts the informers and returns without waiting for their
@@ -90,8 +107,24 @@ func newKube(ctx context.Context, kubeconfig string, selector labels.Selector, l
 	dynf := dynamicinformer.NewDynamicSharedInformerFactory(dyn, resync)
 	polInf := dynf.ForResource(policyGVR)
 	k.policies = polInf.Lister()
+	// The profiles ConfigMap alone: a field selector on its name, in
+	// hallpass-node's namespace.
+	k.profilesNS = os.Getenv("POD_NAMESPACE")
+	if k.profilesNS == "" {
+		k.profilesNS = "hallpass-system"
+	}
+	cmf := informers.NewSharedInformerFactoryWithOptions(cs, resync, informers.WithNamespace(k.profilesNS),
+		informers.WithTweakListOptions(func(o *metav1.ListOptions) { o.FieldSelector = "metadata.name=" + profilesConfigMap }))
+	cmInf := cmf.Core().V1().ConfigMaps()
+	k.profiles = cmInf.Lister()
 	nsf.Start(ctx.Done())
 	dynf.Start(ctx.Done())
+	cmf.Start(ctx.Done())
+	go func() {
+		if cache.WaitForCacheSync(ctx.Done(), cmInf.Informer().HasSynced) {
+			k.profilesSynced.Store(true)
+		}
+	}()
 	go func() {
 		start := time.Now()
 		done := make(chan struct{})
@@ -179,4 +212,35 @@ func (k *kube) Secret(ns, name, key string) (string, error) {
 		return "", fmt.Errorf("secret %s/%s: no key %q, or an empty value", ns, name, key)
 	}
 	return v, nil
+}
+
+// Profile returns credential profile ref: built in ("gh"), or
+// "config:NAME", the key NAME.toml of the profiles ConfigMap. Until the
+// ConfigMap's cache synced, a config:NAME one fails: the container is
+// refused rather than created without its credential.
+func (k *kube) Profile(ref string) (*profiles.Profile, error) {
+	return profiles.Find(ref, func(name string) ([]byte, string, error) {
+		if !k.profilesSynced.Load() {
+			return nil, "", fmt.Errorf("credential %s: ConfigMap %s/%s not read yet (hallpass-node may not read it?)", ref, k.profilesNS, profilesConfigMap)
+		}
+		return configMapProfile(k.profiles, k.profilesNS, name)
+	})
+}
+
+// configMapProfile returns the key name.toml of the profiles ConfigMap in
+// namespace ns, from lister l.
+func configMapProfile(l listersv1.ConfigMapLister, ns, name string) ([]byte, string, error) {
+	where := "ConfigMap " + ns + "/" + profilesConfigMap + " key " + name + ".toml"
+	cm, err := l.ConfigMaps(ns).Get(profilesConfigMap)
+	if apierrors.IsNotFound(err) {
+		return nil, where, os.ErrNotExist
+	}
+	if err != nil {
+		return nil, where, err
+	}
+	v, ok := cm.Data[name+".toml"]
+	if !ok {
+		return nil, where, os.ErrNotExist
+	}
+	return []byte(v), where, nil
 }

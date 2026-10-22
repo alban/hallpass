@@ -48,6 +48,34 @@ subjects:
     name: hallpass-node
     namespace: hallpass-system
 ---
+# The credential profiles beyond the built-in ones: the ConfigMap
+# hallpass-credential-profiles of this namespace (see the docs,
+# Credentials). Read whether it exists or not.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: hallpass-node
+  namespace: hallpass-system
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [hallpass-credential-profiles]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: hallpass-node
+  namespace: hallpass-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: hallpass-node
+subjects:
+  - kind: ServiceAccount
+    name: hallpass-node
+    namespace: hallpass-system
+---
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -90,6 +118,11 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
+            # Where the credential profiles ConfigMap is.
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
           securityContext:
             privileged: true
           # Ready once registered with NRI and with the namespace and

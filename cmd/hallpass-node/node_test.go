@@ -20,7 +20,12 @@ import (
 	"github.com/containerd/nri/pkg/api"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	listersv1 "k8s.io/client-go/listers/core/v1"
+	"k8s.io/client-go/tools/cache"
 
+	"github.com/alban/hallpass/internal/egress/profiles"
 	"github.com/alban/hallpass/internal/policy"
 	"github.com/alban/hallpass/internal/rules"
 	"github.com/alban/hallpass/internal/seccomp"
@@ -181,6 +186,8 @@ type fakeCluster struct {
 	selected map[string]bool
 	policies map[string]*Policy
 	secrets  map[string]string // ns/name/key
+	// profiles is the data of the profiles ConfigMap, nil: none.
+	profiles map[string]string
 }
 
 func (f fakeCluster) Selected(ns string) (bool, error) {
@@ -196,6 +203,21 @@ func (f fakeCluster) Secret(ns, name, key string) (string, error) {
 		return v, nil
 	}
 	return "", errors.New("forbidden")
+}
+
+// Profile reads f.profiles through a ConfigMap lister, as kube does.
+func (f fakeCluster) Profile(ref string) (*profiles.Profile, error) {
+	idx := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc})
+	if f.profiles != nil {
+		cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "hallpass-system", Name: profilesConfigMap}, Data: f.profiles}
+		if err := idx.Add(cm); err != nil {
+			return nil, err
+		}
+	}
+	l := listersv1.NewConfigMapLister(idx)
+	return profiles.Find(ref, func(name string) ([]byte, string, error) {
+		return configMapProfile(l, "hallpass-system", name)
+	})
 }
 
 func (f fakeCluster) Policy(name string) (*Policy, error) {

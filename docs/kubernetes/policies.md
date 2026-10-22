@@ -185,3 +185,35 @@ credential to another host is refused and reported as a
 `HallpassCredentialLeak` Warning Event on the pod: a tripwire for the
 naive attempt, not the protection (see
 [Credentials](../workstation/usage.md#credentials-experimental)).
+
+A plain name is a built-in profile (`gh`). `config:NAME` is the key
+`NAME.toml` of the ConfigMap `hallpass-credential-profiles` in
+hallpass-node's namespace, in the format of
+[`credentials.d`](../workstation/usage.md#credentials-experimental) (its
+`source` is not used: the value comes from the Secret, and `mode` must
+be `mask`). Neither falls back to the other: a ConfigMap profile never
+shadows a built-in one, and deleting it refuses the containers rather
+than sending the value to a built-in profile's hosts. For example, a
+GitHub Enterprise server's token, `credential config:ghe` with
+`credentials: {"config:ghe": {secretRef: ...}}` in the policy:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: hallpass-credential-profiles, namespace: hallpass-system}
+data:
+  ghe.toml: |
+    name   = "ghe"
+    hosts  = ["github.example.com"]
+    source = "env:GH_TOKEN"
+    mode   = "mask"
+    prefix = "ghp_"
+    chars  = "A-Za-z0-9"
+    length = 36
+    env    = { GH_ENTERPRISE_TOKEN = "{placeholder}", GH_HOST = "github.example.com" }
+```
+
+A policy may name a profile that does not exist yet; the containers of
+its pods are refused until it does. Only who may edit that ConfigMap
+decides where a credential's value may go: keep it to the cluster's
+administrators.

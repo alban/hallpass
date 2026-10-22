@@ -9,9 +9,9 @@
 // ~/.config/hallpass/credentials.d/.
 //
 // A plain name ("gh") is a built-in profile, and only that; "config:NAME"
-// is the user's own NAME.toml, and only that: a profile of the user's
-// never shadows a built-in one, and a built-in one added later never
-// takes the place of the user's.
+// is the user's own NAME.toml (hallpass-node: its ConfigMap's), and only
+// that: a profile of the user's never shadows a built-in one, and a
+// built-in one added later never takes the place of the user's.
 //
 // Profiles are written in a subset of TOML: one "key = value" per line,
 // values a "string", an integer (digits), an array of strings, or an
@@ -43,7 +43,7 @@ var embedded embed.FS
 
 // Profile is how a tool's credential is brokered.
 type Profile struct {
-	// Name is the profile's name; Load sets it to the name it was
+	// Name is the profile's name; Find sets it to the name it was
 	// asked for: "gh", or "config:ghe" for the user's own.
 	Name   string
 	Hosts  []string // the hosts the value goes to; "*.example.com" for the names below
@@ -63,19 +63,34 @@ const ConfigPrefix = "config:"
 // Load returns profile ref: built in ("gh"), or the user's own in dir
 // ("config:ghe" is dir/ghe.toml). Neither falls back to the other.
 func Load(dir, ref string) (*Profile, error) {
-	name, config := strings.CutPrefix(ref, ConfigPrefix)
-	if !validName(name) {
+	var config func(string) ([]byte, string, error)
+	if dir != "" {
+		config = func(name string) ([]byte, string, error) {
+			where := filepath.Join(dir, name+".toml")
+			b, err := os.ReadFile(where)
+			return b, where, err
+		}
+	}
+	return Find(ref, config)
+}
+
+// Find returns profile ref: built in ("gh"), or "config:NAME", which
+// config returns: the profile's text and where it is, for the errors,
+// or an error wrapping os.ErrNotExist when it has none. Neither falls
+// back to the other.
+func Find(ref string, config func(name string) (b []byte, where string, err error)) (*Profile, error) {
+	name, isConfig := strings.CutPrefix(ref, ConfigPrefix)
+	if !ValidName(name) {
 		return nil, fmt.Errorf("credential %q: not a profile name (NAME, or config:NAME)", ref)
 	}
 	var b []byte
 	var where string
 	var err error
-	if config {
-		if dir == "" {
-			return nil, fmt.Errorf("credential %q: no profile directory", ref)
+	if isConfig {
+		if config == nil {
+			return nil, fmt.Errorf("credential %q: no profiles of your own here", ref)
 		}
-		where = filepath.Join(dir, name+".toml")
-		b, err = os.ReadFile(where)
+		b, where, err = config(name)
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("credential %q: no %s%s", ref, where, builtinHint(name))
 		}
@@ -119,10 +134,18 @@ func Builtin() []string {
 	return out
 }
 
-func validName(s string) bool {
+// ValidName reports whether s can name a profile: lower-case letters,
+// digits, - and _.
+func ValidName(s string) bool {
 	return s != "" && len(s) <= 64 && !strings.ContainsFunc(s, func(r rune) bool {
 		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' || r == '_')
 	})
+}
+
+// ValidRef reports whether s can refer to a profile: NAME, or
+// config:NAME.
+func ValidRef(s string) bool {
+	return ValidName(strings.TrimPrefix(s, ConfigPrefix))
 }
 
 var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -164,7 +187,7 @@ func Parse(b []byte) (*Profile, error) {
 	if p.Name, err = str("name"); err != nil {
 		return nil, err
 	}
-	if !validName(p.Name) {
+	if !ValidName(p.Name) {
 		return nil, fmt.Errorf("name %q: want a lowercase word", p.Name)
 	}
 	if p.Hosts, err = list("hosts"); err != nil {

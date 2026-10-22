@@ -47,8 +47,10 @@ func parsePolicy(name string, spec policy.Spec) (*Policy, error) {
 		if !ok || src.SecretRef == nil || src.SecretRef.Name == "" || src.SecretRef.Key == "" {
 			return nil, fmt.Errorf("policy %s: credential %s: want credentials.%s.secretRef with a name and a key", name, c, c)
 		}
-		if _, err := profiles.Load("", c); err != nil {
-			return nil, fmt.Errorf("policy %s: %w", name, err)
+		// The profile is looked up when a container is created: a
+		// config:NAME one is in the profiles ConfigMap, which changes.
+		if !profiles.ValidRef(c) {
+			return nil, fmt.Errorf("policy %s: credential %q: not a profile name", name, c)
 		}
 	}
 	for c := range spec.Credentials {

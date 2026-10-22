@@ -15,7 +15,6 @@ import (
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 
 	"github.com/alban/hallpass/internal/egress"
-	"github.com/alban/hallpass/internal/egress/profiles"
 	"github.com/alban/hallpass/internal/ociseccomp"
 	"github.com/alban/hallpass/internal/seccomp"
 )
@@ -167,7 +166,7 @@ func (p *plugin) RemoveContainer(_ context.Context, _ *api.PodSandbox, ctr *api.
 func (p *plugin) brokerCredentials(ns string, pol *Policy, adj *api.ContainerAdjustment) ([]egress.Credential, error) {
 	var out []egress.Credential
 	for _, name := range pol.Credentials {
-		prof, err := profiles.Load("", name)
+		prof, err := p.cluster.Profile(name)
 		if err != nil {
 			return nil, err
 		}
