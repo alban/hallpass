@@ -7,8 +7,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net"
-	"net/netip"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -107,9 +105,11 @@ func runSession(cfg sessionConfig) (int, error) {
 	}
 	mcfg := monitor.Config{Kernel: kernel, Mediate: cfg.Mediate}
 	if cfg.DNS && cfg.Mediate&seccomp.Connect != 0 {
-		mcfg.Names = dnsnames.New(func(ctx context.Context, name string) ([]netip.Addr, error) {
-			return net.DefaultResolver.LookupNetIP(ctx, "ip", name)
-		})
+		// The sandbox shares the host's network and resolv.conf: read
+		// once, so a later change cannot make hallpass's lookups reach
+		// a server the sandbox's queries did not.
+		servers, _ := dnsnames.Servers("/etc/resolv.conf")
+		mcfg.Names = dnsnames.New(dnsnames.HostLookup(servers), servers)
 	}
 	m, err := monitor.New(mcfg)
 	if err != nil {

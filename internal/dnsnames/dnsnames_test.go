@@ -7,6 +7,8 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -92,7 +94,7 @@ func TestNames(t *testing.T) {
 		"b.example":    {cdn, netip.MustParseAddr("::ffff:104.16.0.2")},
 		"slow.example": {netip.MustParseAddr("10.0.0.1")},
 	}, block: "slow.example", release: make(chan struct{})}
-	n := New(f.lookup)
+	n := New(f.lookup, nil)
 	now := time.Unix(1000, 0)
 	var mu sync.Mutex
 	n.now = func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
@@ -138,5 +140,43 @@ func TestNames(t *testing.T) {
 	advance(Floor)
 	if got := n.Lookup(gh, 0); got != nil {
 		t.Errorf("expired: %q", got)
+	}
+}
+
+func TestServers(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "resolv.conf")
+	conf := "# nameserver 192.0.2.9\nnameserver 127.0.0.53\nsearch .\nnameserver ::ffff:10.0.0.1\nnameserver fe80::1%eth0\nnameserver bogus\noptions edns0\n"
+	if err := os.WriteFile(path, []byte(conf), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	servers, err := Servers(path)
+	want := []netip.Addr{netip.MustParseAddr("127.0.0.53"), netip.MustParseAddr("10.0.0.1"), netip.MustParseAddr("fe80::1")}
+	if err != nil || !slices.Equal(servers, want) {
+		t.Fatalf("Servers: %v %v, want %v", servers, err, want)
+	}
+	n := New(nil, servers)
+	for ap, want := range map[string]bool{
+		"127.0.0.53:53":        true,
+		"[::ffff:10.0.0.1]:53": true,
+		"[fe80::1%eth0]:53":    true,
+		"127.0.0.53:5353":      false,
+		"127.0.0.1:53":         false,
+		"192.0.2.9:53":         false,
+	} {
+		if got := n.Server(netip.MustParseAddrPort(ap)); got != want {
+			t.Errorf("Server(%s) = %v", ap, got)
+		}
+	}
+}
+
+// TestHostLookupServers: without servers, a lookup reaches no server; the
+// hosts file still answers.
+func TestHostLookupServers(t *testing.T) {
+	lookup := HostLookup(nil)
+	if _, err := lookup(t.Context(), "hallpass-test.invalid"); err == nil {
+		t.Error("looked up without servers")
+	}
+	if a, err := lookup(t.Context(), "localhost"); err != nil || len(a) == 0 {
+		t.Errorf("localhost: %v %v", a, err)
 	}
 }

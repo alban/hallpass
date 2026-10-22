@@ -85,7 +85,7 @@ func (m *Monitor) handleNet(l *listener, n seccomp.Notif, sc seccomp.Rule) (ask 
 		if m.names != nil && (sc.Name == "sendmsg" || sc.Name == "sendmmsg") {
 			// glibc's resolver connects its socket to the server,
 			// then sends without an address: the connect was decided.
-			if si, err := procfs.Socket(int(n.PID), d.fd); err == nil && si.Type == unix.SOCK_DGRAM && si.Peer.Port() == dnsPort {
+			if si, err := procfs.Socket(int(n.PID), d.fd); err == nil && si.Type == unix.SOCK_DGRAM && m.names.Server(si.Peer) {
 				for _, name := range m.queryNames(n, sc) {
 					m.names.Observe(name)
 				}
@@ -204,7 +204,7 @@ func (m *Monitor) handleNet(l *listener, n seccomp.Notif, sc seccomp.Rule) (ask 
 	if m.names != nil && op == rules.OpSend && siErr == nil && si.Type == unix.SOCK_DGRAM {
 		var names []string
 		for i, it := range items {
-			if it.obj.Inet != nil && it.obj.Inet.Addr.Port() == dnsPort {
+			if it.obj.Inet != nil && m.names.Server(it.obj.Inet.Addr) {
 				if names == nil {
 					names = m.queryNames(n, sc)
 				}
@@ -314,9 +314,6 @@ func errnoOf(err error) unix.Errno {
 	}
 	return unix.EFAULT
 }
-
-// dnsPort is where a datagram is a DNS query.
-const dnsPort = 53
 
 // maxQuery bounds the bytes read of a DNS query: its question comes
 // first.

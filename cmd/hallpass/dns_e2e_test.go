@@ -7,26 +7,29 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"strings"
 	"testing"
 	"time"
 	"unsafe"
 
+	"github.com/alban/hallpass/internal/dnsnames"
 	"golang.org/x/net/dns/dnsmessage"
 	"golang.org/x/sys/unix"
 )
 
-// dnsHelper sends a DNS query for a name to 127.0.0.1:53, as glibc does
-// (a connected socket, then sendmmsg without an address) or as musl does
-// (sendto with the address), then connects to an address: args are
-// label, style ("connected" or "sendto"), name and the address.
+// dnsHelper sends a DNS query for a name to port 53 of an IPv4 server, as
+// glibc does (a connected socket, then sendmmsg without an address) or as
+// musl does (sendto with the address), then connects to an address: args
+// are label, style ("connected" or "sendto"), server, name and the
+// address.
 func dnsHelper(args []string) int {
-	if len(args) != 4 {
-		fmt.Println("dns: want label style name addr")
+	if len(args) != 5 {
+		fmt.Println("dns: want label style server name addr")
 		return 1
 	}
-	label, style, name, addr := args[0], args[1], args[2], args[3]
+	label, style, srv, name, addr := args[0], args[1], args[2], args[3], args[4]
 	b := dnsmessage.NewBuilder(nil, dnsmessage.Header{ID: 7, RecursionDesired: true})
 	_ = b.StartQuestions()
 	_ = b.Question(dnsmessage.Question{Name: dnsmessage.MustNewName(name + "."), Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET})
@@ -37,7 +40,7 @@ func dnsHelper(args []string) int {
 		return 1
 	}
 	defer unix.Close(fd)
-	server := &unix.SockaddrInet4{Port: 53, Addr: [4]byte{127, 0, 0, 1}}
+	server := &unix.SockaddrInet4{Port: 53, Addr: netip.MustParseAddr(srv).As4()}
 	switch style {
 	case "connected":
 		if err = unix.Connect(fd, server); err == nil {
@@ -82,10 +85,21 @@ func sendmmsg(fd int, b []byte) error {
 }
 
 // TestDNSNames: a connect prompt names the address after the workload's
-// DNS query for it, sent either way, once hallpass has looked the name up
-// itself (localhost: 127.0.0.1 without any network). A query hallpass
-// denies is not looked up: no name.
+// DNS query for it, sent either way to the host's name server, once
+// hallpass has looked the name up itself (localhost: 127.0.0.1 from the
+// hosts file, without any network). A query hallpass denies is not looked
+// up, nor one sent to another server, even allowed: hallpass's lookup
+// would reach a server the workload did not (no name).
 func TestDNSNames(t *testing.T) {
+	servers, _ := dnsnames.Servers("/etc/resolv.conf")
+	if len(servers) == 0 || !servers[0].Is4() {
+		t.Skipf("no IPv4 name server in /etc/resolv.conf: %v", servers)
+	}
+	ns := servers[0].String()
+	other := "127.0.0.1"
+	if ns == other {
+		other = "127.0.0.2"
+	}
 	for _, mode := range modes(t) {
 		t.Run(mode, func(t *testing.T) {
 			// A port with no listener: the connect is refused, after
@@ -101,15 +115,17 @@ func TestDNSNames(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, c := range []struct {
-				name, style, netFlag, wantName string
+				name, style, server, netFlag, wantName string
 			}{
-				{"connected", "connected", "--allow-net=udp:127.0.0.1:53", "localhost"},
-				{"sendto", "sendto", "--allow-net=udp:127.0.0.1:53", "localhost"},
-				{"denied", "sendto", "--deny-net=udp:127.0.0.1:53", ""},
+				{"connected", "connected", ns, "--allow-net=udp:" + ns + ":53", "localhost"},
+				{"sendto", "sendto", ns, "--allow-net=udp:" + ns + ":53", "localhost"},
+				{"denied", "sendto", ns, "--deny-net=udp:" + ns + ":53", ""},
+				{"other-server", "sendto", other, "--allow-net=udp:" + other + ":53", ""},
+				{"other-server-connected", "connected", other, "--allow-net=udp:" + other + ":53", ""},
 			} {
 				t.Run(c.name, func(t *testing.T) {
 					e := newEnv(t)
-					script := fmt.Sprintf(`HALLPASS_E2E_HELPER=dns "$HP_SELF" d %s localhost %s`, c.style, dest)
+					script := fmt.Sprintf(`HALLPASS_E2E_HELPER=dns "$HP_SELF" d %s %s localhost %s`, c.style, c.server, dest)
 					cmd := e.cmd(script, "--prompt=answer", "--timeout=20s", "--mediate=write,exec,connect", c.netFlag, "--mode="+mode)
 					cmd.Env = append(cmd.Env, "HP_SELF="+self)
 					var out strings.Builder
