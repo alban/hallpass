@@ -59,6 +59,22 @@ func TestTextNet(t *testing.T) {
 	}
 }
 
+func TestTarget(t *testing.T) {
+	for _, c := range []struct {
+		r    Request
+		want string
+	}{
+		{Request{Path: "1.2.3.4:443", HostNames: "github.com", ReverseNames: "x.example"}, "github.com (1.2.3.4:443)"},
+		{Request{Path: "1.2.3.4:443", ReverseNames: "lb.github.com"}, "1.2.3.4:443 (reverse DNS, unverified: lb.github.com)"},
+		{Request{Path: "1.2.3.4:443", ReverseNames: "a\x1b[2J"}, "1.2.3.4:443 (reverse DNS, unverified: " + sanitize("a\x1b[2J") + ")"},
+		{Request{Path: "/a"}, "/a"},
+	} {
+		if got := c.r.Target(); got != c.want {
+			t.Errorf("Target() = %q, want %q", got, c.want)
+		}
+	}
+}
+
 func TestTextAdvance(t *testing.T) {
 	r := Request{Exe: "/bin/sh", PID: 7, Op: "write", Path: "/w/**", Advance: true, For: 10 * time.Minute, Reason: "build\x1b[2J"}
 	got, keys := r.Text()

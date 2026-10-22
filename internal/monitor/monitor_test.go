@@ -48,6 +48,7 @@ type fakeNotifier struct {
 	alive []any // keeps path buffers alive
 
 	orphanRecvs int // Recv calls after hup
+	replaced    int // descriptors installed (ReplaceFD)
 }
 
 func newFake() *fakeNotifier {

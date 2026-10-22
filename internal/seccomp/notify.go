@@ -116,6 +116,51 @@ func (l *Listener) Deny(id uint64, errno int32) error {
 	return l.send(id, 0, -errno, 0)
 }
 
+// AddFD installs a copy of fd in the target of id, still waiting, and
+// returns its number there (SECCOMP_IOCTL_NOTIF_ADDFD, Linux 5.9); Return
+// then answers id with it. newfdFlags is O_CLOEXEC or 0.
+//
+// Not SECCOMP_ADDFD_FLAG_SEND, which answers at once: it marks the
+// notification answered, with 0, before the target installs the
+// descriptor, and a signal interrupting the ioctl then (Go preempts
+// threads with SIGURG) withdraws the descriptor but not the answer. The
+// syscall returns 0, a descriptor the target did not open, and the ioctl
+// restarted fails with ENOENT.
+func (l *Listener) AddFD(id uint64, fd int, newfdFlags uint32) (int, error) {
+	buf := make([]byte, 24)
+	binary.LittleEndian.PutUint64(buf[0:], id)
+	binary.LittleEndian.PutUint32(buf[12:], uint32(fd))
+	binary.LittleEndian.PutUint32(buf[20:], newfdFlags)
+	r, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(l.fd), uintptr(unix.SECCOMP_IOCTL_NOTIF_ADDFD), uintptr(unsafe.Pointer(&buf[0])))
+	if errno != 0 {
+		return -1, errno
+	}
+	return int(r), nil
+}
+
+// Return answers id: the syscall returns val.
+func (l *Listener) Return(id uint64, val int64) error {
+	return l.send(id, val, 0, 0)
+}
+
+// ReplaceFD installs a copy of fd in the target of id, still waiting, at
+// number target, closing what was there, as dup2 does
+// (SECCOMP_ADDFD_FLAG_SETFD); Return then answers id. newfdFlags is
+// O_CLOEXEC or 0. Not with SECCOMP_ADDFD_FLAG_SEND, as for AddFD.
+func (l *Listener) ReplaceFD(id uint64, fd, target int, newfdFlags uint32) error {
+	buf := make([]byte, 24)
+	binary.LittleEndian.PutUint64(buf[0:], id)
+	binary.LittleEndian.PutUint32(buf[8:], unix.SECCOMP_ADDFD_FLAG_SETFD)
+	binary.LittleEndian.PutUint32(buf[12:], uint32(fd))
+	binary.LittleEndian.PutUint32(buf[16:], uint32(target))
+	binary.LittleEndian.PutUint32(buf[20:], newfdFlags)
+	_, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(l.fd), uintptr(unix.SECCOMP_IOCTL_NOTIF_ADDFD), uintptr(unsafe.Pointer(&buf[0])))
+	if errno != 0 {
+		return errno
+	}
+	return nil
+}
+
 func (l *Listener) send(id uint64, val int64, errno int32, flags uint32) error {
 	buf := make([]byte, sizeofResp)
 	binary.LittleEndian.PutUint64(buf[0:], id)

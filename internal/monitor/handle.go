@@ -290,7 +290,8 @@ func (m *Monitor) ask(l *listener, n seccomp.Notif, sc seccomp.Rule, op rules.Op
 	var subject *rules.Subject
 	var once []int
 	for _, i := range undecided {
-		r, why, decided := m.open(l, n, sc.Name, op, items[i].obj, m.namesOf(items[i].obj), &subject)
+		names, unverified := m.namesOf(items[i].obj)
+		r, why, decided := m.open(l, n, sc.Name, op, items[i].obj, names, unverified, &subject)
 		if !decided {
 			<-r.done
 			if r.why.Died {
@@ -319,7 +320,7 @@ func (m *Monitor) ask(l *listener, n seccomp.Notif, sc seccomp.Rule, op rules.Op
 // open returns the pending request for obj, opening it (or joining an
 // identical one) unless the current rules decide obj, in which case it
 // returns allow and the reason instead.
-func (m *Monitor) open(l *listener, n seccomp.Notif, syscall string, op rules.Op, obj rules.Object, names []string, subject **rules.Subject) (r *request, why Reason, allow bool) {
+func (m *Monitor) open(l *listener, n seccomp.Notif, syscall string, op rules.Op, obj rules.Object, names, unverified []string, subject **rules.Subject) (r *request, why Reason, allow bool) {
 	if *subject == nil {
 		s := buildSubject(n.PID, l.root)
 		*subject = &s
@@ -342,11 +343,12 @@ func (m *Monitor) open(l *listener, n seccomp.Notif, syscall string, op rules.Op
 	}
 	r = &request{
 		pub: &Request{
-			Syscall: syscall,
-			Op:      op,
-			Objects: []rules.Object{obj},
-			Subject: **subject,
-			Names:   names,
+			Syscall:         syscall,
+			Op:              op,
+			Objects:         []rules.Object{obj},
+			Subject:         **subject,
+			Names:           names,
+			UnverifiedNames: unverified,
 		},
 		key:     key,
 		op:      op,
@@ -401,6 +403,10 @@ func (m *Monitor) allow(l *listener, n seccomp.Notif, sc seccomp.Rule, op rules.
 				m.names.Observe(name)
 			}
 		}
+	}
+	if op == rules.OpConnect && m.relayed(l, n, sc, items) {
+		m.report(n, sc.Name, op, objects(items), true, why)
+		return
 	}
 	m.report(n, sc.Name, op, objects(items), true, why)
 	if err := l.n.Continue(n.ID); err != nil && !errors.Is(err, unix.ENOENT) {

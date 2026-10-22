@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/alban/hallpass/internal/dnsnames"
@@ -53,6 +54,11 @@ type Config struct {
 	// the workload sends (--dns=observe): requests to connect to an
 	// address carry its names (Request.Names).
 	Names *dnsnames.Names
+	// ResolveSocket, with Names, is systemd-resolved's varlink socket
+	// (dnsnames.ResolveSocket): an allowed connect to it is relayed by
+	// the monitor, which records the names resolved answers (see
+	// relayResolve). Only for a monitor sharing the workload's view.
+	ResolveSocket string
 }
 
 var (
@@ -105,6 +111,10 @@ type Request struct {
 	// first: names the workload asked its DNS servers about that have
 	// this address (dnsnames). Display only: rules match addresses.
 	Names []string
+	// UnverifiedNames, when Names is empty, are the names the reverse
+	// DNS of the address gives (dnsnames.Names.Unverified): chosen by
+	// whoever controls the address, display only.
+	UnverifiedNames []string
 	// Advance is set for a request the workload made in advance (see
 	// AdvanceDir): only a verdict closes it, rules do not.
 	Advance *Advance
@@ -214,6 +224,8 @@ type Monitor struct {
 	procRoot bool
 	mediate  seccomp.Category
 	names    *dnsnames.Names
+	resolve  string
+	relays   atomic.Int32
 	table    []seccomp.Rule
 	now      func() time.Time
 
@@ -247,6 +259,7 @@ func New(cfg Config) (*Monitor, error) {
 		procRoot: cfg.ProcRoot,
 		mediate:  cfg.Mediate,
 		names:    cfg.Names,
+		resolve:  resolveSocket(cfg),
 		table:    syscallTable(),
 		now:      time.Now,
 		pending:  map[uint64]*request{},
@@ -580,4 +593,13 @@ func (m *Monitor) unsubscribe(s *subscriber) {
 	}
 	m.mu.Unlock()
 	close(s.stop)
+}
+
+// resolveSocket is the varlink socket relayed: none without names, or for
+// a monitor that does not share the workload's view.
+func resolveSocket(cfg Config) string {
+	if cfg.Names == nil || cfg.ProcRoot {
+		return ""
+	}
+	return cfg.ResolveSocket
 }

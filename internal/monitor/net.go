@@ -350,10 +350,13 @@ func (m *Monitor) queryNames(n seccomp.Notif, sc seccomp.Rule) []string {
 }
 
 // namesOf returns the names of the address of obj, an Inet object
-// (Request.Names).
-func (m *Monitor) namesOf(obj rules.Object) []string {
+// (Request.Names), or else its reverse DNS names (UnverifiedNames).
+func (m *Monitor) namesOf(obj rules.Object) (names, unverified []string) {
 	if m.names == nil || obj.Inet == nil {
-		return nil
+		return nil, nil
 	}
-	return m.names.Lookup(obj.Inet.Addr.Addr(), dnsWait)
+	if names = m.names.Lookup(obj.Inet.Addr.Addr(), dnsWait); len(names) > 0 {
+		return names, nil
+	}
+	return nil, m.names.Unverified(obj.Inet.Addr.Addr(), dnsWait)
 }

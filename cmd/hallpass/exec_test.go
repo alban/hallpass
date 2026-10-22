@@ -113,6 +113,9 @@ func goHelper(mode string) int {
 	if mode == "dns" {
 		return dnsHelper(os.Args[1:])
 	}
+	if mode == "varlink" {
+		return varlinkHelper(os.Args[1:])
+	}
 	fmt.Println("unknown helper mode", mode)
 	return 1
 }

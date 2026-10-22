@@ -110,6 +110,8 @@ func runSession(cfg sessionConfig) (int, error) {
 		// a server the sandbox's queries did not.
 		servers, _ := dnsnames.Servers("/etc/resolv.conf")
 		mcfg.Names = dnsnames.New(dnsnames.HostLookup(servers), servers)
+		mcfg.Names.SetReverse(dnsnames.HostReverse(servers))
+		mcfg.ResolveSocket = dnsnames.ResolveSocket
 	}
 	m, err := monitor.New(mcfg)
 	if err != nil {

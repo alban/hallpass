@@ -124,7 +124,10 @@ type Request struct {
 	// (140.82.112.4:443)". The workload asked its DNS servers about
 	// them: display only.
 	HostNames string
-	Waiting   int // other requests queued behind this one
+	// ReverseNames, when HostNames is empty, are the names the reverse
+	// DNS of the address gives: unverified, shown after Path.
+	ReverseNames string
+	Waiting      int // other requests queued behind this one
 	// More, if not nil, sends the new value of Waiting while the request
 	// is asked about.
 	More <-chan int
@@ -347,10 +350,14 @@ func (r Remote) Ask(ctx context.Context, _ Request) Answer {
 func (Remote) Close() error { return nil }
 
 // Target is Path for display, after HostNames when set: "github.com
-// (140.82.112.4:443)".
+// (140.82.112.4:443)", or before the ReverseNames: "140.82.112.4:443
+// (reverse DNS, unverified: lb.github.com)".
 func (r Request) Target() string {
-	if r.HostNames != "" {
+	switch {
+	case r.HostNames != "":
 		return sanitize(r.HostNames) + " (" + sanitize(r.Path) + ")"
+	case r.ReverseNames != "":
+		return sanitize(r.Path) + " (reverse DNS, unverified: " + sanitize(r.ReverseNames) + ")"
 	}
 	return sanitize(r.Path)
 }

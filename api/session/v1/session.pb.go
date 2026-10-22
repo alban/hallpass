@@ -1037,7 +1037,12 @@ type Prompt struct {
 	// The host names of a network address in path, from the workload's DNS
 	// queries, e.g. "github.com": show "github.com (140.82.112.4:443)".
 	// Display only: answers cover the address.
-	HostNames     string `protobuf:"bytes,16,opt,name=host_names,json=hostNames,proto3" json:"host_names,omitempty"`
+	HostNames string `protobuf:"bytes,16,opt,name=host_names,json=hostNames,proto3" json:"host_names,omitempty"`
+	// When host_names is empty, the names the reverse DNS (PTR) of the
+	// address gives: chosen by whoever controls the address, so unverified,
+	// e.g. "140.82.112.4:443 (reverse DNS, unverified: lb.github.com)".
+	// Never on the node (hallpass-node looks nothing up).
+	ReverseNames  string `protobuf:"bytes,17,opt,name=reverse_names,json=reverseNames,proto3" json:"reverse_names,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1180,6 +1185,13 @@ func (x *Prompt) GetProgramGroup() string {
 func (x *Prompt) GetHostNames() string {
 	if x != nil {
 		return x.HostNames
+	}
+	return ""
+}
+
+func (x *Prompt) GetReverseNames() string {
+	if x != nil {
+		return x.ReverseNames
 	}
 	return ""
 }
@@ -2861,7 +2873,7 @@ const file_session_proto_rawDesc = "" +
 	"\x03for\x18\x02 \x01(\v2\x19.google.protobuf.DurationR\x03for\x12\x16\n" +
 	"\x06reason\x18\x03 \x01(\tR\x06reason\x12\x12\n" +
 	"\x04dest\x18\x04 \x01(\tR\x04dest\x12\x1a\n" +
-	"\bwritable\x18\x05 \x01(\bR\bwritable\"\x9e\x03\n" +
+	"\bwritable\x18\x05 \x01(\bR\bwritable\"\xc3\x03\n" +
 	"\x06Prompt\x12\x0e\n" +
 	"\x02op\x18\x01 \x01(\tR\x02op\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12\x10\n" +
@@ -2880,7 +2892,8 @@ const file_session_proto_rawDesc = "" +
 	"\tgrant_for\x18\x0e \x01(\v2\x19.google.protobuf.DurationR\bgrantFor\x12#\n" +
 	"\rprogram_group\x18\x0f \x01(\tR\fprogramGroup\x12\x1d\n" +
 	"\n" +
-	"host_names\x18\x10 \x01(\tR\thostNames\"\x88\x02\n" +
+	"host_names\x18\x10 \x01(\tR\thostNames\x12#\n" +
+	"\rreverse_names\x18\x11 \x01(\tR\freverseNames\"\x88\x02\n" +
 	"\x06Object\x125\n" +
 	"\x04path\x18\x01 \x01(\v2\x1f.hallpass.session.v1.PathObjectH\x00R\x04path\x125\n" +
 	"\x04proc\x18\x02 \x01(\v2\x1f.hallpass.session.v1.ProcObjectH\x00R\x04proc\x12\x1a\n" +

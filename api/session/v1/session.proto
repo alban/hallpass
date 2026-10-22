@@ -161,6 +161,11 @@ message Prompt {
   // queries, e.g. "github.com": show "github.com (140.82.112.4:443)".
   // Display only: answers cover the address.
   string host_names = 16;
+  // When host_names is empty, the names the reverse DNS (PTR) of the
+  // address gives: chosen by whoever controls the address, so unverified,
+  // e.g. "140.82.112.4:443 (reverse DNS, unverified: lb.github.com)".
+  // Never on the node (hallpass-node looks nothing up).
+  string reverse_names = 17;
 }
 
 message Object {
