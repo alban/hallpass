@@ -90,11 +90,11 @@ func parseWords(ws []word, now time.Time) (Rule, error) {
 		return r, fmt.Errorf("%s: want allow, deny or ask first", quote(verdict))
 	}
 	if len(ws) < 2 {
-		return r, fmt.Errorf("%s: want write, exec, connect, proc or unknown after it", verdict)
+		return r, fmt.Errorf("%s: want write, exec, connect, http, proc or unknown after it", verdict)
 	}
 	kind, vals := ws[1].s, ws[2:]
 	value := ""
-	if kind != "proc" {
+	if kind != "proc" && kind != "http" {
 		switch len(vals) {
 		case 0:
 		case 1:
@@ -132,13 +132,26 @@ func parseWords(ws []word, now time.Time) (Rule, error) {
 		if len(vals) == 2 {
 			r.Object.Proc.Comm = vals[1].s
 		}
+	case "http":
+		if len(vals) < 2 {
+			return r, fmt.Errorf("%s http: want methods and a URL (GET POST https://api.github.com/**)", verdict)
+		}
+		var methods []string
+		for _, v := range vals[:len(vals)-1] {
+			methods = append(methods, v.s)
+		}
+		m, err := ParseHTTP(strings.Join(methods, ","), vals[len(vals)-1].s)
+		if err != nil {
+			return r, fmt.Errorf("%s http: %w", verdict, err)
+		}
+		r.Object.HTTP, r.Ops = m, OpHTTP
 	case "unknown":
 		if len(vals) != 0 {
 			return r, fmt.Errorf("%s unknown: takes no value", verdict)
 		}
 		r.Object.Unknown, r.Ops = true, OpAll
 	default:
-		return r, fmt.Errorf("%s: want write, exec, connect, proc or unknown after %s", quote(kind), verdict)
+		return r, fmt.Errorf("%s: want write, exec, connect, http, proc or unknown after %s", quote(kind), verdict)
 	}
 	return r, nil
 }
@@ -199,6 +212,16 @@ func (r Rule) Spec() string {
 		s += "unknown"
 	case o.IsNet():
 		s += "connect " + quote(o.NetString())
+	case o.HTTP != nil:
+		s += "http "
+		if len(o.HTTP.Methods) == 0 {
+			s += "* "
+		}
+		for _, x := range o.HTTP.Methods {
+			s += quote(x) + " "
+		}
+		_, url, _ := strings.Cut(o.HTTP.String(), " ")
+		s += quote(url)
 	default:
 		s += "?"
 	}

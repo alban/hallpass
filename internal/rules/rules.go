@@ -31,6 +31,9 @@ const (
 	// OpAll: a file rule (the project dir, --allow-path) does not let programs
 	// there run, and a file deny does not stop one from running.
 	OpExec
+	// OpHTTP is an HTTPS request through hallpass's proxy, to a host that
+	// has http rules. Not in OpAll either.
+	OpHTTP
 
 	OpFiles = OpTruncate<<1 - 1
 	OpNet   = OpConnect | OpSend
@@ -66,6 +69,8 @@ func (op Op) String() string {
 		return "send"
 	case op&OpExec != 0:
 		return "exec"
+	case op&OpHTTP != 0:
+		return "http"
 	}
 	return "?"
 }
@@ -76,6 +81,7 @@ type Object struct {
 	Proc *ProcObject
 	Inet *InetObject
 	Unix *UnixObject
+	HTTP *HTTPObject
 	// Unknown is set in lite mode when the path could not be read.
 	Unknown error
 }
@@ -187,6 +193,7 @@ type ObjectMatch struct {
 	Proc    *ProcMatch
 	Inet    *InetMatch
 	Unix    *UnixMatch
+	HTTP    *HTTPMatch
 	Unknown bool // all unreadable paths (lite)
 	// OwnListener: loopback or unix destinations whose listener was
 	// started inside the sandbox.
@@ -273,6 +280,8 @@ func (old Rule) Covers(r Rule) bool {
 		return *a.Proc == *b.Proc
 	case a.Unknown:
 		return b.Unknown
+	case a.HTTP != nil || b.HTTP != nil:
+		return a.HTTP != nil && b.HTTP != nil && a.HTTP.covers(b.HTTP)
 	}
 	return a.CoversNet(b)
 }
@@ -280,6 +289,9 @@ func (old Rule) Covers(r Rule) bool {
 // relevantOps returns the ops of r that can match its object: a file rule
 // with the network ops matches no more than without.
 func (r Rule) relevantOps() Op {
+	if r.Object.HTTP != nil {
+		return r.Ops & OpHTTP
+	}
 	if r.Object.IsNet() {
 		return r.Ops & OpNet
 	}
@@ -353,6 +365,8 @@ func (m ObjectMatch) match(obj Object) (depth int, ok bool) {
 		ok = m.Inet.match(obj.Inet)
 	case obj.Unix != nil && m.Unix != nil:
 		ok = m.Unix.match(obj.Unix)
+	case obj.HTTP != nil && m.HTTP != nil:
+		ok = m.HTTP.match(obj.HTTP)
 	}
 	if !ok {
 		return 0, false
@@ -377,6 +391,8 @@ func (m ObjectMatch) Depth() int {
 		return len(m.Unix.Name) + 1
 	case m.Unix != nil:
 		return len(m.Unix.Path)
+	case m.HTTP != nil:
+		return m.HTTP.depth()
 	}
 	return 0
 }
