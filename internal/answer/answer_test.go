@@ -299,3 +299,24 @@ func TestNamedNetAnswers(t *testing.T) {
 		t.Errorf("github.io: %+v", r)
 	}
 }
+
+// TestHTTPAnswers: answers on a proxied request cover the method on that
+// URL path.
+func TestHTTPAnswers(t *testing.T) {
+	p := defaults.NewLexical("/root", "", nil, nil)
+	obj := rules.Object{HTTP: &rules.HTTPObject{Method: "POST", Host: "api.github.com", Path: "/repos/a/b/issues"}}
+	req := &monitor.Request{Op: rules.OpHTTP, Objects: []rules.Object{obj}}
+	r := Request(p, req, 0)
+	if r.Op != "POST" || r.Path != "https://api.github.com/repos/a/b/issues" || r.Scope != "POST https://api.github.com/repos/a/b/issues" {
+		t.Errorf("request %+v", r)
+	}
+	var d monitor.Decision
+	grant(p, &d, nil, answerOps(rules.OpHTTP), obj, nil, time.Time{})
+	if len(d.AddRules) != 1 || d.AddRules[0].Spec() != "allow http POST https://api.github.com/repos/a/b/issues" || d.AddRules[0].Ops != rules.OpHTTP {
+		t.Fatalf("grant: %+v", d.AddRules)
+	}
+	obj.HTTP.Path = "/a/*"
+	if r := Request(p, req, 0); r.Scope != "" {
+		t.Errorf("a path with *: scope %q", r.Scope)
+	}
+}

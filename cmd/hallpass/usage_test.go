@@ -4,10 +4,13 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/alban/hallpass/internal/policy"
 )
 
 // TestHelpGroups checks that --help lists every flag under a topic.
@@ -32,6 +35,25 @@ func TestHelpGroups(t *testing.T) {
 	for _, g := range flagGroups {
 		if !strings.Contains(help, "\n"+g.title+":\n") {
 			t.Errorf("help lacks %q", g.title)
+		}
+	}
+}
+
+// TestHTTPFlagsNeedConnect: the --*-http flags without connect mediated
+// are refused by their own name, not the rule file's.
+func TestHTTPFlagsNeedConnect(t *testing.T) {
+	for _, c := range []struct {
+		mediate []string
+		deny    []string
+		want    string
+	}{
+		{nil, []string{"GET https://h/x"}, "--deny-http GET https://h/x: needs connect in --mediate (--mediate=write,exec,connect)"},
+		{[]string{"write"}, []string{"GET https://h/x"}, "--deny-http GET https://h/x: needs connect in --mediate (--mediate=write,connect)"},
+		{[]string{"write", "connect"}, []string{"GET https://h/x"}, ""},
+	} {
+		err := httpFlags(&policy.Spec{Mediate: c.mediate}, nil, nil, c.deny)
+		if got := fmt.Sprint(err); (c.want == "" && err != nil) || (c.want != "" && got != c.want) {
+			t.Errorf("mediate %v: got %v, want %q", c.mediate, err, c.want)
 		}
 	}
 }

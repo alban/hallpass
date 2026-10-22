@@ -59,6 +59,10 @@ Connect prompts name the address: `github.com (140.82.112.3:443)`. On a workstat
 - An address with no name from the above is shown with the names of its reverse DNS (PTR), marked unverified: `140.82.112.3:443 (reverse DNS, unverified: lb-140-82-112-3-iad.github.com)`. Whoever controls the address chooses them. hallpass makes that lookup only once the sandbox's own DNS was allowed (a query to the host's name server, or the varlink socket), through the same servers, so a sandbox denied DNS cannot use it to send data out either.
 - Host rules (`allow connect github.com:443`) match these names, in lite and strict mode: hallpass's own lookups and the relayed answers (varlink, Kubernetes), never the reverse DNS names.
 
+### HTTPS requests
+
+For the hosts with `http` rules, see [HTTPS requests](../workstation/usage.md#https-requests-experimental). The swap happens at the `connect`, in lite and strict mode alike (no kernel `connect` happens for a swapped socket); `http` rules are the proxy's alone, never in the kernel. Costs of the swap: socket options set before the `connect` are lost, a non-blocking `connect` succeeds at once instead of `EINPROGRESS`, and one more loopback connection per connection.
+
 ### Names on Kubernetes
 
 A container that mediates `connect` has its DNS queries relayed by hallpass-node, which reads the answers:

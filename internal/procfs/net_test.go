@@ -11,6 +11,7 @@ import (
 	"os"
 	"runtime"
 	"testing"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -129,7 +130,11 @@ func TestSocket(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := (SocketInfo{Domain: unix.AF_INET6, Type: unix.SOCK_DGRAM, Protocol: unix.IPPROTO_UDP}); got != want {
+	ns, err := Netns()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (SocketInfo{Domain: unix.AF_INET6, Type: unix.SOCK_DGRAM, Protocol: unix.IPPROTO_UDP, Netns: ns}); got != want {
 		t.Errorf("got %+v, want %+v", got, want)
 	}
 }
@@ -154,4 +159,65 @@ func TestSocketPeer(t *testing.T) {
 	if err != nil || si.Peer != netip.MustParseAddrPort("127.0.0.1:53") {
 		t.Errorf("connected: %+v, %v", si, err)
 	}
+}
+
+// TestSocketConnecting: a listening TCP socket is Listening; one whose
+// connect is in progress (its
+// SYN unanswered: the listener's accept queue is full) is Connecting,
+// with no Peer; once connected, it has its Peer. Its network namespace
+// is this thread's.
+func TestSocketConnecting(t *testing.T) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	l, err := unix.Socket(unix.AF_INET, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(l)
+	if err := unix.Bind(l, &unix.SockaddrInet4{Addr: [4]byte{127, 0, 0, 1}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Listen(l, 0); err != nil {
+		t.Fatal(err)
+	}
+	sa, err := unix.Getsockname(l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ns, err := Netns()
+	if err != nil || ns == 0 {
+		t.Skipf("no network namespace cookie (Linux 5.14): %v", err)
+	}
+	if si, err := Socket(unix.Gettid(), l); err != nil || !si.Listening || si.Connecting || si.Peer.IsValid() {
+		t.Errorf("listener: %+v, %v", si, err)
+	}
+	var connected, connecting *SocketInfo
+	for range 8 {
+		fd, err := unix.Socket(unix.AF_INET, unix.SOCK_STREAM|unix.SOCK_NONBLOCK|unix.SOCK_CLOEXEC, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer unix.Close(fd)
+		if err := unix.Connect(fd, sa); err != nil && err != unix.EINPROGRESS {
+			t.Fatal(err)
+		}
+		time.Sleep(50 * time.Millisecond)
+		si, err := Socket(unix.Gettid(), fd)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if si.Netns != ns {
+			t.Errorf("netns %d, want %d", si.Netns, ns)
+		}
+		switch {
+		case si.Peer.IsValid() && !si.Connecting:
+			connected = &si
+		case si.Connecting && !si.Peer.IsValid():
+			connecting = &si
+		}
+		if connected != nil && connecting != nil {
+			return
+		}
+	}
+	t.Errorf("connected %+v, connecting %+v", connected, connecting)
 }

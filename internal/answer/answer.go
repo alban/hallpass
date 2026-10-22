@@ -130,6 +130,9 @@ func answerOps(op rules.Op) rules.Op {
 	if op&rules.OpExec != 0 {
 		return rules.OpExec
 	}
+	if op&rules.OpHTTP != 0 {
+		return rules.OpHTTP
+	}
 	return rules.OpAll
 }
 
@@ -149,6 +152,8 @@ func grant(p Policy, d *monitor.Decision, rs []rules.Rule, ops rules.Op, obj rul
 		m.Path = &rules.PathMatch{Path: folder, Tree: true}
 	case obj.Proc != nil:
 		m.Proc = &rules.ProcMatch{Name: obj.Proc.Name, Comm: comm(obj.Proc)}
+	case obj.HTTP != nil:
+		m = exact(obj)
 	case obj.IsNet():
 		if h, _, ok := hostScopes(obj, names); ok {
 			m = h
@@ -209,6 +214,10 @@ func exact(obj rules.Object) rules.ObjectMatch {
 		return rules.ObjectMatch{Proc: &rules.ProcMatch{Name: obj.Proc.Name, Comm: comm(obj.Proc)}}
 	case obj.IsNet():
 		return rules.ExactNet(obj)
+	case obj.HTTP != nil:
+		// A '*' in the path reads as a glob: "never" then denies a
+		// little more; "always" is not offered (Request).
+		return rules.ObjectMatch{HTTP: &rules.HTTPMatch{Methods: []string{obj.HTTP.Method}, Host: obj.HTTP.Host, Path: obj.HTTP.Path}}
 	}
 	return rules.ObjectMatch{Unknown: true}
 }
@@ -219,6 +228,8 @@ func sameMatch(a, b rules.ObjectMatch) bool {
 		return a.Path.Path == b.Path.Path && a.Path.Tree == b.Path.Tree && len(a.Path.Args)+len(b.Path.Args) == 0
 	case a.Proc != nil && b.Proc != nil:
 		return *a.Proc == *b.Proc
+	case a.HTTP != nil || b.HTTP != nil:
+		return a.HTTP != nil && b.HTTP != nil && a.HTTP.String() == b.HTTP.String()
 	case a.IsNet() || b.IsNet():
 		return a.IsNet() && b.IsNet() && a.NetString() == b.NetString()
 	}
@@ -286,6 +297,15 @@ func Request(p Policy, req *monitor.Request, waiting int) ui.Request {
 		r.Path = ProcPath(obj.Proc)
 		what := fmt.Sprintf("%s of %q processes outside the sandbox", obj.Proc.Name, comm(obj.Proc))
 		r.Scope, r.Never = what, what
+	case obj.HTTP != nil:
+		// "curl wants to POST https://api.github.com/...": answers
+		// cover this method on this URL path.
+		r.Op, r.Path = obj.HTTP.Method, obj.HTTP.URL()
+		r.Scope, r.Never = obj.HTTP.Method+" "+r.Path, obj.HTTP.Method+" "+r.Path
+		if strings.Contains(obj.HTTP.Path, "*") || strings.HasSuffix(obj.HTTP.Path, "/**") {
+			// The rule would read it as a glob, and allow more.
+			r.Scope = ""
+		}
 	case obj.Inet != nil:
 		// "connect to 1.2.3.4:443": answers cover every protocol
 		// (rules.ExactNet), so the protocol is a detail.

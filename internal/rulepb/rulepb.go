@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"strings"
 	"time"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -47,6 +48,8 @@ func To(r rules.Rule) *pb.Rule {
 		out.Object.Kind = &pb.ObjectMatch_Unix{Unix: &pb.UnixMatch{
 			Path: o.Unix.Path, Abstract: o.Unix.Abstract, Name: o.Unix.Name, Prefix: o.Unix.Prefix,
 		}}
+	case o.HTTP != nil:
+		out.Object.Kind = &pb.ObjectMatch_Http{Http: &pb.HTTPMatch{Methods: o.HTTP.Methods, Host: o.HTTP.Host, HostSuffix: o.HTTP.HostSuffix, Path: o.HTTP.Path}}
 	case o.OwnListener:
 		out.Object.Kind = &pb.ObjectMatch_OwnListener{OwnListener: true}
 	case o.AnyNet:
@@ -101,6 +104,21 @@ func From(r *pb.Rule) (rules.Rule, error) {
 	case *pb.ObjectMatch_Unix:
 		u := k.Unix
 		out.Object.Unix = &rules.UnixMatch{Path: u.GetPath(), Abstract: u.GetAbstract(), Name: u.GetName(), Prefix: u.GetPrefix()}
+	case *pb.ObjectMatch_Http:
+		h := k.Http
+		methods := strings.Join(h.GetMethods(), ",")
+		if methods == "" {
+			methods = "*"
+		}
+		host := h.GetHost()
+		if h.GetHostSuffix() {
+			host = "*." + host
+		}
+		m, err := rules.ParseHTTP(methods, "https://"+host+h.GetPath())
+		if err != nil {
+			return out, fmt.Errorf("http rule: %w", err)
+		}
+		out.Object.HTTP = m
 	case *pb.ObjectMatch_OwnListener:
 		out.Object.OwnListener = k.OwnListener
 	case *pb.ObjectMatch_AnyNet:

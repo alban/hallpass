@@ -214,7 +214,146 @@ func (m *Monitor) handleNet(l *listener, n seccomp.Notif, sc seccomp.Rule) (ask 
 	}
 	m.markOwnListeners(n, root, op, items)
 	m.nameItems(items)
+	if len(items) == 1 && items[0].obj.Inet != nil && m.toProxy(l, n, sc, op, items[0]) {
+		return nil
+	}
 	return m.decide(l, n, sc, op, items)
+}
+
+// toProxy answers a connect to port 443 of a proxied host (see
+// proxiedNames), and reports true: a deny rule on the destination still
+// denies it; otherwise the connection is swapped to the proxy, which
+// decides each request: the address itself is not asked about. A send
+// to UDP port 443 (QUIC) or a TCP Fast Open sendto would go around the
+// proxy: it is denied. It reports false for any other connect.
+func (m *Monitor) toProxy(l *listener, n seccomp.Notif, sc seccomp.Rule, op rules.Op, it item) bool {
+	rs := m.currentRules()
+	names := m.proxiedNames(rs, it.obj.Inet)
+	tcpConnect := sc.Name == "connect" && it.obj.Inet.Proto == 6
+	switch {
+	case names == nil:
+		return false
+	case !tcpConnect:
+		// QUIC (UDP 443) or TCP Fast Open to a host with http rules
+		// would go around the proxy: the client falls back to a
+		// connect.
+		m.deny(l, n, sc, op, []rules.Object{it.obj}, []Reason{{Builtin: "proxied-host"}})
+		return true
+	}
+	if v, id, ok := rules.Eval(rs, rules.OpConnect, it.obj, m.now()); ok && v == rules.Deny {
+		m.deny(l, n, sc, rules.OpConnect, []rules.Object{it.obj}, []Reason{{Rule: id}})
+		return true
+	}
+	switch m.swapToProxy(l, n, sc, it, names) {
+	case swapOtherNetns:
+		return false
+	case swapFailed:
+		// Fail closed: a host with http rules is reached through the
+		// proxy or not at all (the workload could make the swap fail,
+		// e.g. with RLIMIT_NOFILE, to connect directly).
+		m.deny(l, n, sc, rules.OpConnect, []rules.Object{it.obj}, []Reason{{Builtin: "proxy-failed"}})
+	}
+	return true
+}
+
+// swapResult is what swapToProxy did.
+type swapResult int
+
+const (
+	// swapped: the connect returned 0, on a socket the proxy serves.
+	swapped swapResult = iota
+	// swapAnswered: the connect failed as the kernel would have failed
+	// it (EISCONN, EALREADY), or its thread is gone.
+	swapAnswered
+	// swapOtherNetns: the socket is of another network namespace than
+	// the session's (one the workload made, e.g. unshare -rn): it is not
+	// swapped, and its connect is decided as any other, by the rules;
+	// it leaves through a relay whose own connect is mediated.
+	swapOtherNetns
+	// swapFailed: not swapped, nothing answered.
+	swapFailed
+)
+
+// swapToProxy answers connect n of it: the workload's socket is replaced
+// by one end of a loopback TCP pair whose other end the proxy serves,
+// and the connect returns 0. The pair is made by Config.Pair, in the
+// network namespace of the session (Config.Netns), which must be the
+// socket's: a socket keeps the network namespace it was made in, so
+// the end installed in the workload reaches nothing the workload's own
+// sockets could not, if it is connected again. A socket connected
+// already, or connecting, is answered as the kernel would (EISCONN,
+// EALREADY), never swapped nor continued.
+func (m *Monitor) swapToProxy(l *listener, n seccomp.Notif, sc seccomp.Rule, it item, names []string) swapResult {
+	r, ok := l.n.(fdReplacer)
+	if !ok || !l.n.IDValid(n.ID) {
+		return swapFailed
+	}
+	fd := int(int32(n.Args[0]))
+	flags, err := fdFlags(int(n.PID), fd)
+	if err != nil {
+		return swapFailed
+	}
+	// Best effort: another thread can connect or close the fd after
+	// this look; that only changes what the workload's own fd does.
+	si, err := procfs.Socket(int(n.PID), fd)
+	if err != nil {
+		return swapFailed
+	}
+	switch {
+	case si.Peer.IsValid(), si.Listening:
+		_ = l.n.Deny(n.ID, int32(unix.EISCONN))
+		return swapAnswered
+	case si.Connecting:
+		_ = l.n.Deny(n.ID, int32(unix.EALREADY))
+		return swapAnswered
+	case m.netns == 0 || si.Netns == 0:
+		// Unknown (before Linux 5.14): fail closed.
+		return swapFailed
+	case si.Netns != m.netns:
+		return swapOtherNetns
+	case m.pair == nil:
+		return swapFailed
+	}
+	client, server, err := m.pair(int(n.PID))
+	if err != nil {
+		m.warn("proxy: " + err.Error())
+		return swapFailed
+	}
+	f, err := client.File()
+	client.Close()
+	if err != nil {
+		server.Close()
+		return swapFailed
+	}
+	defer f.Close()
+	// Fd, each call, puts the descriptor in blocking mode: once only.
+	cfd := int(f.Fd())
+	// The duplicate shares the socket's flags: the workload's own.
+	if err := unix.SetNonblock(cfd, flags&unix.O_NONBLOCK != 0); err != nil {
+		server.Close()
+		return swapFailed
+	}
+	var newfd uint32
+	if flags&unix.O_CLOEXEC != 0 {
+		newfd = unix.O_CLOEXEC
+	}
+	subject := buildSubject(n.PID, l.root)
+	if err := r.ReplaceFD(n.ID, cfd, fd, newfd); err != nil {
+		server.Close()
+		if errors.Is(err, unix.ENOENT) {
+			return swapAnswered
+		}
+		return swapFailed
+	}
+	if err := r.Return(n.ID, 0); err != nil && !errors.Is(err, unix.ENOENT) {
+		m.warn("proxy: " + err.Error())
+	}
+	m.report(n, sc.Name, rules.OpConnect, []rules.Object{it.obj}, true, []Reason{{Builtin: "proxy"}})
+	m.mu.Lock()
+	p := m.proxy
+	m.mu.Unlock()
+	go p.Serve(server, it.obj.Inet.Addr, names, subject)
+	return swapped
 }
 
 // nameItems sets the names of the inet items (InetObject.Names), for the
@@ -222,7 +361,7 @@ func (m *Monitor) handleNet(l *listener, n seccomp.Notif, sc seccomp.Rule) (ask 
 // the lookups in progress (the workload connects as soon as its own
 // answer comes).
 func (m *Monitor) nameItems(items []item) {
-	if m.names == nil || !hasHostRule(m.currentRules()) {
+	if m.names == nil || !needNames(m.currentRules()) {
 		return
 	}
 	for _, it := range items {
@@ -232,9 +371,10 @@ func (m *Monitor) nameItems(items []item) {
 	}
 }
 
-// hasHostRule reports whether a rule of rs selects addresses by name.
-func hasHostRule(rs []rules.Rule) bool {
-	return slices.ContainsFunc(rs, isHostRule)
+// needNames reports whether a rule of rs selects addresses by name: a
+// host rule, or an http rule (its host is proxied).
+func needNames(rs []rules.Rule) bool {
+	return slices.ContainsFunc(rs, func(r rules.Rule) bool { return isHostRule(r) || r.Object.HTTP != nil })
 }
 
 func isHostRule(r rules.Rule) bool {

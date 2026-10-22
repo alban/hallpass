@@ -65,6 +65,7 @@ function objectText(o) {
   if (o.proc) return "/proc: " + (o.proc.name || "");
   if (o.inet) return protoName(o.inet.proto) + " " + inetAddr(o.inet.addr || "", o.inet.port) + (o.inet.ownListener ? " (listener started inside the sandbox)" : "");
   if (o.unix) return "unix " + (o.unix.abstract ? "@" + (o.unix.name || "") : o.unix.path || "") + (o.unix.ownListener ? " (listener started inside the sandbox)" : "");
+  if (o.http) return (o.http.method || "") + " https://" + (o.http.host || "") + (o.http.path || "");
   if ("unknown" in o) return "(unknown path: " + o.unknown + ")";
   return "?";
 }

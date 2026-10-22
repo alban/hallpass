@@ -11,6 +11,7 @@ package monitor
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"path/filepath"
 	"sort"
@@ -59,6 +60,17 @@ type Config struct {
 	// the monitor, which records the names resolved answers (see
 	// relayResolve). Only for a monitor sharing the workload's view.
 	ResolveSocket string
+	// Pair makes the loopback TCP pair a connect to a proxied host is
+	// swapped for (egress.Pair), in the network namespace the
+	// workload's sockets of Netns live in: the end installed in the
+	// workload stays a socket of its network, whatever it connects it
+	// to later. pid is the connecting thread. nil: no swap, and the
+	// hosts with http rules are not reached.
+	Pair func(pid int) (client, server *net.TCPConn, err error)
+	// Netns is the cookie of the workload's network namespace when the
+	// session started (procfs.Netns): only its sockets are swapped. 0:
+	// unknown (before Linux 5.14), none is.
+	Netns uint64
 }
 
 var (
@@ -162,6 +174,8 @@ type Source int
 const (
 	SourceSeccomp Source = iota
 	SourceLSM
+	// SourceProxy: hallpass's HTTPS proxy (rules.OpHTTP).
+	SourceProxy
 )
 
 // Decision is what a client sends to Apply.
@@ -226,6 +240,9 @@ type Monitor struct {
 	names    *dnsnames.Names
 	resolve  string
 	relays   atomic.Int32
+	proxy    Proxy // guarded by mu
+	pair     func(int) (*net.TCPConn, *net.TCPConn, error)
+	netns    uint64
 	table    []seccomp.Rule
 	now      func() time.Time
 
@@ -260,6 +277,8 @@ func New(cfg Config) (*Monitor, error) {
 		mediate:  cfg.Mediate,
 		names:    cfg.Names,
 		resolve:  resolveSocket(cfg),
+		pair:     cfg.Pair,
+		netns:    cfg.Netns,
 		table:    syscallTable(),
 		now:      time.Now,
 		pending:  map[uint64]*request{},
@@ -428,7 +447,7 @@ func (m *Monitor) check(r *rules.Rule) error {
 	if o.Proc != nil {
 		n++
 	}
-	for _, set := range []bool{o.Unknown, o.Inet != nil, o.Unix != nil, o.OwnListener, o.AnyNet} {
+	for _, set := range []bool{o.Unknown, o.Inet != nil, o.Unix != nil, o.OwnListener, o.AnyNet, o.HTTP != nil} {
 		if set {
 			n++
 		}
@@ -475,6 +494,11 @@ func (m *Monitor) check(r *rules.Rule) error {
 			in.Prefix = in.Prefix.Masked()
 		}
 		r.Object.Inet = &in
+	}
+	if h := o.HTTP; h != nil {
+		if _, err := rules.ParseHTTP("*", "https://"+h.Host+h.Path); err != nil || r.Ops != rules.OpHTTP {
+			return fmt.Errorf("monitor: http rule on %s: want op http and a valid URL", h)
+		}
 	}
 	if u := o.Unix; u != nil && !u.Abstract {
 		if !filepath.IsAbs(u.Path) {

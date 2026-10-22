@@ -20,6 +20,10 @@ import (
 // through (allow). Rules for any unix socket go to u.
 func toLSM(r rules.Rule, u *lsm.UnixRules) (*lsm.Rule, *lsm.ProcRule, error) {
 	deny, ask := r.Verdict == rules.Deny, r.Verdict == rules.Ask
+	if r.Object.HTTP != nil {
+		// The proxy's: requests are decided there, never in the kernel.
+		return nil, nil, nil
+	}
 	if o := r.Object; o.IsNet() {
 		if r.Ops&rules.OpNet != rules.OpNet {
 			return nil, nil, fmt.Errorf("%w: %+v", ErrUnsupported, r)

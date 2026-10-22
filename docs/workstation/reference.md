@@ -48,6 +48,9 @@ See [Programs](usage.md#programs).
       --allow-connect DEST network destination allowed without asking (repeatable; needs connect in --mediate)
       --deny-connect DEST  network destination always denied (repeatable, wins over --allow-connect)
       --ask-connect DEST   network destination asked about, even inside what --allow-connect allows (repeatable)
+      --allow-http REQ     HTTPS requests allowed through hallpass's proxy: "GET https://api.github.com/**" (methods comma-separated, or *)
+      --ask-http REQ       HTTPS requests asked about (same syntax)
+      --deny-http REQ      HTTPS requests denied (same syntax)
       --dns MODE           observe (default: prompts name the addresses the sandbox's DNS queries resolve to) | off
 ```
 

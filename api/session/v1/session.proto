@@ -178,7 +178,15 @@ message Object {
     string unknown = 3; // why the path could not be read
     InetObject inet = 4;
     UnixObject unix = 5;
+    HTTPObject http = 6;
   }
+}
+
+// An HTTPS request through hallpass's proxy, to a host with http rules.
+message HTTPObject {
+  string method = 1; // GET, POST...
+  string host = 2;
+  string path = 3; // without the query
 }
 
 // An IPv4 or IPv6 destination; IPv4-mapped addresses are unmapped.
@@ -316,7 +324,17 @@ message ObjectMatch {
     UnixMatch unix = 5;
     bool own_listener = 6; // loopback/unix listeners started inside the sandbox
     bool any_net = 7;      // every network destination, unix included
+    HTTPMatch http = 8;
   }
+}
+
+// HTTPS requests: methods (none: any), a host (or the names below it),
+// and a path glob ("*" within a segment, a final "/**" everything below).
+message HTTPMatch {
+  repeated string methods = 1;
+  string host = 2;
+  bool host_suffix = 3;
+  string path = 4;
 }
 
 message InetMatch {

@@ -67,6 +67,8 @@ func toPBObject(o rules.Object) *pb.Object {
 			Proto: uint32(o.Inet.Proto), Addr: o.Inet.Addr.Addr().String(), Port: uint32(o.Inet.Addr.Port()),
 			OwnListener: o.Inet.OwnListener,
 		}}}
+	case o.HTTP != nil:
+		return &pb.Object{Kind: &pb.Object_Http{Http: &pb.HTTPObject{Method: o.HTTP.Method, Host: o.HTTP.Host, Path: o.HTTP.Path}}}
 	case o.Unix != nil:
 		return &pb.Object{Kind: &pb.Object_Unix{Unix: &pb.UnixObject{
 			Path: o.Unix.Path, Abstract: o.Unix.Abstract, Name: o.Unix.Name, Type: int32(o.Unix.Type),

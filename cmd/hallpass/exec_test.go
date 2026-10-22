@@ -113,6 +113,12 @@ func goHelper(mode string) int {
 	if mode == "dns" {
 		return dnsHelper(os.Args[1:])
 	}
+	if mode == "https" {
+		return httpsHelper(os.Args[1:])
+	}
+	if mode == "swap" {
+		return swapHelper(os.Args[1:])
+	}
 	if mode == "varlink" {
 		return varlinkHelper(os.Args[1:])
 	}

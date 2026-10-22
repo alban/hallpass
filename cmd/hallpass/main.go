@@ -53,7 +53,7 @@ var flagGroups = []struct {
 	{"Sandbox", []string{"mode", "mediate", "escalate", "allow-userns", "no-implicit", "rules"}},
 	{"Files", []string{"C", "workdir", "allow-path", "deny-path", "ask-path", "allow-tty"}},
 	{"Programs", []string{"allow-exec", "deny-exec", "group"}},
-	{"Network (experimental)", []string{"allow-connect", "deny-connect", "ask-connect", "dns"}},
+	{"Network (experimental)", []string{"allow-connect", "deny-connect", "ask-connect", "dns", "allow-http", "ask-http", "deny-http"}},
 	{"Prompts", []string{"prompt", "timeout"}},
 	{"Session", []string{"log", "wait", "version"}},
 }
@@ -200,6 +200,10 @@ func parseFlags(argv []string, printPolicy bool) (o options, code int, ok bool) 
 	var allowExec, denyExec listFlag
 	fs.Var(&allowExec, "allow-exec", "`program` allowed to run without asking (repeatable, comma-separated): a name looked up in $PATH, a path, dir/** for every program below dir, or a group of programs: "+strings.Join(programs.Names(), ", "))
 	fs.Var(&denyExec, "deny-exec", "`program` never allowed to run (repeatable, comma-separated, same syntax but no groups, wins over --allow-exec)")
+	var allowHTTP, askHTTP, denyHTTP listFlag
+	fs.Var(&allowHTTP, "allow-http", "HTTPS `request`s allowed through hallpass's proxy, as `GET https://api.github.com/**` (methods, comma-separated, or *; the path a glob): the host's connections on port 443 go through the proxy (repeatable; needs connect in --mediate)")
+	fs.Var(&askHTTP, "ask-http", "HTTPS `request`s asked about (repeatable, same syntax)")
+	fs.Var(&denyHTTP, "deny-http", "HTTPS `request`s denied (repeatable, same syntax)")
 	var ruleFiles listFlag
 	fs.Var(&ruleFiles, "rules", "rule `file`: one rule per line, as `allow write ~/.cache/go-build/**`, `deny connect 169.254.169.254`, `allow exec @git`, or a group, `group @build /usr/bin/make /usr/bin/cc`; quote values with blanks (repeatable; see the docs, Rule files)")
 	var groupFlags listFlag
@@ -226,6 +230,9 @@ func parseFlags(argv []string, printPolicy bool) (o options, code int, ok bool) 
 		return o, fail(err), false
 	}
 	if spec.RuleFiles, spec.Vars, err = readRuleFiles(ruleFiles, o.workdir); err != nil {
+		return o, fail(err), false
+	}
+	if err = httpFlags(&spec, allowHTTP, askHTTP, denyHTTP); err != nil {
 		return o, fail(err), false
 	}
 	if o.policy, err = spec.Validate(); err != nil {

@@ -281,7 +281,7 @@ func (s Spec) Validate() (Policy, error) {
 			switch {
 			case r.Ops&rules.OpExec != 0 && p.Mediate&seccomp.Exec == 0:
 				return Policy{}, fail(errors.New("needs exec in mediate"))
-			case r.Ops&rules.OpNet == r.Ops && p.Mediate&seccomp.Connect == 0:
+			case (r.Ops&rules.OpNet == r.Ops || r.Ops == rules.OpHTTP) && p.Mediate&seccomp.Connect == 0:
 				// A deny that does nothing must not look like it works.
 				return Policy{}, fail(errors.New("needs connect in mediate"))
 			}

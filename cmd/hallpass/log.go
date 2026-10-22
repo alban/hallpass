@@ -160,6 +160,8 @@ func netName(o rules.Object) string {
 		return o.Inet.String()
 	case o.Unix != nil:
 		return o.Unix.String()
+	case o.HTTP != nil:
+		return o.HTTP.Method + " " + o.HTTP.URL()
 	}
 	return ""
 }

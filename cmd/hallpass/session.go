@@ -5,8 +5,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -17,9 +19,11 @@ import (
 
 	"github.com/alban/hallpass/internal/defaults"
 	"github.com/alban/hallpass/internal/dnsnames"
+	"github.com/alban/hallpass/internal/egress"
 	"github.com/alban/hallpass/internal/launch"
 	"github.com/alban/hallpass/internal/lsm"
 	"github.com/alban/hallpass/internal/monitor"
+	"github.com/alban/hallpass/internal/procfs"
 	"github.com/alban/hallpass/internal/seccomp"
 	"github.com/alban/hallpass/internal/sessionapi"
 	"github.com/alban/hallpass/internal/tty"
@@ -104,6 +108,13 @@ func runSession(cfg sessionConfig) (int, error) {
 		kernel = ks
 	}
 	mcfg := monitor.Config{Kernel: kernel, Mediate: cfg.Mediate}
+	if cfg.Mediate&seccomp.Connect != 0 {
+		// The supervisor shares the sandbox's network: the pair of a
+		// swap to the proxy is made here, and only the sockets of this
+		// network namespace are swapped.
+		mcfg.Pair = func(int) (*net.TCPConn, *net.TCPConn, error) { return egress.Pair() }
+		mcfg.Netns, _ = procfs.Netns()
+	}
 	if cfg.DNS && cfg.Mediate&seccomp.Connect != 0 {
 		// The sandbox shares the host's network and resolv.conf: read
 		// once, so a later change cannot make hallpass's lookups reach
@@ -164,6 +175,18 @@ func runSession(cfg sessionConfig) (int, error) {
 			// offers it anyway, and prints the address if xdg-open fails.
 			t.OnWeb = func() { s.openWeb("") }
 		}
+	}
+
+	if hosts := httpHosts(cfg.Defaults.Rules()); len(hosts) > 0 {
+		if mcfg.Names == nil {
+			return 0, errors.New("http rules need hallpass to name addresses (--dns=observe, and connect in --mediate)")
+		}
+		env, stop, err := startProxy(m, hosts, s.notice)
+		if err != nil {
+			return 0, fmt.Errorf("https proxy: %w", err)
+		}
+		defer stop()
+		cfg.Env = append(cfg.Env, env...)
 	}
 
 	spec := launch.ProcSpec{

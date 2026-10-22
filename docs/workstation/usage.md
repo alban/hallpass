@@ -106,6 +106,31 @@ The cloud metadata addresses, `169.254.169.254`, `fd00:ec2::254`, `168.63.129.16
 
 Some destinations are always denied, even with `--allow-connect=all`, because they could answer for the sandbox: the session sockets (in `$XDG_RUNTIME_DIR/hallpass/`) and the ports of the running [`hallpass web`](../answers/web.md) UIs, including one started after the session. The Ctrl-] menu and `hallpass policy` list them as "(hallpass sessions)" and "(hallpass web UI)"; they cannot be removed. Writes to `$XDG_RUNTIME_DIR/hallpass/` are always denied too, with or without network mediation.
 
+### HTTPS requests (experimental)
+
+A host with at least one `http` rule (in a rule file, or `--allow-http`, `--ask-http`, `--deny-http`) goes through hallpass's HTTPS proxy, and each request is decided on its own: method, host and path. Every other host stays a direct connection, unseen.
+
+```sh
+hallpass --mediate=write,exec,connect --rules github.rules -- copilot
+```
+
+```text
+# github.rules
+allow connect *.githubusercontent.com:443
+allow http GET https://api.github.com/**
+allow http GET POST https://github.com/alban/*/git-upload-pack
+ask   http POST https://api.github.com/repos/alban/*/issues/*/comments
+deny  http *    https://api.github.com/repos/*/*/pulls/*/merge
+```
+
+- `METHOD...`: one or more methods (`GET POST`), or `*` for any. `URL`: `https://HOST/PATH`, `HOST` a name or `*.name` for the names below it, `PATH` a glob: `*` within one segment, a final `/**` everything below. No query, port or user.
+- A request no rule decides is asked about, like a write: `gh (pid 4242) wants to POST: https://api.github.com/repos/alban/hallpass/issues/42/comments`. "temp" and "always" cover that method on that path; a denied request gets a `403` from hallpass, and the server never sees it.
+- How: when the sandbox connects to port 443 of an address whose name has `http` rules (see [Names](../how-it-works/network.md#names): the sandbox's own DNS answer must name it), hallpass puts one end of a loopback TCP connection in place of the sandbox's socket. Its proxy answers TLS with a certificate from a certificate authority made for the session, whose key never leaves hallpass's memory and which can only sign for the hosts of the `http` rules (X.509 name constraints). Allowed requests go to the address the sandbox connected to, over TLS checked against the system's roots, under the name the sandbox asked for, and their answers back.
+- That connection is made in the sandbox's network namespace: disconnected and connected again, the socket reaches only what the sandbox's own sockets reach, and its connect is asked about like any other. A socket of a network namespace the sandbox made itself (`unshare -n`, rootless Podman) is not swapped: its connect is decided by the `connect` rules, and it reaches out only through a relay whose own connect is asked about. A connect on a socket connected already fails with `EISCONN`, as without hallpass. A copy of the socket made before the connect (`dup`) keeps the original socket, unconnected. Linux 5.14 or later: before, the hosts with `http` rules cannot be reached.
+- The sandbox trusts that authority through a bundle in `$XDG_RUNTIME_DIR/hallpass/PID.trust/` (the system's roots and the session's), named by `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`, `REQUESTS_CA_BUNDLE`, `AWS_CA_BUNDLE` and `CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE`, and `NODE_EXTRA_CA_CERTS` (the session's alone). A program with its own roots, or that pins its server's certificate, fails with a TLS error.
+- HTTP/1.1 only: clients offering HTTP/2 fall back. The hosts are those of the `http` rules when the session starts. GraphQL (`POST /graphql`) cannot be told read from write by its URL.
+- Not on Kubernetes yet: a HallpassPolicy with `http` rules is refused.
+
 ## Rule files
 
 `--rules FILE` (repeatable) adds the rules of a file, one per line, in the syntax of `hallpass answer add`:
@@ -127,6 +152,7 @@ allow exec  @build
 ```
 
 - `write PATH`, `exec PROGRAM` and `connect DESTINATION` are the rules of `--allow-path`, `--allow-exec` and `--allow-connect`, with `allow`, `deny` or `ask`: `PATH/**` is a tree, `PATH` that file or program only (unlike `--ask-path`, always a tree). `allow exec @NAME` allows a group of programs. exec rules need exec in `--mediate`, connect rules connect.
+- `http METHOD... URL` are HTTPS requests through hallpass's proxy (see [HTTPS requests](#https-requests-experimental)): `allow http GET https://api.github.com/**`, `ask http POST PUT https://api.github.com/repos/*/*/issues/**`, `deny http * https://api.github.com/repos/*/*/pulls/*/merge`. They need connect in `--mediate`.
 - `group @NAME PROGRAM...` defines a group of programs, as `--group` does: absolute paths, `/dir/**` for every program below. A group is defined once, by `--group` or a rule file; a built-in group can be replaced.
 - Words are separated by blanks, and are made of letters, digits and `/ . _ - + * ~ @ : = % [ ]`. Anything else (a blank, a quote, `#`, `,`, `$`...) needs quotes, as in a shell:
     - `"..."` expands variables, and takes the escapes `\"`, `\\`, `\$` and those of Go strings (`\t`, `\n`, `\x1b`, `\u202e`...): `"$HOME/My Documents/**"`.

@@ -7,6 +7,7 @@ package procfs
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net/netip"
 	"os"
@@ -156,6 +157,47 @@ type SocketInfo struct {
 	// Peer is the address an AF_INET or AF_INET6 socket is connected
 	// to; not valid otherwise.
 	Peer netip.AddrPort
+	// Connecting: a TCP socket whose connect is in progress (SYN sent,
+	// non-blocking), with no Peer yet.
+	Connecting bool
+	// Listening: a TCP socket listening, with no Peer: connect fails on
+	// it with EISCONN.
+	Listening bool
+	// Netns is the cookie of the network namespace the socket was made
+	// in (SO_NETNS_COOKIE), which it keeps whatever process holds it; 0
+	// before Linux 5.14.
+	Netns uint64
+}
+
+// soNetnsCookie is SO_NETNS_COOKIE (asm-generic: amd64, arm64).
+const soNetnsCookie = 71
+
+// TCP states (include/net/tcp_states.h): TCP_SYN_SENT while a socket
+// connects, TCP_LISTEN once it listens.
+const (
+	tcpSynSent = 2
+	tcpListen  = 10
+)
+
+// socketNetns returns the cookie of socket fd's network namespace, 0
+// when the kernel has none (ENOPROTOOPT, before Linux 5.14).
+func socketNetns(fd int) (uint64, error) {
+	c, err := unix.GetsockoptUint64(fd, unix.SOL_SOCKET, soNetnsCookie)
+	if errors.Is(err, unix.ENOPROTOOPT) {
+		return 0, nil
+	}
+	return c, err
+}
+
+// Netns returns the cookie of the calling thread's network namespace,
+// through a socket made for it; 0 before Linux 5.14.
+func Netns() (uint64, error) {
+	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		return 0, err
+	}
+	defer unix.Close(fd)
+	return socketNetns(fd)
 }
 
 // Socket returns what socket fd of thread tid is, through a copy of the
@@ -192,6 +234,15 @@ func Socket(tid int, fd int) (SocketInfo, error) {
 		case *unix.SockaddrInet6:
 			si.Peer = netip.AddrPortFrom(netip.AddrFrom16(sa.Addr).Unmap(), uint16(sa.Port))
 		}
+		if si.Type == unix.SOCK_STREAM && !si.Peer.IsValid() {
+			if ti, err := unix.GetsockoptTCPInfo(s, unix.IPPROTO_TCP, unix.TCP_INFO); err == nil {
+				si.Connecting = ti.State == tcpSynSent
+				si.Listening = ti.State == tcpListen
+			}
+		}
+	}
+	if si.Netns, err = socketNetns(s); err != nil {
+		return SocketInfo{}, err
 	}
 	return si, nil
 }
