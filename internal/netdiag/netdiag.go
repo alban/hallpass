@@ -1,6 +1,8 @@
 // Copyright The hallpass Authors
 // SPDX-License-Identifier: Apache-2.0
 
+//go:build linux
+
 // Package netdiag lists listening sockets with NETLINK_SOCK_DIAG, and
 // finds which processes hold them, so lite mode can tell a listener
 // started inside the sandbox from one outside. It is racy: a socket can

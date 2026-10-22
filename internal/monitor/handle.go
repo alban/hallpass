@@ -1,6 +1,8 @@
 // Copyright The hallpass Authors
 // SPDX-License-Identifier: Apache-2.0
 
+//go:build linux
+
 package monitor
 
 import (
@@ -27,27 +29,6 @@ const maxChain = 64
 // syscall of the same thread again: a signal handler run during the syscall
 // makes the kernel restart it, and seccomp notifies it again.
 const restartTTL = 2 * time.Second
-
-// request is a pending Request and the notifications waiting on it.
-type request struct {
-	pub     *Request
-	key     string
-	op      rules.Op
-	obj     rules.Object
-	advance bool // Request.Advance: only a verdict closes it
-	waiters []waiter
-	done    chan struct{}
-	allow   bool
-	// timedOut: denied by a verdict because nobody answered in time
-	// (Decision.TimedOut).
-	timedOut bool
-	why      Reason
-}
-
-type waiter struct {
-	l  *listener
-	id uint64
-}
 
 // item is one object of a syscall, and its decision so far.
 type item struct {
@@ -345,7 +326,7 @@ func (m *Monitor) open(l *listener, n seccomp.Notif, syscall string, op rules.Op
 	}
 	key := requestKey(op, obj, **subject, n.ID)
 	if r := m.byKey[key]; r != nil {
-		r.waiters = append(r.waiters, waiter{l, n.ID})
+		r.waiters = append(r.waiters, notifWaiter(l, n.ID))
 		return r, Reason{}, false
 	}
 	r = &request{
@@ -358,75 +339,11 @@ func (m *Monitor) open(l *listener, n seccomp.Notif, syscall string, op rules.Op
 		key:     key,
 		op:      op,
 		obj:     obj,
-		waiters: []waiter{{l, n.ID}},
+		waiters: []waiter{notifWaiter(l, n.ID)},
 		done:    make(chan struct{}),
 	}
 	m.addLocked(r)
 	return r, Reason{}, false
-}
-
-// addLocked makes r pending, with a new ID. mu must be held.
-func (m *Monitor) addLocked(r *request) {
-	m.nextReqID++
-	r.pub.ID = m.nextReqID
-	m.pending[r.pub.ID] = r
-	m.byKey[r.key] = r
-	m.emitLocked(Event{Opened: r.pub})
-	if !m.polling {
-		m.polling = true
-		go m.poll()
-	}
-}
-
-// closeLocked closes r. mu must be held.
-func (m *Monitor) closeLocked(r *request, allow bool, why Reason) {
-	delete(m.pending, r.pub.ID)
-	delete(m.byKey, r.key)
-	r.allow, r.why = allow, why
-	close(r.done)
-	m.emitLocked(Event{Closed: &Closed{ID: r.pub.ID, Why: why}})
-}
-
-// settleLocked closes the pending requests the rules now decide. mu must
-// be held.
-func (m *Monitor) settleLocked() {
-	now := m.now()
-	for _, r := range m.pending {
-		if r.advance {
-			continue
-		}
-		if v, id, ok := rules.Eval(m.rules, r.op, r.obj, now); ok && v != rules.Ask {
-			m.closeLocked(r, v == rules.Allow, Reason{Rule: id})
-		}
-	}
-}
-
-// poll closes the requests whose tasks all died: the kernel does not signal
-// a withdrawn notification. It runs only while requests are pending.
-func (m *Monitor) poll() {
-	t := time.NewTicker(pollPeriod)
-	defer t.Stop()
-	for range t.C {
-		m.mu.Lock()
-		if len(m.pending) == 0 {
-			m.polling = false
-			m.mu.Unlock()
-			return
-		}
-		for _, r := range m.pending {
-			alive := false
-			for _, w := range r.waiters {
-				if w.l.n.IDValid(w.id) {
-					alive = true
-					break
-				}
-			}
-			if !alive {
-				m.closeLocked(r, false, Reason{Died: true})
-			}
-		}
-		m.mu.Unlock()
-	}
 }
 
 // allow continues the syscall. once are the items allowed by a verdict or

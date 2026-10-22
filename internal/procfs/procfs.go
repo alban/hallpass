@@ -1,6 +1,8 @@
 // Copyright The hallpass Authors
 // SPDX-License-Identifier: Apache-2.0
 
+//go:build linux
+
 // Package procfs resolves a target process's syscall arguments (dirfd + path
 // string) into an absolute, symlink-free path, by reading
 // /proc/<pid>/{cwd,fd,mem}: a host path, or a path below a root directory
