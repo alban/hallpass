@@ -110,20 +110,32 @@ Some destinations are always denied, even with `--allow-net=all`, because they c
 allow write ~/.cache/go-build/**
 ask   write $WORKDIR/.git/hooks/**     # hooks run outside the sandbox
 allow write /tmp/build.log
+allow write ~/"My Documents"/notes/**
 allow exec  /usr/local/go/bin/**
 allow exec  @busybox
 deny  exec  /usr/bin/curl
 allow connect tcp:*:443
 deny  connect 169.254.169.254
+
+group @build /usr/bin/make /usr/bin/cc "/opt/my tools/**"
+allow exec  @build
 ```
 
 - `write PATH`, `exec PROGRAM` and `connect DESTINATION` are the rules of `--allow-path`, `--allow-exec` and `--allow-net`, with `allow`, `deny` or `ask`: `PATH/**` is a tree, `PATH` that file or program only (unlike `--ask-path`, always a tree). `allow exec @NAME` allows a group of programs. exec rules need exec in `--mediate`, connect rules connect.
-- `#` starts a comment, at the start of a line or after a blank: a path cannot contain ` #`.
-- `~` and the variables `$HOME`, `$WORKDIR` (the project directory), `$UID` and `$XDG_RUNTIME_DIR` (`${NAME}` too) are expanded; any other variable is an error.
+- `group @NAME PROGRAM...` defines a group of programs, as `--group` does: absolute paths, `/dir/**` for every program below. A group is defined once, by `--group` or a rule file; a built-in group can be replaced.
+- Words are separated by blanks, and are made of letters, digits and `/ . _ - + * ~ @ : = % [ ]`. Anything else (a blank, a quote, `#`, `,`, `$`...) needs quotes, as in a shell:
+    - `"..."` expands variables, and takes the escapes `\"`, `\\`, `\$` and those of Go strings (`\t`, `\n`, `\x1b`, `\u202e`...): `"$HOME/My Documents/**"`.
+    - `'...'` is literal: `'/data/$weird'`.
+    - Quoted and unquoted parts make one word when nothing separates them: `~/"My Documents"/**`.
+    - Characters that are not printable must be written as escapes, in double quotes.
+- `#` at the start of a word starts a comment, to the end of the line; `"a#b"` is quoted.
+- `~` at the start of a word and the variables `$HOME`, `$WORKDIR` (the project directory), `$UID` and `$XDG_RUNTIME_DIR` (`${NAME}` too) are expanded, unquoted or in `"..."`; any other variable is an error.
 - No expiry (`for 10m`): the rules last the session.
 - A file in the project directory is refused: the sandbox could write it for the next session.
 
 The rules are listed by `hallpass policy --rules FILE` with the flags' ones, and can be edited during the session like them. An invalid line stops hallpass with its file and line number. A [HallpassPolicy](../kubernetes/policies.md) takes the same text in its `rules` field.
+
+The rules listed by hallpass and shown for editing are written in the same syntax, quoted when needed: a path with a terminal escape or a bidi override shows as `"/x\x1b[2J"` or `"/x\u202e"`, never raw.
 
 ## Background processes
 

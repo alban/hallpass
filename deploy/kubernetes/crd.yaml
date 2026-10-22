@@ -39,7 +39,11 @@ spec:
                     /workspace/**", "deny write /workspace/.git/**", "ask
                     write /workspace/secret", "allow exec /usr/bin/make",
                     "allow exec @git", "deny connect 169.254.169.254",
-                    "allow connect tcp:*:443"... (# starts a comment).
+                    "allow connect tcp:*:443"... A value with a blank or
+                    another character than letters, digits and
+                    /._-+*~@:=%[] is quoted: "/workspace/My Documents/**".
+                    # at the start of a word starts a comment; "group @name
+                    /usr/bin/a /opt/b/**" defines a program group.
                     Container paths, without variables. exec rules need
                     exec in mediate, connect rules connect; the rules are
                     checked by hallpass-node, which refuses a pod naming a

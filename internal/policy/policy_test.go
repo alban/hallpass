@@ -231,6 +231,24 @@ func TestRules(t *testing.T) {
 		}
 	}
 
+	// A group a rule file defines is known to every rule and to
+	// allowExec, wherever it is used; one may replace a built-in group.
+	p, err = Spec{
+		AllowExec: []string{"@build"},
+		Rules:     "allow exec @git",
+		RuleFiles: []RuleFile{{Name: "g.rules", Text: `group @build /usr/bin/make "/opt/my cc/**"` + "\ngroup @git /usr/local/bin/git"}},
+	}.Validate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defs := map[string][]string{}
+	for _, d := range p.GroupDefs() {
+		defs[d.Name] = d.Members
+	}
+	if !reflect.DeepEqual(defs["@build"], []string{"/usr/bin/make", "/opt/my cc/**"}) || !reflect.DeepEqual(defs["@git"], []string{"/usr/local/bin/git"}) || !reflect.DeepEqual(p.AllowGroups, []string{"@build", "@git"}) {
+		t.Errorf("groups %q, allowed %v", defs, p.AllowGroups)
+	}
+
 	for _, c := range []struct {
 		spec Spec
 		want string
@@ -239,6 +257,12 @@ func TestRules(t *testing.T) {
 		{Spec{RuleFiles: []RuleFile{{Name: "b.rules", Text: "\nallow exec /x"}}, Mediate: []string{"write"}}, "rules: b.rules:2: needs exec in mediate"},
 		{Spec{Rules: "allow connect all"}, "rules: rules:1: needs connect in mediate"},
 		{Spec{Rules: "allow exec @nope"}, `rules: rules:1: "@nope": unknown group`},
+		{Spec{Rules: "group @x /bin/a", Groups: map[string][]string{"@x": {"/bin/b"}}}, "rules: rules:1: @x: already defined (groups)"},
+		{Spec{Rules: "group @x /bin/a", RuleFiles: []RuleFile{{Name: "b.rules", Text: "\ngroup @x /bin/b"}}}, "rules: b.rules:2: @x: already defined (rules:1)"},
+		{Spec{Rules: "group @X /bin/a"}, `rules: rules:1: "@X": not a group name`},
+		{Spec{Rules: "group @x rel/a"}, "rules: rules:1: @x:"},
+		{Spec{Rules: "group @x @git"}, "rules: rules:1: @x:"},
+		{Spec{Rules: "group @x /bin/a", Mediate: []string{"write"}}, "rules: rules:1: needs exec in mediate"},
 	} {
 		_, err := c.spec.Validate()
 		var fe *FieldError

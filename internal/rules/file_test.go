@@ -31,7 +31,12 @@ deny	exec	/usr/bin/curl
 allow connect unix:/run/user/${UID}/bus
 allow exec @git
 
-allow write /tmp/a#b
+allow write "/tmp/a#b"
+allow write ~/"My Documents/a#b" # a comment
+allow write "$HOME/a b" # $NOPE in a comment
+allow write '/x/$y'
+group @build make /usr/bin/cc "/opt/my tools/**"
+allow exec @build
 `
 	got, err := ParseFile("build.rules", text, testVars)
 	if err != nil {
@@ -43,6 +48,9 @@ allow write /tmp/a#b
 		if s == "" {
 			s = r.Rule.Spec()
 		}
+		if r.Members != nil {
+			s = fmt.Sprintf("group %s %q", r.Group, r.Members)
+		}
 		lines = append(lines, fmt.Sprintf("%d %s", r.Line, s))
 	}
 	want := []string{
@@ -51,7 +59,12 @@ allow write /tmp/a#b
 		"4 deny exec /usr/bin/curl",
 		"5 allow connect unix:/run/user/1000/bus",
 		"6 @git",
-		"8 allow write /tmp/a#b",
+		`8 allow write "/tmp/a#b"`,
+		`9 allow write "/home/me/My Documents/a#b"`,
+		`10 allow write "/home/me/a b"`,
+		`11 allow write "/x/\$y"`,
+		`12 group @build ["make" "/usr/bin/cc" "/opt/my tools/**"]`,
+		"13 @build",
 	}
 	if strings.Join(lines, "\n") != strings.Join(want, "\n") {
 		t.Errorf("got\n%s\nwant\n%s", strings.Join(lines, "\n"), strings.Join(want, "\n"))
@@ -73,6 +86,12 @@ func TestParseFileErrors(t *testing.T) {
 		{"deny exec @shells", "f:1: deny exec @shells: a group can only be allowed"},
 		{"maybe write /x", "f:1:"},
 		{"allow write $/x", "f:1:"},
+		{"allow write /a b", "f:1: allow write: 2 words"},
+		{"allow write /a#b", "f:1:"},
+		{`allow write "/a`, "f:1:"},
+		{"group @x", "f:1: group:"},
+		{"group x make", "f:1: group:"},
+		{"allow exec @a @b", "f:1:"},
 	} {
 		_, err := ParseFile("f", c.text, testVars)
 		var fe *FileError

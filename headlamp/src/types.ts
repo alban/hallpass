@@ -154,7 +154,7 @@ export function editLabel(r: Rule): string {
   return (r.label || '').startsWith('@') ? '' : r.label || '';
 }
 
-export const ruleSyntax = `VERDICT KIND VALUE [for DURATION]: allow write /data/**, deny exec /usr/bin/curl, ask connect tcp:10.0.0.1:443 for 1h, allow proc environ bash. An allow rule gives at most what answering "always" would, or narrows the rule it replaces.`;
+export const ruleSyntax = `VERDICT KIND VALUE [for DURATION]: allow write /data/**, deny exec /usr/bin/curl, ask connect tcp:10.0.0.1:443 for 1h, allow proc environ bash. Quote a value with a blank or another character than letters, digits and /._-+*~@:=%[]: allow write "/data/My Documents/**". An allow rule gives at most what answering "always" would, or narrows the rule it replaces.`;
 
 export function ruleObject(r: Rule): string {
   if (r.object?.path) {

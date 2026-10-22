@@ -48,7 +48,11 @@ spec:
 ```
 
 `rules` has one rule per line, in the syntax of `hallpass answer add`
-and of [rule files](../workstation/usage.md#rule-files); `#` starts a comment.
+and of [rule files](../workstation/usage.md#rule-files): a value with a
+blank or a character other than letters, digits and `/._-+*~@:=%[]` is
+quoted (`"/workspace/My Documents/**"`), `#` at the start of a word
+starts a comment, and `group @NAME PROGRAM...` defines a group as
+`groups` does (a name is defined once, in either).
 Paths are the container's, with no variables (`$HOME`). The most
 specific rule decides, an ask wins over an allow as specific, and a deny
 wins over both. A pod naming a policy with an invalid rule fails to

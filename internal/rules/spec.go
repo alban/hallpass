@@ -11,8 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
-	"unicode/utf8"
 )
 
 // SpecSyntax describes the syntax ParseSpec reads, for help texts.
@@ -23,36 +21,64 @@ const SpecSyntax = `VERDICT KIND VALUE [for DURATION]
   connect N  a destination: tcp:1.2.3.4:443, [2001:db8::1]:22, unix:/run/x.sock, unix:@name, all...
   proc N C   /proc/<pid>/N of the processes named C
   unknown    the paths that could not be read (lite mode)
-  DURATION   e.g. 10m or 2h; without it, until removed`
+  DURATION   e.g. 10m or 2h; without it, until removed
+  Quote a value with a blank or another character than letters, digits and
+  / . _ - + * ~ @ : = % [ ]: "/home/u/My Documents/**" (escapes: \" \\ \$ \t...).`
 
 // ParseSpec reads a rule written the way Spec writes it, with an optional
 // "for DURATION" suffix setting its expiry from now:
 //
 //	allow write /home/u/src/**
+//	allow write "/home/u/My Documents/**"
 //	deny exec /usr/bin/curl for 1h
 //	ask connect tcp:140.82.112.21:443
 //	allow proc oom_score_adj chrome
 //
+// The words are those of lex, without variables; a comment is ignored.
 // The kinds are the ops of hallpass-request and the categories of
 // --mediate. The ops come from the kind: every file and network op for
 // write, proc and unknown (like an answer), the network ones for
 // connect, exec for exec.
 func ParseSpec(s string, now time.Time) (Rule, error) {
+	ws, _, err := lex(s, nil)
+	if err != nil {
+		return Rule{}, err
+	}
+	return parseWords(ws, now)
+}
+
+// ParseSpecArgs is ParseSpec for a rule given as command-line arguments:
+// a single argument is the text of the rule, several are its words,
+// unquoted by the shell already (allow write "/a b").
+func ParseSpecArgs(args []string, now time.Time) (Rule, error) {
+	if len(args) == 1 {
+		return ParseSpec(args[0], now)
+	}
+	ws := make([]word, len(args))
+	for i, a := range args {
+		ws[i] = word{s: a, bare: true}
+	}
+	return parseWords(ws, now)
+}
+
+// parseWords reads the rule of words ws.
+func parseWords(ws []word, now time.Time) (Rule, error) {
 	var r Rule
-	s = strings.TrimSpace(s)
-	if i := strings.LastIndex(s, " for "); i >= 0 {
-		dur := strings.TrimSpace(s[i+len(" for "):])
-		d, err := time.ParseDuration(dur)
+	if n := len(ws); n >= 2 && ws[n-2].bare && ws[n-2].s == "for" {
+		d, err := time.ParseDuration(ws[n-1].s)
 		if err != nil {
-			return r, fmt.Errorf("%q: %q is not a duration (10m, 2h...)", s, dur)
+			return r, fmt.Errorf("for %s: not a duration (10m, 2h...)", quote(ws[n-1].s))
 		}
 		if d <= 0 {
-			return r, fmt.Errorf("%q: the duration must be positive", s)
+			return r, fmt.Errorf("for %s: the duration must be positive", quote(ws[n-1].s))
 		}
 		r.Expires = now.Add(d)
-		s = strings.TrimSpace(s[:i])
+		ws = ws[:n-2]
 	}
-	verdict, rest, _ := strings.Cut(s, " ")
+	if len(ws) == 0 {
+		return r, errors.New("empty rule: want allow, deny or ask, a kind and a value")
+	}
+	verdict := ws[0].s
 	switch verdict {
 	case "allow":
 		r.Verdict = Allow
@@ -61,10 +87,22 @@ func ParseSpec(s string, now time.Time) (Rule, error) {
 	case "ask":
 		r.Verdict = Ask
 	default:
-		return r, fmt.Errorf("%q: want allow, deny or ask first", s)
+		return r, fmt.Errorf("%s: want allow, deny or ask first", quote(verdict))
 	}
-	kind, value, _ := strings.Cut(strings.TrimSpace(rest), " ")
-	value = strings.TrimSpace(value)
+	if len(ws) < 2 {
+		return r, fmt.Errorf("%s: want write, exec, connect, proc or unknown after it", verdict)
+	}
+	kind, vals := ws[1].s, ws[2:]
+	value := ""
+	if kind != "proc" {
+		switch len(vals) {
+		case 0:
+		case 1:
+			value = vals[0].s
+		default:
+			return r, fmt.Errorf("%s %s: %d words: quote a value with a blank in it (\"/home/u/My Documents/**\")", verdict, quote(kind), len(vals))
+		}
+	}
 	switch kind {
 	case "write", "exec":
 		m, err := parsePathSpec(value)
@@ -87,18 +125,20 @@ func ParseSpec(s string, now time.Time) (Rule, error) {
 		}
 		r.Ops = OpNet
 	case "proc":
-		name, comm, _ := strings.Cut(value, " ")
-		if name == "" || strings.Contains(name, "/") {
-			return r, fmt.Errorf("%s proc: want a /proc file name, then a process name", verdict)
+		if len(vals) == 0 || len(vals) > 2 || vals[0].s == "" || strings.Contains(vals[0].s, "/") {
+			return r, fmt.Errorf("%s proc: want a /proc file name, then a process name (quoted if it has a blank)", verdict)
 		}
-		r.Object.Proc, r.Ops = &ProcMatch{Name: name, Comm: strings.TrimSpace(comm)}, OpAll
+		r.Object.Proc, r.Ops = &ProcMatch{Name: vals[0].s}, OpAll
+		if len(vals) == 2 {
+			r.Object.Proc.Comm = vals[1].s
+		}
 	case "unknown":
-		if value != "" {
+		if len(vals) != 0 {
 			return r, fmt.Errorf("%s unknown: takes no value", verdict)
 		}
 		r.Object.Unknown, r.Ops = true, OpAll
 	default:
-		return r, fmt.Errorf("%q: want write, exec, connect, proc or unknown after %s", s, verdict)
+		return r, fmt.Errorf("%s: want write, exec, connect, proc or unknown after %s", quote(kind), verdict)
 	}
 	return r, nil
 }
@@ -145,16 +185,20 @@ func (r Rule) Spec() string {
 		} else {
 			s += "write "
 		}
-		s += o.Path.Path
+		p := o.Path.Path
 		if o.Path.Tree {
-			s = strings.TrimSuffix(s, "/") + "/**"
+			p = strings.TrimSuffix(p, "/") + "/**"
 		}
+		s += quote(p)
 	case o.Proc != nil:
-		s += strings.TrimSpace("proc " + o.Proc.Name + " " + o.Proc.Comm)
+		s += "proc " + quote(o.Proc.Name)
+		if o.Proc.Comm != "" {
+			s += " " + quote(o.Proc.Comm)
+		}
 	case o.Unknown:
 		s += "unknown"
 	case o.IsNet():
-		s += "connect " + o.NetString()
+		s += "connect " + quote(o.NetString())
 	default:
 		s += "?"
 	}
@@ -181,22 +225,13 @@ func (r Rule) EditSpec(now time.Time) string {
 	return s
 }
 
-// Editable reports whether r reads back from its EditSpec at now. The
-// syntax has no quoting: a file named "**", a path with " for " or a
-// newline, a rule with ops of two kinds, an IPv6 zone... cannot be written
-// in it. Such a rule can be removed, not edited as text. Nor can a rule
-// with a control or format character (an escape sequence, a bidi
-// override) or invalid UTF-8.
+// Editable reports whether r reads back from its EditSpec at now. Quotes
+// write any path or name, with escapes for the characters that are not
+// printable (an escape sequence, a bidi override shows as \x1b, \u202e),
+// but not everything: a file named "**", a rule with ops of two kinds, an
+// IPv6 zone... Such a rule can be removed, not edited as text.
 func (r Rule) Editable(now time.Time) bool {
 	spec := r.EditSpec(now)
-	if !utf8.ValidString(spec) || strings.ContainsFunc(spec, func(c rune) bool {
-		return unicode.IsControl(c) || unicode.Is(unicode.Cf, c)
-	}) {
-		// The text is shown raw in the line editor: no terminal escapes
-		// or bidi overrides from a path the workload named (what
-		// ui.Sanitize replaces elsewhere).
-		return false
-	}
 	back, err := ParseSpec(spec, now)
 	if err != nil || back.Verdict != r.Verdict || back.Expires.IsZero() != r.Expires.IsZero() {
 		return false

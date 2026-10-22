@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 func TestParseSpec(t *testing.T) {
@@ -21,8 +23,14 @@ func TestParseSpec(t *testing.T) {
 		{in: "  deny write /etc/passwd  ", spec: "deny write /etc/passwd", ops: OpAll},
 		{in: "allow write /**", spec: "allow write /**", ops: OpAll},
 		{in: "allow write /a/../b/", spec: "allow write /b", ops: OpAll},
-		{in: "ask write /x y/z for 10m", spec: "ask write /x y/z", ops: OpAll, expires: 10 * time.Minute},
-		{in: "allow write /d/for x", spec: "allow write /d/for x", ops: OpAll},
+		{in: `ask write "/x y/z" for 10m`, spec: `ask write "/x y/z"`, ops: OpAll, expires: 10 * time.Minute},
+		{in: "allow write /d/for", spec: "allow write /d/for", ops: OpAll},
+		{in: `deny write "/x for 1h"`, spec: `deny write "/x for 1h"`, ops: OpAll},
+		{in: `allow write /home/u/"My Documents"/**`, spec: `allow write "/home/u/My Documents/**"`, ops: OpAll},
+		{in: `allow write '/a "b" $c'`, spec: `allow write "/a \"b\" \$c"`, ops: OpAll},
+		{in: `allow write "/a\tb\u00e9"`, spec: `allow write "/a\tbé"`, ops: OpAll},
+		{in: "allow write /x # a comment", spec: "allow write /x", ops: OpAll},
+		{in: `allow write "/a#b"`, spec: `allow write "/a#b"`, ops: OpAll},
 		{in: "allow exec /usr/bin/git", spec: "allow exec /usr/bin/git", ops: OpExec},
 		{in: "deny exec /opt/bin/** for 1h", spec: "deny exec /opt/bin/**", ops: OpExec, expires: time.Hour},
 		{in: "allow connect tcp:1.2.3.4:443", spec: "allow connect tcp:1.2.3.4:443", ops: OpNet},
@@ -30,7 +38,7 @@ func TestParseSpec(t *testing.T) {
 		{in: "allow connect own-listeners", spec: "allow connect own-listeners", ops: OpNet},
 		{in: "ask connect unix:@name*", spec: "ask connect unix:@name*", ops: OpNet},
 		{in: "allow proc oom_score_adj chrome", spec: "allow proc oom_score_adj chrome", ops: OpAll},
-		{in: "allow proc oom_score_adj Web Content", spec: "allow proc oom_score_adj Web Content", ops: OpAll},
+		{in: `allow proc oom_score_adj "Web Content"`, spec: `allow proc oom_score_adj "Web Content"`, ops: OpAll},
 		{in: "deny unknown", spec: "deny unknown", ops: OpAll},
 	} {
 		r, err := ParseSpec(tc.in, now)
@@ -59,6 +67,10 @@ func TestParseSpec(t *testing.T) {
 		"deny exec /usr/bin/curl for 1d", "allow write /a for b/c", // not durations
 		"allow path /x", "allow net all", // the old names
 		"allow write /src/*.go", "allow write /src/**/x", "deny exec /usr/bin/py?", "allow write /a/[b]/**",
+		"allow write /d/for x", "ask write /x y/z for 10m", "allow proc oom_score_adj Web Content", // blanks, unquoted
+		`deny write /x "for" 1h`,                 // a quoted for is a word
+		`allow write ~/x`, `allow write $HOME/x`, // no variables
+		`allow write /a#b`, `allow write "/x`, `allow write "/x\q"`, "allow write \"/x\x1b\"",
 	} {
 		if r, err := ParseSpec(in, now); err == nil {
 			t.Errorf("ParseSpec(%q) = %v, want an error", in, r)
@@ -169,23 +181,32 @@ func TestEditable(t *testing.T) {
 
 		{"a file named **", Rule{Ops: OpAll, Object: path("/home/u/**", false), Verdict: Deny}, false},
 		{"a glob", Rule{Ops: OpAll, Object: path("/home/u/*.go", false)}, false},
-		{"for in a path", Rule{Ops: OpAll, Object: path("/x for 1h", false), Verdict: Deny}, false},
-		{"newline", Rule{Ops: OpAll, Object: path("/x\nallow write /**", false), Verdict: Deny}, false},
-		{"terminal escape", Rule{Ops: OpAll, Object: path("/x\x1b]0;title\x07", false)}, false},
-		{"C1 control", Rule{Ops: OpAll, Object: path("/x\u009b2J", false)}, false},
-		{"exec with escape", Rule{Ops: OpExec, Object: path("/bin/\x1b[2J", false)}, false},
-		{"bidi override", Rule{Ops: OpAll, Object: path("/home/u/\u202egnp.sh", false)}, false},
-		{"invalid UTF-8", Rule{Ops: OpAll, Object: path("/x\xff", false)}, false},
+		{"for in a path", Rule{Ops: OpAll, Object: path("/x for 1h", false), Verdict: Deny}, true},
+		{"spaces and quotes", Rule{Ops: OpAll, Object: path(`/home/u/My "Documents" $x 'y' #z,`, true)}, true},
+		{"newline", Rule{Ops: OpAll, Object: path("/x\nallow write /y", false), Verdict: Deny}, true},
+		{"terminal escape", Rule{Ops: OpAll, Object: path("/x\x1b]0;title\x07", false)}, true},
+		{"C1 control", Rule{Ops: OpAll, Object: path("/x\u009b2J", false)}, true},
+		{"exec with escape", Rule{Ops: OpExec, Object: path("/bin/\x1b2J", false)}, true},
+		{"bidi override", Rule{Ops: OpAll, Object: path("/home/u/\u202egnp.sh", false)}, true},
+		{"invalid UTF-8", Rule{Ops: OpAll, Object: path("/x\xff", false)}, true},
 		{"non-ASCII", Rule{Ops: OpAll, Object: path("/home/u/café/日本", false)}, true},
-		{"trailing space", Rule{Ops: OpExec, Object: path("/bin/x ", false)}, false},
+		{"trailing space", Rule{Ops: OpExec, Object: path("/bin/x ", false)}, true},
 		{"exec and write", Rule{Ops: OpAll | OpExec, Object: path("/bin/x", false)}, false},
 		{"write only", Rule{Ops: OpWrite, Object: path("/x", false)}, false},
 		{"abstract name with *", Rule{Ops: OpNet, Object: ObjectMatch{Unix: &UnixMatch{Abstract: true, Name: "a*"}}}, false},
-		{"comm with for", Rule{Ops: OpAll, Object: ObjectMatch{Proc: &ProcMatch{Name: "environ", Comm: "x for 1h"}}}, false},
-		{"comm with spaces around", Rule{Ops: OpAll, Object: ObjectMatch{Proc: &ProcMatch{Name: "environ", Comm: " x"}}}, false},
+		{"abstract name with a space", Rule{Ops: OpNet, Object: ObjectMatch{Unix: &UnixMatch{Abstract: true, Name: "a b"}}}, true},
+		{"comm with for", Rule{Ops: OpAll, Object: ObjectMatch{Proc: &ProcMatch{Name: "environ", Comm: "x for 1h"}}}, true},
+		{"comm with spaces around", Rule{Ops: OpAll, Object: ObjectMatch{Proc: &ProcMatch{Name: "environ", Comm: " x"}}}, true},
 	} {
 		if got := tc.r.Editable(now); got != tc.want {
 			t.Errorf("%s: Editable() = %v, want %v (spec %q)", tc.name, got, tc.want, tc.r.EditSpec(now))
+		}
+		// The text is shown raw in the line editor: no terminal escapes
+		// or bidi overrides from a path the workload named.
+		if spec := tc.r.EditSpec(now); !utf8.ValidString(spec) || strings.ContainsFunc(spec, func(c rune) bool {
+			return unicode.IsControl(c) || unicode.Is(unicode.Cf, c)
+		}) {
+			t.Errorf("%s: EditSpec() = %q", tc.name, spec)
 		}
 	}
 }

@@ -68,7 +68,7 @@ func runRuleCmd(ctx context.Context, c pb.SessionClient, args []string, out io.W
 		if len(args) > 1 && args[0] == "--label" {
 			label, args = args[1], args[2:]
 		}
-		d, err = addRuleDecision(strings.Join(args, " "), label, now)
+		d, err = addRuleDecision(args, label, now)
 	case "edit":
 		if len(args) < 3 {
 			return errors.New("usage: hallpass answer [PID] edit ID RULE")
@@ -77,7 +77,7 @@ func runRuleCmd(ctx context.Context, c pb.SessionClient, args []string, out io.W
 		if err != nil {
 			return err
 		}
-		d, err = editRuleDecision(old, strings.Join(args[2:], " "), snap.Generation, now)
+		d, err = editRuleDecision(old, args[2:], snap.Generation, now)
 		if err != nil {
 			return err
 		}
@@ -144,8 +144,8 @@ func ruleByID(rs []rules.Rule, id string) (rules.Rule, error) {
 }
 
 // addRuleDecision adds the rule spec, labelled label.
-func addRuleDecision(spec, label string, now time.Time) (monitor.Decision, error) {
-	r, err := rules.ParseSpec(spec, now)
+func addRuleDecision(args []string, label string, now time.Time) (monitor.Decision, error) {
+	r, err := rules.ParseSpecArgs(args, now)
 	if err != nil {
 		return monitor.Decision{}, err
 	}
@@ -153,13 +153,13 @@ func addRuleDecision(spec, label string, now time.Time) (monitor.Decision, error
 	return monitor.Decision{AddRules: []rules.Rule{r}}, nil
 }
 
-// editRuleDecision replaces old by the rule spec, if the rules are still at
-// generation gen.
-func editRuleDecision(old rules.Rule, spec string, gen uint64, now time.Time) (monitor.Decision, error) {
+// editRuleDecision replaces old by the rule of args (rules.ParseSpecArgs),
+// if the rules are still at generation gen.
+func editRuleDecision(old rules.Rule, args []string, gen uint64, now time.Time) (monitor.Decision, error) {
 	if err := checkEditable(old, now); err != nil {
 		return monitor.Decision{}, err
 	}
-	r, err := rules.ParseSpec(spec, now)
+	r, err := rules.ParseSpecArgs(args, now)
 	if err != nil {
 		return monitor.Decision{}, err
 	}

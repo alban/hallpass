@@ -33,13 +33,14 @@ Rules live as long as the session: nothing is written back to the command line o
 
 ## Editing rules
 
-Every rule of a session can be edited, deleted or added, including those from the command line or the policy: from the [web UI](web.md#editing-rules), the [Headlamp plugin](../kubernetes/answer.md#headlamp-plugin), the Ctrl-] menu (`r`) or `hallpass answer`. A change applies to this session only. Rules are written as `VERDICT KIND VALUE [for DURATION]`. The syntax has no quoting: a rule on a name it cannot write (a file named `**`, a path containing ` for ` or a newline...) can be deleted, not edited.
+Every rule of a session can be edited, deleted or added, including those from the command line or the policy: from the [web UI](web.md#editing-rules), the [Headlamp plugin](../kubernetes/answer.md#headlamp-plugin), the Ctrl-] menu (`r`) or `hallpass answer`. A change applies to this session only. Rules are written as `VERDICT KIND VALUE [for DURATION]`, the syntax of [rule files](../workstation/usage.md#rule-files) without variables: a value with a blank or a character other than letters, digits and `/._-+*~@:=%[]` is quoted (`"/home/me/My Documents/**"`, `"/x for 1h"`), with escapes for the characters that are not printable (`"/x\x1b[2J"`). A rule the syntax cannot write (a file named `**`, a rule covering both writes and exec...) can be deleted, not edited.
 
 ```
 allow write /home/me/src/**       # writing in a tree; without /**, the file only
 deny exec /usr/bin/curl for 1h    # running a program, for an hour
 ask connect tcp:140.82.112.21:443 # a destination; unix:/run/x.sock, unix:@name, all...
 allow proc oom_score_adj chrome   # /proc/<pid>/oom_score_adj of the processes named chrome
+allow write "/home/me/My Documents/**"
 deny unknown                      # the paths hallpass could not read (lite mode)
 ```
 
@@ -56,7 +57,7 @@ $ hallpass answer add 'deny exec /usr/bin/curl'
 $ hallpass answer delete 43
 ```
 
-`hallpass answer [PID] add --label TEXT RULE` labels the rule; an edit keeps the label, except a program group's (`@shells`). An edit is a new rule, with a new ID.
+`hallpass answer [PID] add --label TEXT RULE` labels the rule; an edit keeps the label, except a program group's (`@shells`). An edit is a new rule, with a new ID. RULE is one argument, quoted for the shell as above, or several: `hallpass answer add allow write "/home/me/My Documents/**"` (the shell removed the quotes, so each argument is one word).
 
 ## Prompts that don't flood you
 

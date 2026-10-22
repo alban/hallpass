@@ -180,19 +180,39 @@ func (s Spec) Validate() (Policy, error) {
 			*f.out = append(*f.out, m)
 		}
 	}
+	files := s.RuleFiles
+	if s.Rules != "" {
+		files = append([]RuleFile{{Name: "rules", Text: s.Rules}}, files...)
+	}
+	vars := s.Vars
+	if vars == nil {
+		vars = func(name string) (string, error) {
+			return "", fmt.Errorf("$%s: no variables in a policy's rules (paths are the container's)", name)
+		}
+	}
+	parsed := make([][]rules.FileRule, len(files))
+	for i, f := range files {
+		if parsed[i], err = rules.ParseFile(f.Name, f.Text, vars); err != nil {
+			return Policy{}, &FieldError{"rules", err}
+		}
+	}
 	if len(s.Groups) > 0 && p.Mediate&seccomp.Exec == 0 {
 		return Policy{}, &FieldError{"groups", errors.New("needs exec in mediate")}
 	}
-	for _, name := range slices.Sorted(maps.Keys(s.Groups)) {
+	defined := map[string]string{} // group name: where
+	addGroup := func(name string, members []string) error {
 		if !programs.ValidName(name) {
-			return Policy{}, &FieldError{"groups", fmt.Errorf("%q: not a group name (@, then lowercase letters, digits or -, 32 bytes at most)", name)}
+			return fmt.Errorf("%q: not a group name (@, then lowercase letters, digits or -, 32 bytes at most)", name)
 		}
-		if len(s.Groups[name]) == 0 {
-			return Policy{}, &FieldError{"groups", fmt.Errorf("%s: no programs", name)}
+		if where, ok := defined[name]; ok {
+			return fmt.Errorf("%s: already defined (%s)", name, where)
 		}
-		ms, err := programPaths(s.Groups[name], nil, nil)
+		if len(members) == 0 {
+			return fmt.Errorf("%s: no programs", name)
+		}
+		ms, err := programPaths(members, nil, nil)
 		if err != nil {
-			return Policy{}, &FieldError{"groups", fmt.Errorf("%s: %w", name, err)}
+			return fmt.Errorf("%s: %w", name, err)
 		}
 		d := programs.Def{Name: name}
 		for _, m := range ms {
@@ -203,6 +223,28 @@ func (s Spec) Validate() (Policy, error) {
 			}
 		}
 		p.Groups = append(p.Groups, d)
+		return nil
+	}
+	for _, name := range slices.Sorted(maps.Keys(s.Groups)) {
+		if err := addGroup(name, s.Groups[name]); err != nil {
+			return Policy{}, &FieldError{"groups", err}
+		}
+		defined[name] = "groups"
+	}
+	for i, f := range files {
+		for _, fr := range parsed[i] {
+			if fr.Members == nil {
+				continue
+			}
+			err := addGroup(fr.Group, fr.Members)
+			if err == nil && p.Mediate&seccomp.Exec == 0 {
+				err = errors.New("needs exec in mediate")
+			}
+			if err != nil {
+				return Policy{}, &FieldError{"rules", &rules.FileError{Name: f.Name, Line: fr.Line, Err: err}}
+			}
+			defined[fr.Group] = fmt.Sprintf("%s:%d", f.Name, fr.Line)
+		}
 	}
 	known := p.GroupDefs()
 	for _, f := range []struct {
@@ -218,24 +260,13 @@ func (s Spec) Validate() (Policy, error) {
 			return Policy{}, &FieldError{f.name, err}
 		}
 	}
-	files := s.RuleFiles
-	if s.Rules != "" {
-		files = append([]RuleFile{{Name: "rules", Text: s.Rules}}, files...)
-	}
-	vars := s.Vars
-	if vars == nil {
-		vars = func(name string) (string, error) {
-			return "", fmt.Errorf("$%s: no variables in a policy's rules (paths are the container's)", name)
-		}
-	}
-	for _, f := range files {
-		frs, err := rules.ParseFile(f.Name, f.Text, vars)
-		if err != nil {
-			return Policy{}, &FieldError{"rules", err}
-		}
-		for _, fr := range frs {
+	for i, f := range files {
+		for _, fr := range parsed[i] {
 			fail := func(err error) error {
 				return &FieldError{"rules", &rules.FileError{Name: f.Name, Line: fr.Line, Err: err}}
+			}
+			if fr.Members != nil {
+				continue
 			}
 			if fr.Group != "" {
 				if p.Mediate&seccomp.Exec == 0 {

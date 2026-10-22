@@ -198,7 +198,7 @@ func parseFlags(argv []string, printPolicy bool) (o options, code int, ok bool) 
 	fs.Var(&allowExec, "allow-exec", "`program` allowed to run without asking (repeatable, comma-separated): a name looked up in $PATH, a path, dir/** for every program below dir, or a group of programs: "+strings.Join(programs.Names(), ", "))
 	fs.Var(&denyExec, "deny-exec", "`program` never allowed to run (repeatable, comma-separated, same syntax but no groups, wins over --allow-exec)")
 	var ruleFiles listFlag
-	fs.Var(&ruleFiles, "rules", "rule `file`: one rule per line, as `allow write ~/.cache/go-build/**`, `deny connect 169.254.169.254`, `allow exec @git` (repeatable; see the docs, Rule files)")
+	fs.Var(&ruleFiles, "rules", "rule `file`: one rule per line, as `allow write ~/.cache/go-build/**`, `deny connect 169.254.169.254`, `allow exec @git`, or a group, `group @build /usr/bin/make /usr/bin/cc`; quote values with blanks (repeatable; see the docs, Rule files)")
 	var groupFlags listFlag
 	fs.Var(&groupFlags, "group", "a group of programs, as `@name=program,...`, offered in prompts and allowed by --allow-exec=@name (repeatable; programs as in --allow-exec, without groups); replaces the built-in group of the same name")
 	if err := fs.Parse(argv); err != nil {

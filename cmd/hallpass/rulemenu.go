@@ -85,7 +85,7 @@ func (s *session) rulesMenu(t menuTerm) {
 				msg = ""
 				continue
 			}
-			d, err = addRuleDecision(spec, strings.TrimSpace(label), time.Now())
+			d, err = addRuleDecision([]string{spec}, strings.TrimSpace(label), time.Now())
 		case 'e':
 			var old rules.Rule
 			old, err = s.pickRule(t, head, rs, " Edit rule ID: ")
@@ -104,7 +104,7 @@ func (s *session) rulesMenu(t menuTerm) {
 				msg = ""
 				continue
 			}
-			d, err = editRuleDecision(old, spec, gen, time.Now())
+			d, err = editRuleDecision(old, []string{spec}, gen, time.Now())
 		case 'd':
 			var old rules.Rule
 			old, err = s.pickRule(t, head, rs, " Delete rule ID: ")
