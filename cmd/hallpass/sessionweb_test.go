@@ -28,7 +28,7 @@ func TestTerminalMenuOpenWeb(t *testing.T) {
 
 	m, scr, c, done := runTerm(t, e, `echo ready; exec sleep 60`)
 	t.Cleanup(func() { _ = c.Process.Kill() })
-	waitFor(t, func() bool { return strings.Contains(scr.text(), "ready") }, "the command")
+	waitStarted(t, scr)
 	u := openWebFromMenu(t, m, scr, opened)
 	// Nothing printed: the confirmation shows in the overlay, and goes.
 	time.Sleep(200 * time.Millisecond)
@@ -144,7 +144,7 @@ exec sleep 60
 `, self)
 			m, scr, c, done := runTermAfter(t, e, "", script, flags...)
 			t.Cleanup(func() { _ = c.Process.Kill() })
-			waitFor(t, func() bool { return strings.Contains(scr.text(), "ready") }, "the command")
+			waitStarted(t, scr)
 			u := openWebFromMenu(t, m, scr, opened)
 			port := strings.TrimSuffix(strings.TrimPrefix(u, "http://127.0.0.1:"), "/")
 

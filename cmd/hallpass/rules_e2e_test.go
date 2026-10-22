@@ -80,7 +80,7 @@ func TestTerminalMenuRules(t *testing.T) {
 	e := newEnv(t)
 	m, scr, c, _ := runTerm(t, e, `echo ready; exec sleep 60`)
 	t.Cleanup(func() { _ = c.Process.Kill(); _ = c.Wait() })
-	waitFor(t, func() bool { return strings.Contains(scr.text(), "ready") }, "the command")
+	waitStarted(t, scr)
 	t.Cleanup(func() {
 		if t.Failed() {
 			t.Logf("screen:\n%s", scr.text())

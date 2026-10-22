@@ -77,6 +77,18 @@ func waitFor(t *testing.T, cond func() bool, what string) {
 	t.Fatalf("timed out waiting for %s", what)
 }
 
+// waitStarted waits until the command on scr printed "ready": the session
+// started, which takes as long as its socket to appear (socketWait).
+func waitStarted(t *testing.T, scr *screen) {
+	t.Helper()
+	for start := time.Now(); time.Since(start) < socketWait(); time.Sleep(25 * time.Millisecond) {
+		if strings.Contains(scr.text(), "ready") {
+			return
+		}
+	}
+	t.Fatal("timed out waiting for the command")
+}
+
 // runTerm starts hallpass --prompt=term running script on a pty and mirrors its
 // output into a screen. done is closed when the output ends.
 func runTerm(t *testing.T, e env, script string) (m *os.File, scr *screen, c *exec.Cmd, done chan struct{}) {
