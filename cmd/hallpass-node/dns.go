@@ -6,6 +6,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"os"
 	"strconv"
@@ -14,8 +15,10 @@ import (
 	"github.com/alban/hallpass/internal/dnsfwd"
 	"github.com/alban/hallpass/internal/dnsnames"
 	"github.com/alban/hallpass/internal/dnsredirect"
+	"github.com/alban/hallpass/internal/egress"
 	"github.com/alban/hallpass/internal/monitor"
 	"github.com/alban/hallpass/internal/netns"
+	"github.com/alban/hallpass/internal/procfs"
 	"github.com/alban/hallpass/internal/rules"
 	"golang.org/x/sys/unix"
 )
@@ -37,6 +40,23 @@ type dnsState struct {
 	// rawSockets: the container has CAP_NET_RAW: its names are shown,
 	// never matched by host rules.
 	rawSockets bool
+	// cookie is the network namespace's cookie (procfs.Netns), 0 if
+	// unknown: the sockets the proxy may swap (monitor.Config.Netns).
+	cookie uint64
+}
+
+// pair makes the loopback TCP pair of a swap to the proxy in the
+// container's network namespace (monitor.Config.Pair): made in
+// hallpass-node's own, the end installed in the workload could be
+// connected again to hallpass-node's loopback (its session API) or
+// leave from its pod IP. On the worker's thread, which stays in the
+// container's namespace.
+func (d *dnsState) pair(int) (client, server *net.TCPConn, err error) {
+	err = d.w.Do(func() error {
+		client, server, err = egress.Pair()
+		return err
+	})
+	return client, server, err
 }
 
 // capNetRaw is CAP_NET_RAW's bit.
@@ -84,6 +104,13 @@ func startDNS(pid int, warn func(string)) (*dnsState, error) {
 		d.names.SetDisplayOnly()
 	}
 	if d.w, err = netns.Enter(pid); err != nil {
+		return nil, err
+	}
+	if err := d.w.Do(func() (err error) {
+		d.cookie, err = procfs.Netns()
+		return err
+	}); err != nil {
+		d.close()
 		return nil, err
 	}
 	var aps []netip.AddrPort

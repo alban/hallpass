@@ -44,12 +44,15 @@ type session struct {
 	// ks is the session in the kernel, strict mode only. Closed after m.
 	ks *lsm.Session
 	// dns names the destinations (connect mediated); nil: none.
-	dns    *dnsState
-	evs    <-chan []monitor.Event
-	start  time.Time
-	log    *slog.Logger
-	rec    recorder
-	denied *denials
+	dns *dnsState
+	// trust holds the proxy's CA files of the container trustID.
+	trust   *trustStore
+	trustID string
+	evs     <-chan []monitor.Event
+	start   time.Time
+	log     *slog.Logger
+	rec     recorder
+	denied  *denials
 
 	mu     sync.Mutex
 	timers map[uint64]*time.Timer
@@ -86,6 +89,7 @@ func newSession(id string, pid int, md metadata, p *Policy, rs []rules.Rule, ks 
 	}
 	if dns != nil {
 		cfg.Names = dns.names
+		cfg.Pair, cfg.Netns = dns.pair, dns.cookie
 	}
 	m, err := monitor.New(cfg)
 	if err != nil {
@@ -134,6 +138,9 @@ func (s *session) close() {
 		s.ks.Close()
 	}
 	s.dns.close()
+	if s.trust != nil {
+		s.trust.remove(s.trustID)
+	}
 }
 
 // run handles the requests until the container is gone: without prompt,
@@ -357,4 +364,14 @@ func (s *session) RulesChanged(who string, add, removed []rules.Rule) {
 	msg := strings.Join(parts, ", ")
 	s.log.Info("rules", "change", msg, "client", who)
 	s.event(false, reasonRules, fmt.Sprintf("rules %s by %s", msg, clean(who)))
+}
+
+// denyWithoutProxy denies port 443 to s, whose policy has http rules
+// that no proxy enforces (noProxyRules), and says so in a Warning Event.
+func (s *session) denyWithoutProxy() {
+	if _, err := s.m.Apply(monitor.Decision{AddRules: noProxyRules(), Client: client}); err != nil {
+		s.log.Error("deny port 443 without a proxy", "err", err)
+		return
+	}
+	s.event(true, reasonStarted, "no HTTPS proxy for the policy's http rules: port 443 denied")
 }

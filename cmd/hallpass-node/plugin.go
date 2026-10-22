@@ -54,6 +54,9 @@ type plugin struct {
 	listenerPath string
 	waitKillable bool
 	log          *slog.Logger
+	// trust makes the CAs of the containers with http rules; nil: none
+	// (tests).
+	trust *trustStore
 	// registered is set by Synchronize, the end of the registration, and
 	// cleared when the NRI connection ends.
 	registered atomic.Bool
@@ -130,7 +133,23 @@ func (p *plugin) adjust(pod *api.PodSandbox, ctr *api.Container) (*api.Container
 	}
 	adj := &api.ContainerAdjustment{}
 	adj.SetLinuxSeccompPolicy(api.FromOCILinuxSeccomp(prof))
+	if hosts := httpHosts(pol.Rules); len(hosts) > 0 && cats&seccomp.Connect != 0 && p.trust != nil {
+		// The proxy's CA, trusted through a read-only mount and the
+		// variables of the tools.
+		if err := p.trust.prepare(ctr.GetId(), hosts, adj); err != nil {
+			return nil, fmt.Errorf("hallpass: https proxy: %w", err)
+		}
+	}
 	return adj, nil
+}
+
+// RemoveContainer drops the CA prepared for a container whose session
+// never started (created, never run).
+func (p *plugin) RemoveContainer(_ context.Context, _ *api.PodSandbox, ctr *api.Container) error {
+	if p.trust != nil {
+		p.trust.remove(ctr.GetId())
+	}
+	return nil
 }
 
 // envHome returns $HOME from a container's environment.

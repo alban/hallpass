@@ -19,6 +19,8 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
 	-o /hallpass-node ./cmd/hallpass-node
 
 FROM scratch
+# The roots the HTTPS proxies verify the servers with (--upstream-roots).
+COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=build /hallpass-node /hallpass-node
 ENTRYPOINT ["/hallpass-node"]
 CMD ["run"]

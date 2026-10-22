@@ -75,8 +75,8 @@ deny write /var/run/secrets/**
 		{Rules: "allow connect all"},
 		{Rules: "deny exec /usr/bin/curl", Mediate: []string{"write"}},
 		{Mediate: []string{"connect"}, Rules: "deny connect tcp:1.2.3.4:x"},
-		// No proxy on Kubernetes yet.
-		{Mediate: []string{"write", "connect"}, Rules: "allow http GET https://api.example.test/**"},
+		// No credentials on Kubernetes yet.
+		{Mediate: []string{"write", "connect"}, Rules: "credential gh"},
 	} {
 		if _, err := parsePolicy("bad", bad); err == nil {
 			t.Errorf("%+v: no error", bad)

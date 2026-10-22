@@ -35,12 +35,10 @@ func parsePolicy(name string, spec policy.Spec) (*Policy, error) {
 	if err != nil {
 		return nil, fmt.Errorf("policy %s: %w", name, err)
 	}
-	for _, r := range p.Rules {
-		if r.Object.HTTP != nil {
-			// hallpass-node has no proxy yet: the rule would do
-			// nothing, and must not look like it works.
-			return nil, fmt.Errorf("policy %s: %s: http rules are not supported on Kubernetes yet", name, r.Spec())
-		}
+	if len(p.Credentials) > 0 {
+		// Secrets are not read yet: the line would do nothing, and
+		// must not look like it works.
+		return nil, fmt.Errorf("policy %s: credential %s: credentials are not supported on Kubernetes yet", name, p.Credentials[0])
 	}
 	return &Policy{Name: name, Policy: p}, nil
 }

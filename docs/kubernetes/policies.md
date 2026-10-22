@@ -85,7 +85,13 @@ start, as for a missing policy.
   ([Network](../workstation/usage.md#network-experimental)); `all` is every
   destination, unix sockets included. They need `connect` in `mediate`.
   Loopback and unix listeners started in the container are allowed
-  without asking.
+  without asking. A host name (`allow connect ghcr.io:443`, or
+  `*.githubusercontent.com:443`) matches the addresses the container's
+  own DNS answers gave it; the cloud metadata addresses are denied
+  unless a rule names them.
+- `http METHOD... URL`: HTTPS requests through hallpass-node's proxy
+  (`allow http GET https://ghcr.io/**`), see
+  [HTTPS requests](../workstation/usage.md#https-requests-experimental).
 
 The other fields:
 

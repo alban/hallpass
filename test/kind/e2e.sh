@@ -28,6 +28,7 @@
 #   KEEP_CLUSTER=1   keep a cluster this script created
 #   BUSYBOX          test image (default busybox:1.37)
 #   ALPINE           musl test image (default alpine:3.22)
+#   CURL             curl test image (default curlimages/curl:8.17.0)
 #   HALLPASS_E2E_WORK  parent of the scratch directory (default: the repository)
 #   E2E_ANSWER       command that answers the two requests instead of the
 #                    CLI, with KUBECONTEXT and WORK set (test/kind/headlamp)
@@ -48,6 +49,7 @@ CLUSTER=${KIND_CLUSTER:-hallpass-e2e}
 NODE_IMAGE=${KIND_NODE_IMAGE:-kindest/node:v1.37.0}
 BUSYBOX=${BUSYBOX:-busybox:1.37}
 ALPINE=${ALPINE:-alpine:3.22}
+CURL=${CURL:-curlimages/curl:8.17.0}
 IMAGE=hallpass-node:e2e
 PORT=${HALLPASS_E2E_PORT:-17323}
 KUBECTL=(kubectl --context "kind-$CLUSTER")
@@ -137,7 +139,7 @@ if [ "${E2E_STRICT:-}" = 1 ]; then
 fi
 
 log "starting the test pods"
-sed "s|BUSYBOX|$BUSYBOX|; s|ALPINE|$ALPINE|" test/kind/e2e.yaml >"$WORK/e2e.yaml"
+sed "s|BUSYBOX|$BUSYBOX|; s|ALPINE|$ALPINE|; s|CURL|$CURL|" test/kind/e2e.yaml >"$WORK/e2e.yaml"
 "${KUBECTL[@]}" delete --ignore-not-found --wait=true -f "$WORK/e2e.yaml" >/dev/null
 "${KUBECTL[@]}" apply -f "$WORK/e2e.yaml"
 
@@ -198,6 +200,13 @@ for c in glibc musl; do
 	out=$("${KUBECTL[@]}" -n hallpass-e2e logs dns -c "$c")
 	grep -qx "$c=[1-9][0-9]*" <<<"$out" || fail "dns/$c: nc was not denied: $out"
 done
+
+# The HTTPS proxy: the GET reaches ghcr.io (401, anonymous), the POST is
+# hallpass's 403.
+wait_for 120 succeeded hallpass-e2e https || fail "pod hallpass-e2e/https did not succeed"
+out=$("${KUBECTL[@]}" -n hallpass-e2e logs https)
+grep -qx 'get=401' <<<"$out" || fail "https: GET did not reach ghcr.io through the proxy: $out"
+grep -q '^post=hallpass: denied: POST https://ghcr.io/v2/' <<<"$out" || fail "https: POST not denied by the proxy: $out"
 
 check_log() {
 	local out

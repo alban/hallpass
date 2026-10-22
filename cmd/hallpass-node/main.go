@@ -92,6 +92,7 @@ func runAgent(args []string) error {
 	hostRoot := fs.String("host-root", "/proc/1/root", "the host's root, to run runc features in")
 	runc := fs.String("runc", "", "runc's path on the host (default: search the usual paths)")
 	pluginIdx := fs.String("plugin-index", "50", "NRI plugin index")
+	upstreamRoots := fs.String("upstream-roots", "", "PEM `file` of the roots the HTTPS proxies verify the servers with (default: the system's, /etc/ssl/certs/ca-certificates.crt in the image); never a container's")
 	mode := fs.String("mode", "auto", "lite (seccomp only) | strict (the kernel also enforces the answers with BPF-LSM; fail without it) | auto (strict if the node has BPF-LSM)")
 	verbose := fs.Bool("v", false, "debug logs")
 	_ = fs.Parse(args)
@@ -140,6 +141,11 @@ func runAgent(args []string) error {
 	defer node.Stop()
 
 	ag := newAgent(k, node, log, k.recorder(ctx), *maxInflight)
+	if ag.trust.upstream, err = loadRoots(*upstreamRoots); err != nil {
+		// Without roots no proxy starts, and the containers with http
+		// rules are denied port 443 (see noProxyRules).
+		log.Warn("no roots for the HTTPS proxies", "err", err)
+	}
 	if *fdStore != "" {
 		// Adopt the sessions of a previous agent before runc hands their
 		// next listeners.
@@ -163,7 +169,7 @@ func runAgent(args []string) error {
 		}
 	}()
 
-	p := &plugin{cluster: k, listenerPath: *socket, waitKillable: waitKillableRecv, log: log}
+	p := &plugin{cluster: k, listenerPath: *socket, waitKillable: waitKillableRecv, log: log, trust: ag.trust}
 	st, err := stub.New(p,
 		stub.WithPluginName("hallpass"),
 		stub.WithPluginIdx(*pluginIdx),

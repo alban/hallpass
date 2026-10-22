@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,12 +14,14 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
 
+	"github.com/alban/hallpass/internal/egress"
 	"github.com/alban/hallpass/internal/fdstore"
 	"github.com/alban/hallpass/internal/lsm"
 	"github.com/alban/hallpass/internal/monitor"
@@ -50,6 +53,10 @@ type agent struct {
 	// dropped once those of the store are adopted.
 	lsmAdopted bool
 
+	// trust keeps the CAs of the containers with http rules, from
+	// their creation (plugin) to their session (attach).
+	trust *trustStore
+
 	mu       sync.Mutex
 	sessions map[string]*session // by container id
 
@@ -59,7 +66,7 @@ type agent struct {
 }
 
 func newAgent(c cluster, node *sessionapi.Node, log *slog.Logger, rec recorder, maxInflight int) *agent {
-	return &agent{cluster: c, node: node, log: log, rec: rec, maxInflight: maxInflight, sessions: map[string]*session{}}
+	return &agent{cluster: c, node: node, log: log, rec: rec, maxInflight: maxInflight, sessions: map[string]*session{}, trust: &trustStore{}}
 }
 
 // setupStrict decides whether new sessions are in strict mode, for --mode
@@ -264,6 +271,23 @@ func (a *agent) attach(st *specs.ContainerProcessState, fd int) error {
 		return err
 	}
 	a.denyForwardersLocked(s)
+	warn := func(msg string) { a.log.Warn(msg, "container", id) }
+	proxy, err := a.trust.start(id, st.Pid, dns, func(ctx context.Context, owner any, r egress.Request) (bool, string) {
+		return s.m.DecideHTTP(ctx, owner, rules.HTTPObject{Method: r.Method, Host: r.Host, Path: r.Path})
+	}, warn)
+	switch {
+	case proxy != nil:
+		s.m.SetProxy(proxy)
+	case err != nil || len(httpHosts(pol.Rules)) > 0:
+		if err == nil {
+			err = errors.New("its CA was not made when the container was created")
+		}
+		note = strings.TrimPrefix(note+"; ", "; ") + "no https proxy: " + err.Error()
+		a.log.Warn("no https proxy", "container", id, "err", err)
+		s.denyWithoutProxy()
+	}
+	s.trustID = id
+	s.trust = a.trust
 	if err := a.attachLocked(s, fd, st.Pid, nil); err != nil {
 		a.mu.Unlock()
 		s.close()

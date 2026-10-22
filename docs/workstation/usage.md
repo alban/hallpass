@@ -129,7 +129,7 @@ deny  http *    https://api.github.com/repos/*/*/pulls/*/merge
 - That connection is made in the sandbox's network namespace: disconnected and connected again, the socket reaches only what the sandbox's own sockets reach, and its connect is asked about like any other. A socket of a network namespace the sandbox made itself (`unshare -n`, rootless Podman) is not swapped: its connect is decided by the `connect` rules, and it reaches out only through a relay whose own connect is asked about. A connect on a socket connected already fails with `EISCONN`, as without hallpass. A copy of the socket made before the connect (`dup`) keeps the original socket, unconnected. Linux 5.14 or later: before, the hosts with `http` rules cannot be reached.
 - The sandbox trusts that authority through a bundle in `$XDG_RUNTIME_DIR/hallpass/PID.trust/` (the system's roots and the session's), named by `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`, `REQUESTS_CA_BUNDLE`, `AWS_CA_BUNDLE` and `CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE`, and `NODE_EXTRA_CA_CERTS` (the session's alone). A program with its own roots, or that pins its server's certificate, fails with a TLS error.
 - HTTP/1.1 only: clients offering HTTP/2 fall back. The hosts are those of the `http` rules when the session starts. GraphQL (`POST /graphql`) cannot be told read from write by its URL.
-- Not on Kubernetes yet: a HallpassPolicy with `http` rules is refused.
+- On Kubernetes, a HallpassPolicy's `http` rules work the same way: hallpass-node makes a CA per container when it is created, mounts its directory read-only at `/run/hallpass-trust/` with the variables above, fills the bundle with the certificates of the container image's own bundle when the container starts, and makes the connection in place of the container's socket, and its own to the servers, in the pod's network namespace. The servers are verified with hallpass-node's roots (its image's, or `--upstream-roots`), never the container's: an image trusting its own authority would otherwise get a credential sent to a server it controls. It needs DNS names (cgroup v2); a container whose policy has `http` rules but which gets no proxy (no names, no CA bundle in its image, or hallpass-node restarted since it started) is denied port 443, rather than having its `http` rules ignored.
 
 ### Credentials (experimental)
 
@@ -160,6 +160,7 @@ hallpass --mediate=write,exec,connect --allow-connect=github.com:443,api.github.
 - The credential's hosts go through the proxy; without `http` rules for them, their connections are asked about and allowed as any others, and their requests are not. An allowed connection that cannot be handed to the proxy is denied (reason `proxy-failed`), not sent with the placeholder.
 - The proxy knows a connection is for a credential's host only by the names of its address (see [Names](../how-it-works/network.md#names)): one the session made to an address without a name (a hard-coded address, a name resolved by DNS over HTTPS or `/etc/hosts`) goes out directly, with the placeholder, and the server refuses it (`401`).
 - The sandbox can still read the value where it lives (`~/.config/gh/hosts.yml`) unless reads of it are denied.
+- Not on Kubernetes yet: a HallpassPolicy with a `credential` line is refused.
 
 ## Rule files
 
