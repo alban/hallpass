@@ -434,3 +434,12 @@ func TestReady(t *testing.T) {
 		t.Error("ready after SetReady(false)")
 	}
 }
+
+// TestObjectNameHTTP: an HTTPS request is named by its method and URL in
+// the Events, not as "(not a file)".
+func TestObjectNameHTTP(t *testing.T) {
+	o := rules.Object{HTTP: &rules.HTTPObject{Method: "POST", Host: "api.example.test", Path: "/repos/x"}}
+	if got := objectName(o); got != "POST https://api.example.test/repos/x" {
+		t.Errorf("objectName = %q", got)
+	}
+}

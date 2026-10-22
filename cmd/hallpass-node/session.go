@@ -214,6 +214,8 @@ func objectName(o rules.Object) string {
 		return clean(o.Inet.String())
 	case o.Unix != nil:
 		return clean(o.Unix.String())
+	case o.HTTP != nil:
+		return clean(o.HTTP.Method + " " + o.HTTP.URL())
 	case o.Unknown != nil:
 		return "(unknown path)"
 	}
