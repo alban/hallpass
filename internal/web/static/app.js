@@ -505,6 +505,10 @@ function pendingCard(pid, r) {
   buttons.append(
     el("button", { class: "deny", onclick: answer("deny") }, "Deny"),
     el("button", { class: "deny", onclick: answer("never") }, "Never" + (p.never ? " (" + p.never + ")" : "")));
+  // An HTTPS request: a rule wider than "always", made with the builder,
+  // settles it when it allows it.
+  const http = r.objects && r.objects.length === 1 && r.objects[0].http;
+  if (http) buttons.append(el("button", { onclick: () => openBuilder(pid, http) }, "Make a rule"));
 
   const origin = [(p.cmdline || []).join(" "), ...(p.parents || [])].filter(x => x).join(" ← ");
   const facts = (r.facts || []).map(f => f.kind + "=" + f.value + (f.trust && f.trust !== "TRUST_KERNEL" ? " (" + f.trust.replace("TRUST_", "").toLowerCase() + ")" : ""));
@@ -550,9 +554,9 @@ function activityRow(a) {
     el("td", {}, reasonText(d.why)));
 }
 
-// The rule builder: a rule for HTTPS requests made from a past one, its
-// path cut at a segment or with segments made "*", and the past requests
-// of the session it would match, as the plan's rule editor UX says.
+// The rule builder: a rule for HTTPS requests made from a past or
+// pending one, its path cut at a segment or with segments made "*", and
+// the past requests of the session it would match.
 let builder = null; // {pid, host, segs: [], wild: Set, cut: index or -1, methods: Set, verdict}
 const METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"];
 
