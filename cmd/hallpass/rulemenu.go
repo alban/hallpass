@@ -121,7 +121,7 @@ func (s *session) rulesMenu(t menuTerm) {
 			_, err = sessionapi.ApplyRules(s.m, s, d)
 		}
 		if err != nil {
-			msg = "Not changed: " + ruleError(err).Error()
+			msg = "Not changed: " + ui.Sanitize(ruleError(err).Error())
 		} else {
 			msg = "Done."
 			if len(d.AddRules) > 0 {

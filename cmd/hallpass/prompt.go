@@ -45,7 +45,7 @@ func (s *session) prompts(evs <-chan []monitor.Event, gone chan<- struct{}) {
 				changed = true
 				s.cancelPrompt(ev.Closed.ID)
 			case ev.Warning != "":
-				s.notice("hallpass: " + ev.Warning)
+				s.notice("hallpass: " + ui.Sanitize(ev.Warning))
 			case ev.Released != nil:
 				s.notice("hallpass: " + releasedBy(ev.Released) + " gave back " + ui.Sanitize(answer.Released(ev.Released.Rules)))
 			}
