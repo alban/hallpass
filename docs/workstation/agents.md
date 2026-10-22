@@ -72,7 +72,8 @@ hallpass-request: released
 ### Install
 
 Build it with `musl-gcc` (Debian and Ubuntu: `musl-tools`), or with Docker
-when `musl-gcc` is not installed, and copy it to your `$PATH`:
+when `musl-gcc` is not installed, and copy it to your `$PATH`; `make
+install` does both, for `hallpass` too:
 
 ```console
 make hallpass-request

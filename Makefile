@@ -33,6 +33,15 @@ else
 	docker build -o type=local,dest=. cmd/hallpass-request
 endif
 
+# Installs hallpass and hallpass-request for the current user, in
+# ~/.local/bin by default.
+PREFIX ?= $(HOME)/.local
+BINDIR ?= $(PREFIX)/bin
+.PHONY: install
+install: all hallpass-request
+	install -d '$(DESTDIR)$(BINDIR)'
+	install -m 755 hallpass hallpass-request '$(DESTDIR)$(BINDIR)/'
+
 # End-to-end test of hallpass-node on a kind cluster (see test/kind/e2e.sh).
 # Needs docker, kind, kubectl and network access to Docker Hub.
 .PHONY: test-kind

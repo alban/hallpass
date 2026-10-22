@@ -30,9 +30,10 @@ From a clone, to change the code:
 ```console
 $ git clone https://github.com/alban/hallpass
 $ cd hallpass
-$ make                       # builds ./hallpass
-$ install -m 755 hallpass ~/.local/bin/
+$ make install               # builds ./hallpass and ./hallpass-request, copies them to ~/.local/bin
 ```
+
+`make install BINDIR=~/bin` installs elsewhere. `hallpass-request` is built with `musl-gcc` (Debian and Ubuntu: `musl-tools`), or with Docker when it is not installed; `make` alone builds only `./hallpass`.
 
 ## Run
 
