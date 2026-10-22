@@ -230,6 +230,7 @@ func wrapList(prefix string, items []string, width int) []string {
 	var lines []string
 	line := prefix
 	for i, it := range items {
+		it = ui.Sanitize(it)
 		if i < len(items)-1 {
 			it += ","
 		}

@@ -20,6 +20,7 @@ import (
 	"github.com/alban/hallpass/internal/monitor"
 	"github.com/alban/hallpass/internal/rulepb"
 	"github.com/alban/hallpass/internal/rules"
+	"github.com/alban/hallpass/internal/ui"
 )
 
 const ruleCmdUsage = `hallpass answer [PID] rules                  list the session's rules
@@ -123,7 +124,7 @@ func listRules(out io.Writer, rs []rules.Rule, now time.Time) {
 	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "ID\tRULE\tLABEL")
 	for _, r := range rs {
-		fmt.Fprintf(tw, "%d\t%s\t%s\n", r.ID, r.EditSpec(now), r.Label)
+		fmt.Fprintf(tw, "%d\t%s\t%s\n", r.ID, ui.Sanitize(r.EditSpec(now)), ui.Sanitize(r.Label))
 	}
 	tw.Flush()
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/alban/hallpass/internal/monitor"
 	"github.com/alban/hallpass/internal/rules"
 	"github.com/alban/hallpass/internal/sessionapi"
+	"github.com/alban/hallpass/internal/ui"
 )
 
 // menuTerm is the part of tty.Term the rules menu uses.
@@ -148,9 +149,9 @@ func ruleLines(rs []rules.Rule, now time.Time) []string {
 	}
 	var lines []string
 	for _, r := range rs {
-		l := fmt.Sprintf(" %4d  %s", r.ID, r.EditSpec(now))
+		l := fmt.Sprintf(" %4d  %s", r.ID, ui.Sanitize(r.EditSpec(now)))
 		if r.Label != "" {
-			l += "  (" + r.Label + ")"
+			l += "  (" + ui.Sanitize(r.Label) + ")"
 		}
 		lines = append(lines, l)
 	}
