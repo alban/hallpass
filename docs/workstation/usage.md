@@ -237,9 +237,9 @@ The query string:
 
 | Key | Value |
 |---|---|
-| `op` | `write` (every file operation hallpass mediates), `exec` (running a program) or `connect` (connecting and sending to network destinations) |
+| `op` | `write` (every file operation hallpass mediates), `exec` (running a program), `connect` (connecting and sending to network destinations) or `http` (HTTPS requests through the proxy) |
 | `path` | `write`, `exec`: an absolute path; ending in `/**`, the folder and everything below it. No other globs (`*`, `?`, `[`). Percent-encode `&`, `;`, `%` and `+` in it (`%26`...) |
-| `dest` | `connect`: destinations as [`--allow-connect`](#network) takes them, for example `tcp:192.0.2.0/24:443`, `github.com:443`, `[2001:db8::1]:53`, `unix:/run/x.sock`, `unix:@name`; not `all`, and a host name only when hallpass names addresses (not with `--dns=off`) |
+| `dest` | `connect`: destinations as [`--allow-connect`](#network) takes them, for example `tcp:192.0.2.0/24:443`, `github.com:443`, `[2001:db8::1]:53`, `unix:/run/x.sock`, `unix:@name`; not `all`, and a host name only when hallpass names addresses (not with `--dns=off`). `http`: the methods, a space, and the URL, as an [`http` rule](#https-requests-experimental) takes them: `POST https://api.github.com/repos/alban/*/issues/*/comments` |
 | `for` | optional: a duration (`90s`, `10m`, `2h`); without it, the rest of the session |
 | `reason` | optional: why, shown to you as the program's words; `+` or `%20` for spaces |
 

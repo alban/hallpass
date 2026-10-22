@@ -258,6 +258,8 @@ func Request(p Policy, req *monitor.Request, waiting int) ui.Request {
 		switch {
 		case a.Net.IsNet():
 			r.Op, r.Path = "connect to", a.Net.NetString()
+		case a.Net.HTTP != nil:
+			r.Op, r.Path = "send", a.Net.HTTP.String()
 		case req.Op == rules.OpExec:
 			r.Op = "exec"
 			if a.Writable {
@@ -269,7 +271,7 @@ func Request(p Policy, req *monitor.Request, waiting int) ui.Request {
 				r.Warn = w + " — secret store"
 			}
 		}
-		if !a.Net.IsNet() {
+		if !a.Net.IsNet() && a.Net.HTTP == nil {
 			r.Path = req.Objects[0].Path.Path
 			if a.Tree {
 				r.Path = strings.TrimSuffix(r.Path, "/") + "/**"

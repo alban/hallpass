@@ -4,6 +4,7 @@
 package rules
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -109,6 +110,33 @@ func TestHTTPCovers(t *testing.T) {
 		b, _ := ParseSpec(c.b, now)
 		if got := a.Covers(b); got != c.want {
 			t.Errorf("%q covers %q: %v", c.a, c.b, got)
+		}
+	}
+}
+
+func TestHTTPOverlaps(t *testing.T) {
+	for _, c := range []struct {
+		a, b string
+		want bool
+	}{
+		{"GET https://a.com/repos/**", "* https://a.com/repos/*/*/pulls/*/merge", true},
+		{"GET https://a.com/orgs/**", "* https://a.com/repos/*/x", false},
+		{"GET https://a.com/x", "POST https://a.com/x", false},
+		{"GET https://a.com/x", "GET https://b.com/x", false},
+		{"GET https://*.a.com/x", "GET https://api.a.com/x", true},
+		{"GET https://a.com/**", "GET https://a.com/", true},
+	} {
+		parse := func(s string) *HTTPMatch {
+			m, u, _ := strings.Cut(s, " ")
+			h, err := ParseHTTP(m, u)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return h
+		}
+		a, b := parse(c.a), parse(c.b)
+		if got := a.Overlaps(b); got != c.want || b.Overlaps(a) != c.want {
+			t.Errorf("%s / %s: %v, want %v (both ways)", c.a, c.b, got, c.want)
 		}
 	}
 }

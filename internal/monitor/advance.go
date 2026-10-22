@@ -40,7 +40,7 @@ type advanceQuery struct {
 
 // scope is what q asks for, as a rule's object; path is resolved.
 func (q advanceQuery) scope() rules.ObjectMatch {
-	if q.op == rules.OpNet {
+	if q.op == rules.OpNet || q.op == rules.OpHTTP {
 		return q.adv.Net
 	}
 	return rules.ObjectMatch{Path: &rules.PathMatch{Path: q.path, Tree: q.adv.Tree}}
@@ -51,7 +51,7 @@ func (q advanceQuery) category() seccomp.Category {
 	switch q.op {
 	case rules.OpExec:
 		return seccomp.Exec
-	case rules.OpNet:
+	case rules.OpNet, rules.OpHTTP:
 		return seccomp.Connect
 	}
 	return seccomp.Write
@@ -91,10 +91,21 @@ func parseAdvance(raw string) (advanceQuery, unix.Errno) {
 			case "connect":
 				// Connect and send, like an answer about either.
 				q.op = rules.OpNet
+			case "http":
+				q.op = rules.OpHTTP
 			default:
 				return q, unix.EINVAL
 			}
 		case "dest":
+			if vals.Get("op") == "http" {
+				methods, u, ok := strings.Cut(v[0], " ")
+				h, err := rules.ParseHTTP(methods, u)
+				if !ok || err != nil {
+					return q, unix.EINVAL
+				}
+				q.adv.Net = rules.ObjectMatch{HTTP: h}
+				continue
+			}
 			m, err := rules.ParseNet(v[0])
 			if i := m.Inet; err == nil && i != nil && i.Host == "own-listeners" {
 				// The rules' word for the listeners started inside
@@ -135,7 +146,8 @@ func parseAdvance(raw string) (advanceQuery, unix.Errno) {
 		}
 	}
 	// A path for files and programs, a destination for the network.
-	if q.op == 0 || (q.op == rules.OpNet) != q.adv.Net.IsNet() || (q.op == rules.OpNet) == hasPath {
+	dest := q.op == rules.OpNet || q.op == rules.OpHTTP
+	if q.op == 0 || (q.op == rules.OpNet) != q.adv.Net.IsNet() || (q.op == rules.OpHTTP) != (q.adv.Net.HTTP != nil) || dest == hasPath {
 		return q, unix.EINVAL
 	}
 	return q, 0
@@ -159,7 +171,7 @@ func (m *Monitor) advance(l *listener, n seccomp.Notif, sc seccomp.Rule, raw str
 		reply(unix.ENOSYS)
 		return nil
 	}
-	if i := q.adv.Net.Inet; i != nil && i.Host != "" && m.names == nil {
+	if i := q.adv.Net.Inet; (i != nil && i.Host != "" || q.adv.Net.HTTP != nil) && m.names == nil {
 		// Nothing names the addresses (--dns=off): a grant by name would
 		// never match.
 		reply(unix.EINVAL)
@@ -255,6 +267,9 @@ func (m *Monitor) covered(q advanceQuery) rules.Verdict {
 	if q.op == rules.OpNet {
 		return coveredNet(rs, q, now)
 	}
+	if q.op == rules.OpHTTP {
+		return coveredHTTP(rs, q, now)
+	}
 	path := q.path
 	v, id, ok := rules.Eval(rs, q.op, rules.Object{Path: &rules.PathObject{Path: path}}, now)
 	if !ok || v == rules.Ask {
@@ -327,6 +342,36 @@ func coveredNet(rs []rules.Rule, q advanceQuery, now time.Time) rules.Verdict {
 	return rules.Allow
 }
 
+// coveredHTTP is covered for HTTPS requests: Deny if a deny covers all
+// of them, Allow if an allow covers all of them, for as long as q asks,
+// and no deny or ask takes part of them away; Ask otherwise.
+func coveredHTTP(rs []rules.Rule, q advanceQuery, now time.Time) rules.Verdict {
+	want := rules.Rule{Ops: rules.OpHTTP, Verdict: rules.Allow, Object: q.adv.Net}
+	allowed := false
+	partial := false
+	for _, r := range rs {
+		if r.Expired(now) || r.Ops&rules.OpHTTP == 0 || r.Object.HTTP == nil {
+			continue
+		}
+		as := r
+		as.Verdict, as.Expires = rules.Allow, time.Time{}
+		covers := as.Covers(want)
+		switch {
+		case r.Verdict == rules.Deny && covers:
+			return rules.Deny
+		case r.Verdict == rules.Allow && covers && lasts(r, q, now):
+			allowed = true
+		case r.Verdict != rules.Allow && r.Object.HTTP.Overlaps(q.adv.Net.HTTP):
+			// A deny or an ask takes part of what is asked for.
+			partial = true
+		}
+	}
+	if allowed && !partial {
+		return rules.Allow
+	}
+	return rules.Ask
+}
+
 // lasts reports whether r, an allow, lasts as long as q asks. A request
 // without a duration is for the rest of the session; a check without one
 // is about now. A grant ending within advanceSlack of the end asked for
@@ -378,6 +423,8 @@ func sameScope(a, b rules.ObjectMatch) bool {
 		return a.Path.Path == b.Path.Path && a.Path.Tree == b.Path.Tree && len(a.Path.Args)+len(b.Path.Args) == 0
 	case a.IsNet() && b.IsNet():
 		return a.NetString() == b.NetString()
+	case a.HTTP != nil && b.HTTP != nil:
+		return a.HTTP.String() == b.HTTP.String()
 	}
 	return false
 }

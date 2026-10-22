@@ -333,3 +333,32 @@ r rn connect 127.0.0.1:1
 		}
 	}
 }
+
+// TestRequestHTTP: requests in advance for HTTPS requests through the
+// proxy: already allowed (1), would ask (5), denied by a rule (3), and
+// malformed (6).
+func TestRequestHTTP(t *testing.T) {
+	advanceModes(t, func(t *testing.T, mode string) {
+		e := newEnv(t)
+		bin := requestBin(t, e)
+		script := requestScript(bin) + `
+r allowed check http GET 'https://api.example.test/repos/x'
+r asks check http POST 'https://api.example.test/repos/x'
+r denied check http PUT 'https://api.example.test/repos/a/b/pulls/1/merge'
+r bad check http GET 'http://api.example.test/'
+r one check http GET
+`
+		cmd := e.cmd(script, "--prompt=deny", "--mediate=write,exec,connect", "--mode="+mode, "--allow-exec="+bin,
+			"--allow-http=GET https://api.example.test/**", "--deny-http=* https://api.example.test/repos/*/*/pulls/*/merge")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("hallpass: %v\n%s", err, out)
+		}
+		o := string(out)
+		for _, want := range []string{"allowed rc=1 ", "asks rc=5 ", "denied rc=3 ", "bad rc=6 ", "one rc=2 "} {
+			if !strings.Contains(o, want) {
+				t.Errorf("output lacks %q:\n%s", want, o)
+			}
+		}
+	})
+}

@@ -44,6 +44,9 @@ func toPBRequest(r *monitor.Request, p *pb.Prompt) *pb.Request {
 	}
 	if a := r.Advance; a != nil {
 		out.Advance = &pb.Advance{Tree: a.Tree, Reason: a.Reason, Writable: a.Writable}
+		if a.Net.HTTP != nil {
+			out.Advance.Dest = a.Net.HTTP.String()
+		}
 		if a.Net.IsNet() {
 			out.Advance.Dest = a.Net.NetString()
 		}

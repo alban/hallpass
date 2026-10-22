@@ -46,6 +46,10 @@ func TestParseAdvance(t *testing.T) {
 		{"request?op=connect&dest=example.com:443", 0, advanceQuery{op: rules.OpNet}, "example.com:443"},
 		// Not a host: the own listeners of rules, which a request cannot ask for.
 		{"request?op=connect&dest=tcp:own-listeners", unix.EINVAL, advanceQuery{}, ""},
+		{"request?op=http&dest=POST+https%3A%2F%2Fapi.github.com%2Frepos%2F*%2F*%2Fissues&reason=x", 0, advanceQuery{op: rules.OpHTTP, adv: Advance{Reason: "x"}}, ""},
+		{"request?op=http&dest=https%3A%2F%2Fapi.github.com%2F", unix.EINVAL, advanceQuery{}, ""},
+		{"request?op=http&dest=GET+http%3A%2F%2Fa.com%2F", unix.EINVAL, advanceQuery{}, ""},
+		{"request?op=connect&dest=GET+https%3A%2F%2Fa.com%2F", unix.EINVAL, advanceQuery{}, ""},
 		{"request?op=connect", unix.EINVAL, advanceQuery{}, ""},
 		{"request?op=connect&path=/a", unix.EINVAL, advanceQuery{}, ""},
 		{"request?op=connect&dest=*&path=/a", unix.EINVAL, advanceQuery{}, ""},
@@ -68,6 +72,9 @@ func TestParseAdvance(t *testing.T) {
 		dest := ""
 		if got.adv.Net.IsNet() {
 			dest = got.adv.Net.NetString()
+		}
+		if h := got.adv.Net.HTTP; h != nil && h.String() != "POST https://api.github.com/repos/*/*/issues" {
+			t.Errorf("%q: http %s", tc.raw, h)
 		}
 		got.adv.Net = rules.ObjectMatch{}
 		if errno != tc.errno || (errno == 0 && (got != tc.want || dest != tc.dest)) {
@@ -436,5 +443,45 @@ func TestAdvanceStrict(t *testing.T) {
 	}
 	if len(k.paths) != 1 || k.paths[0].Path != fx.dir || !k.paths[0].Tree || k.paths[0].Expires.IsZero() {
 		t.Fatalf("kernel rules %+v", k.paths)
+	}
+}
+
+func TestCoveredHTTP(t *testing.T) {
+	now := time.Now()
+	spec := func(s string, id uint64) rules.Rule {
+		r, err := rules.ParseSpec(s, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.ID = id
+		return r
+	}
+	q := func(methods, url string) advanceQuery {
+		h, err := rules.ParseHTTP(methods, url)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return advanceQuery{op: rules.OpHTTP, adv: Advance{Net: rules.ObjectMatch{HTTP: h}}}
+	}
+	rs := []rules.Rule{
+		spec("allow http GET https://api.github.com/**", 1),
+		spec("deny http * https://api.github.com/repos/*/*/pulls/*/merge", 2),
+		spec("ask http GET https://api.github.com/user/**", 3),
+	}
+	for _, c := range []struct {
+		q    advanceQuery
+		want rules.Verdict
+	}{
+		{q("GET", "https://api.github.com/repos/a/b"), rules.Allow},
+		{q("POST", "https://api.github.com/repos/a/b"), rules.Ask},
+		{q("PUT", "https://api.github.com/repos/a/b/pulls/1/merge"), rules.Deny},
+		// A deny or an ask inside: not all allowed.
+		{q("GET", "https://api.github.com/**"), rules.Ask},
+		{q("GET", "https://api.github.com/repos/**"), rules.Ask},
+		{q("GET", "https://api.github.com/orgs/**"), rules.Allow},
+	} {
+		if got := coveredHTTP(rs, c.q, now); got != c.want {
+			t.Errorf("%s: %v, want %v", c.q.adv.Net.HTTP, got, c.want)
+		}
 	}
 }

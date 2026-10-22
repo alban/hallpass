@@ -32,6 +32,7 @@ the user is there.
 hallpass-request [check] write PATH [--for DURATION] [--reason TEXT]
 hallpass-request [check] exec PROG [--for DURATION] [--reason TEXT]
 hallpass-request [check] connect DEST [--for DURATION] [--reason TEXT]
+hallpass-request [check] http METHODS URL [--for DURATION] [--reason TEXT]
 hallpass-request release write|exec|connect PATH|PROG|DEST
 ```
 
@@ -47,6 +48,11 @@ hallpass-request release write|exec|connect PATH|PROG|DEST
   below it), `unix:/path`, `unix:/dir/**`, `unix:@name`,
   `unix:@prefix*`; `all` is refused. Covers connecting and sending.
   Prefer a host name to an address: the user recognises it.
+- `METHODS URL` (http): HTTPS requests through hallpass's proxy, for the
+  hosts that have http rules: `GET`, `GET,POST` or `*`, and
+  `https://HOST/PATH`, `*` within a segment, a final `/**` everything
+  below. Ask for the narrowest: `POST
+  'https://api.github.com/repos/OWNER/REPO/issues/*/comments'`.
 - `--for`: `90s`, `10m`, `2h`... Without it, the grant lasts the rest of
   the session.
 - `--reason`: one short sentence saying why, in plain words. The user sees

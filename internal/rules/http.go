@@ -210,3 +210,23 @@ func ProxiedBy(rs []Rule, names []string) bool {
 	}
 	return false
 }
+
+// Overlaps reports whether m and o may select a request in common: their
+// methods, hosts and paths overlap. Paths are compared glob against the
+// other as a literal, both ways: conservative (may report an overlap
+// that no request has), never the other way round.
+func (m *HTTPMatch) Overlaps(o *HTTPMatch) bool {
+	if len(m.Methods) > 0 && len(o.Methods) > 0 && !slices.ContainsFunc(m.Methods, func(x string) bool { return slices.Contains(o.Methods, x) }) {
+		return false
+	}
+	under := func(a, b *HTTPMatch) bool { // a's names are some of b's
+		return b.HostSuffix && (a.Host == b.Host && a.HostSuffix || strings.HasSuffix(a.Host, "."+b.Host)) || !b.HostSuffix && !a.HostSuffix && a.Host == b.Host
+	}
+	if !under(m, o) && !under(o, m) && !(m.HostSuffix && o.HostSuffix) {
+		return false
+	}
+	lit := func(p string) string { return strings.TrimSuffix(p, "/**") }
+	return PathGlob(m.Path, lit(o.Path)) || PathGlob(o.Path, lit(m.Path)) ||
+		strings.HasSuffix(m.Path, "/**") && strings.HasPrefix(lit(o.Path), lit(m.Path)) ||
+		strings.HasSuffix(o.Path, "/**") && strings.HasPrefix(lit(m.Path), lit(o.Path))
+}

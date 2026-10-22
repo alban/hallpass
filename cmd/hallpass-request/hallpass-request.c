@@ -38,7 +38,9 @@ enum {
 static const char usage_line[] =
 	"usage: hallpass-request [check] write|exec PATH [--for DURATION] [--reason TEXT]\n"
 	"       hallpass-request [check] connect DEST [--for DURATION] [--reason TEXT]\n"
-	"       hallpass-request release write|exec|connect PATH|DEST\n";
+	"       hallpass-request [check] http METHODS URL [--for DURATION] [--reason TEXT]\n"
+	"       hallpass-request release write|exec|connect PATH|DEST\n"
+	"       hallpass-request release http METHODS URL\n";
 
 static const char help_text[] =
 	"Ask the hallpass user in advance to:\n"
@@ -51,6 +53,9 @@ static const char help_text[] =
 	"                 * for any address, [IPv6], a host name (github.com:443,\n"
 	"                 *.github.com:443), unix:/path, unix:/dir/**,\n"
 	"                 unix:@name, unix:@prefix*\n"
+	"  http METHODS URL  send HTTPS requests through hallpass's proxy: METHODS\n"
+	"                 GET, GET,POST or *; URL https://HOST/PATH, * a segment,\n"
+	"                 a final /** everything below\n"
 	"check: only tell whether a request would ask the user.\n"
 	"release: give back what a granted request asked for, exactly as asked.\n"
 	"  --for DURATION  how long: 90s, 10m, 2h... (default: the session)\n"
@@ -125,7 +130,7 @@ static int lookpath(char *buf, const char *name)
 
 int main(int argc, char **argv)
 {
-	const char *verb = "request", *op = NULL, *target = NULL, *dur = NULL, *reason = NULL;
+	const char *verb = "request", *op = NULL, *target = NULL, *url = NULL, *dur = NULL, *reason = NULL;
 	int opts = 1;
 
 	if (argc < 2)
@@ -175,8 +180,8 @@ int main(int argc, char **argv)
 		if (!op && !strcmp(verb, "request") && (!strcmp(a, "check") || !strcmp(a, "release"))) {
 			verb = a;
 		} else if (!op) {
-			if (strcmp(a, "write") != 0 && strcmp(a, "exec") != 0 && strcmp(a, "connect") != 0) {
-				fprintf(stderr, "hallpass-request: unknown operation %s (write, exec or connect)\n", a);
+			if (strcmp(a, "write") != 0 && strcmp(a, "exec") != 0 && strcmp(a, "connect") != 0 && strcmp(a, "http") != 0) {
+				fprintf(stderr, "hallpass-request: unknown operation %s (write, exec, connect or http)\n", a);
 				return usage();
 			}
 			op = a;
@@ -186,14 +191,26 @@ int main(int argc, char **argv)
 				return usage();
 			}
 			target = a;
+		} else if (!strcmp(op, "http") && !url) {
+			url = a;
 		} else {
 			fprintf(stderr, "hallpass-request: one target only, got %s too (quote a path ending in /**)\n", a);
 			return usage();
 		}
 	}
-	if (!op || !target)
+	if (!op || !target || (!strcmp(op, "http") && !url))
 		return usage();
-	int release = !strcmp(verb, "release"), net = !strcmp(op, "connect");
+	int http = !strcmp(op, "http");
+	int release = !strcmp(verb, "release"), net = !strcmp(op, "connect") || http;
+	// http: the methods and the URL, one destination.
+	char combo[PATH_MAX];
+	if (http) {
+		if ((size_t)snprintf(combo, sizeof(combo), "%s %s", target, url) >= sizeof(combo)) {
+			fputs("hallpass-request: invalid request: too long\n", stderr);
+			return EXIT_INVALID;
+		}
+		target = combo;
+	}
 	if (release && (dur || reason)) {
 		fputs("hallpass-request: release takes no --for or --reason\n", stderr);
 		return usage();
@@ -257,7 +274,7 @@ int main(int argc, char **argv)
 	char *args[] = {"hallpass-request", NULL};
 	execve(req, args, environ);
 
-	const char *what = net ? "connect there" : !strcmp(op, "exec") ? "run it" : "write there";
+	const char *what = http ? "send that request" : net ? "connect there" : !strcmp(op, "exec") ? "run it" : "write there";
 	const char *msg;
 	int code;
 	switch (errno) {

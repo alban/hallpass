@@ -47,7 +47,8 @@ type Advance struct {
 	For    time.Duration // how long the grant is asked for; 0: the rest of the session
 	Reason string        // written by the workload: untrusted, display only
 	// Net is the destinations asked for (rules.ParseNet) when Op is
-	// rules.OpNet; Objects is then empty.
+	// rules.OpNet, or the requests (an HTTP match) when it is
+	// rules.OpHTTP; Objects is then empty.
 	Net rules.ObjectMatch
 	// Writable: (exec) the rules let the workload write the program, or
 	// a file below the folder, without asking, when it asked: a grant
@@ -60,7 +61,7 @@ type Advance struct {
 // (--allow-path, --allow-exec, --allow-connect), in AdvanceSet.
 func (r *Request) Grant(expires time.Time) rules.Rule {
 	g := rules.Rule{Ops: grantOps(r.Op), Verdict: rules.Allow, Expires: expires, Set: AdvanceSet}
-	if r.Advance.Net.IsNet() {
+	if r.Advance.Net.IsNet() || r.Advance.Net.HTTP != nil {
 		g.Object = r.Advance.Net
 	} else {
 		g.Object = rules.ObjectMatch{Path: &rules.PathMatch{Path: r.Objects[0].Path.Path, Tree: r.Advance.Tree}}
@@ -73,7 +74,7 @@ func (r *Request) Grant(expires time.Time) rules.Rule {
 // answer.
 func grantOps(op rules.Op) rules.Op {
 	switch op {
-	case rules.OpExec, rules.OpNet:
+	case rules.OpExec, rules.OpNet, rules.OpHTTP:
 		return op
 	}
 	return rules.OpAll
