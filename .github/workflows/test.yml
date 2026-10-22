@@ -35,6 +35,8 @@ jobs:
       run: go vet ./...
     - name: go test
       run: go test -count=1 ./...
+    - name: js/wasm (the website's demo)
+      run: make test-wasm
     - name: hallpass-request image
       run: docker build cmd/hallpass-request
 

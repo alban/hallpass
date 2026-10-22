@@ -84,6 +84,20 @@ headlamp-package: headlamp
 test-headlamp-kind: headlamp
 	E2E_ANSWER=$(CURDIR)/test/kind/headlamp/answer.sh test/kind/e2e.sh
 
+# The packages the website's demo compiles to js/wasm, with no Linux
+# syscalls: vetted and tested there, under Node (go_js_wasm_exec). The
+# environment is emptied: Go's js/wasm caps its size.
+WASM_PKGS ?= ./internal/rules ./internal/defaults ./internal/policy \
+	./internal/answer ./internal/ui ./internal/programs ./internal/seccomp \
+	./internal/lsm ./internal/monitor
+.PHONY: test-wasm
+test-wasm:
+	GOOS=js GOARCH=wasm go vet $(WASM_PKGS)
+	env -i PATH="$$(go env GOROOT)/bin:$$PATH" HOME="$$HOME" \
+		GOCACHE="$$(go env GOCACHE)" GOMODCACHE="$$(go env GOMODCACHE)" \
+		GOTOOLCHAIN=local GOOS=js GOARCH=wasm \
+		go test -count=1 -exec="$$(go env GOROOT)/lib/wasm/go_js_wasm_exec" $(WASM_PKGS)
+
 # Run the tests in a VM booting ci-kernels:KERNEL_VERSION, which has BPF-LSM
 # active. Needs vimto (CGO_ENABLED=0 go install lmb.io/vimto@latest) and qemu.
 # Without /dev/kvm, qemu emulates the CPU: slower, but it works. Everything is

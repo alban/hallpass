@@ -29,7 +29,9 @@ exists, follow it too.
 From the cheapest to the most complete:
 
 1. `gofmt -l .`, `go vet ./...`, `go test ./...`: no root needed. Before
-   every commit.
+   every commit. `make test-wasm` (needs Node) when touching the
+   packages the website's demo compiles to js/wasm: they must not use
+   Linux syscalls outside files built on Linux only.
 2. `go test -exec sudo ./...`: the e2e tests, compiled as the user, run as
    root. Strict-mode tests skip unless BPF-LSM is active (`lsm=...,bpf` on
    the kernel command line); `HALLPASS_REQUIRE_LSM=1` makes them fail
