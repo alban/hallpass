@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // SpecSyntax describes the syntax ParseSpec reads, for help texts.
@@ -182,9 +184,20 @@ func (r Rule) EditSpec(now time.Time) string {
 // Editable reports whether r reads back from its EditSpec at now. The
 // syntax has no quoting: a file named "**", a path with " for " or a
 // newline, a rule with ops of two kinds, an IPv6 zone... cannot be written
-// in it. Such a rule can be removed, not edited as text.
+// in it. Such a rule can be removed, not edited as text. Nor can a rule
+// with a control or format character (an escape sequence, a bidi
+// override) or invalid UTF-8.
 func (r Rule) Editable(now time.Time) bool {
-	back, err := ParseSpec(r.EditSpec(now), now)
+	spec := r.EditSpec(now)
+	if !utf8.ValidString(spec) || strings.ContainsFunc(spec, func(c rune) bool {
+		return unicode.IsControl(c) || unicode.Is(unicode.Cf, c)
+	}) {
+		// The text is shown raw in the line editor: no terminal escapes
+		// or bidi overrides from a path the workload named (what
+		// ui.Sanitize replaces elsewhere).
+		return false
+	}
+	back, err := ParseSpec(spec, now)
 	if err != nil || back.Verdict != r.Verdict || back.Expires.IsZero() != r.Expires.IsZero() {
 		return false
 	}
