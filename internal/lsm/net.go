@@ -1,6 +1,8 @@
 // Copyright The hallpass Authors
 // SPDX-License-Identifier: Apache-2.0
 
+//go:build linux
+
 package lsm
 
 import (
@@ -12,26 +14,6 @@ import (
 
 	"github.com/cilium/ebpf"
 )
-
-// InetDest is an IPv4 or IPv6 destination (IPv4 unmapped).
-type InetDest struct {
-	Addr  netip.AddrPort
-	Proto uint16 // IP protocol of the socket
-}
-
-// UnixDest is a unix socket destination: an abstract name, or a socket
-// file (in events, only its last component is known).
-type UnixDest struct {
-	Abstract bool
-	Name     string
-	Path     string
-}
-
-// NetGrant is the network part of GrantOnce.
-type NetGrant struct {
-	Inet     []InetDest
-	Abstract *string // abstract unix name, without the leading NUL
-}
 
 func (g NetGrant) fill(v *hallpassHpGrant) {
 	for i, d := range g.Inet {
@@ -47,52 +29,6 @@ func (g NetGrant) fill(v *hallpassHpGrant) {
 			v.Abstract[i] = int8((*g.Abstract)[i])
 		}
 	}
-}
-
-// InetRule allows, asks or denies IPv4 and IPv6 destinations. The deepest
-// matching allow or ask decides, the ask on a tie: an ask stops the allows
-// of shallower rules.
-type InetRule struct {
-	Prefix         netip.Prefix // invalid (zero): any address
-	Proto          uint16       // 0: any
-	PortLo, PortHi uint16       // both 0: any port
-	Deny           bool
-	Ask            bool
-	// Depth orders allows and asks: the more specific, the deeper
-	// (rules.ObjectMatch.Depth).
-	Depth   uint16
-	Expires time.Time
-}
-
-// AbstractRule allows, asks or denies abstract unix socket names: Name,
-// or with Prefix every name starting with it. The longest name decides
-// between allows and asks, the ask on a tie.
-type AbstractRule struct {
-	Name    string
-	Prefix  bool
-	Deny    bool
-	Ask     bool
-	Expires time.Time
-}
-
-// UnixAnyRule allows, asks or denies every unix socket. Rules on an
-// address or a name beat its allows and asks.
-type UnixAnyRule struct {
-	Deny    bool
-	Ask     bool
-	Expires time.Time
-}
-
-// NetRules are a session's network rules, but for the unix sockets bound
-// to a path: Rule with Net.
-type NetRules struct {
-	Inet     []InetRule
-	Abstract []AbstractRule
-	AnyUnix  []UnixAnyRule
-	// OwnListeners allows loopback TCP connections to the listeners the
-	// session's members started, and connections and datagrams to the unix
-	// sockets they created.
-	OwnListeners bool
 }
 
 // netEntries is the number of rules a prefix of the tries holds, its own

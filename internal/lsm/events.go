@@ -1,6 +1,8 @@
 // Copyright The hallpass Authors
 // SPDX-License-Identifier: Apache-2.0
 
+//go:build linux
+
 package lsm
 
 import (
@@ -11,18 +13,6 @@ import (
 
 	"golang.org/x/sys/unix"
 )
-
-// Event is one decision of the BPF programs. Network events (op connect
-// or send) have Inet or Unix set, not Path.
-type Event struct {
-	PID     uint32
-	Comm    string
-	Op      string
-	Path    string
-	Inet    *InetDest
-	Unix    *UnixDest
-	Allowed bool
-}
 
 var opNames = [...]string{1: "open", "create", "mkdir", "rmdir", "unlink", "symlink", "link", "rename", "truncate", "connect", "send", "exec"}
 

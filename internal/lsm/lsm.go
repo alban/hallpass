@@ -1,6 +1,8 @@
 // Copyright The hallpass Authors
 // SPDX-License-Identifier: Apache-2.0
 
+//go:build linux
+
 // Package lsm is strict mode's enforcement: BPF-LSM programs that check every
 // write of the sandbox against the session's rules in the kernel, on the
 // object being modified, so path races and bind mounts cannot get around the

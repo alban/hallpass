@@ -1,6 +1,8 @@
 // Copyright The hallpass Authors
 // SPDX-License-Identifier: Apache-2.0
 
+//go:build linux
+
 package lsm
 
 import (
@@ -12,31 +14,6 @@ import (
 	"github.com/cilium/ebpf"
 	"golang.org/x/sys/unix"
 )
-
-// Rule allows, denies or asks about a host path: the path and everything
-// below it (Tree) or that exact path only. With Net, it is about
-// connections and datagrams to the unix sockets bound there, not about
-// writing files. With Exec, it is about executing the programs there, and
-// it cannot ask. An ask rule cuts off the allows of the paths above: what
-// it matches is denied, unless a deeper allow rule or a GrantOnce allows
-// it. Deny wins over both.
-type Rule struct {
-	Path    string // absolute and clean
-	Tree    bool
-	Deny    bool
-	Ask     bool
-	Net     bool
-	Exec    bool
-	Expires time.Time // zero: never (deny rules never expire)
-}
-
-// ProcRule allows, denies or asks about writes to file Name in /proc/<pid>/
-// of processes named Comm outside the sandbox. An ask wins over an allow.
-type ProcRule struct {
-	Name, Comm string
-	Deny, Ask  bool
-	Expires    time.Time
-}
 
 // grant is one GrantOnce: its paths keep their rule nodes, so their cookies
 // stay valid, until the grant is used up.
