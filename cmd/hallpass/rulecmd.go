@@ -155,10 +155,21 @@ func addRuleDecision(spec, label string, now time.Time) (monitor.Decision, error
 // editRuleDecision replaces old by the rule spec, if the rules are still at
 // generation gen.
 func editRuleDecision(old rules.Rule, spec string, gen uint64, now time.Time) (monitor.Decision, error) {
+	if err := checkEditable(old, now); err != nil {
+		return monitor.Decision{}, err
+	}
 	r, err := rules.ParseSpec(spec, now)
 	if err != nil {
 		return monitor.Decision{}, err
 	}
 	r.Label = old.EditLabel()
 	return monitor.Decision{AddRules: []rules.Rule{r}, RemoveRules: []uint64{old.ID}, IfGeneration: gen}, nil
+}
+
+// checkEditable fails for a rule the text syntax cannot write.
+func checkEditable(r rules.Rule, now time.Time) error {
+	if !r.Editable(now) {
+		return fmt.Errorf("rule %d cannot be written as text: delete it and add another", r.ID)
+	}
+	return nil
 }

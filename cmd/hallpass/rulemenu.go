@@ -95,6 +95,9 @@ func (s *session) rulesMenu(t menuTerm) {
 			if err != nil {
 				break
 			}
+			if err = checkEditable(old, time.Now()); err != nil {
+				break
+			}
 			spec, ok := t.ReadLine(append(ruleSyntax[:len(ruleSyntax):len(ruleSyntax)], fmt.Sprintf(" Rule %d: ", old.ID)), old.EditSpec(time.Now()))
 			if !ok {
 				msg = ""

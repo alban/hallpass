@@ -135,14 +135,15 @@ export function sessionName(s: Session): string {
 }
 
 // forSuffix is what is left of an expiry, rounded down, as a " for"
-// suffix of a rule: an edit can keep an expiry, not extend it.
+// suffix of a rule: an edit can keep an expiry, not extend it. Less than a
+// second left is a second, not no expiry.
 export function forSuffix(expires: string | undefined, now: number): string {
   if (!expires) {
     return '';
   }
   const secs = Math.floor((Date.parse(expires) - now) / 1000);
   if (!(secs > 0)) {
-    return '';
+    return ' for 1s';
   }
   return ' for ' + (secs >= 120 ? `${Math.floor(secs / 60)}m` : `${secs}s`);
 }

@@ -4,6 +4,7 @@
 package rules
 
 import (
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -55,6 +56,7 @@ func TestParseSpec(t *testing.T) {
 		"", "allow", "maybe write /x", "allow write", "allow write rel/x", "allow exec ~/bin/x",
 		"allow connect nope:1.2.3.4:x", "allow proc", "allow proc a/b c", "deny unknown x",
 		"allow file /x", "allow write /x for -1m",
+		"deny exec /usr/bin/curl for 1d", "allow write /a for b/c", // not durations
 		"allow path /x", "allow net all", // the old names
 		"allow write /src/*.go", "allow write /src/**/x", "deny exec /usr/bin/py?", "allow write /a/[b]/**",
 	} {
@@ -115,7 +117,8 @@ func TestEditSpec(t *testing.T) {
 		want string
 	}{
 		{0, "allow write /data/**"},
-		{-time.Minute, "allow write /data/**"},
+		{-time.Minute, "allow write /data/** for 1s"},
+		{500 * time.Millisecond, "allow write /data/** for 1s"},
 		{90*time.Second + 500*time.Millisecond, "allow write /data/** for 90s"},
 		{10*time.Minute - time.Second, "allow write /data/** for 9m"},
 	} {
@@ -133,5 +136,50 @@ func TestEditSpec(t *testing.T) {
 	r.Label = "SSH keys"
 	if l := r.EditLabel(); l != "SSH keys" {
 		t.Errorf("EditLabel() = %q", l)
+	}
+}
+
+// TestEditable checks that the rules built from objects, as answers and
+// flags build them, read back from their EditSpec, and that the others are
+// not editable.
+func TestEditable(t *testing.T) {
+	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	path := func(p string, tree bool) ObjectMatch { return ObjectMatch{Path: &PathMatch{Path: p, Tree: tree}} }
+	inet := func(p string, lo, hi uint16) ObjectMatch {
+		return ObjectMatch{Inet: &InetMatch{Proto: 6, Prefix: netip.MustParsePrefix(p), PortLo: lo, PortHi: hi}}
+	}
+	for _, tc := range []struct {
+		name string
+		r    Rule
+		want bool
+	}{
+		{"file", Rule{Ops: OpAll, Object: path("/home/u/x", false)}, true},
+		{"tree", Rule{Ops: OpAll, Object: path("/home/u", true), Verdict: Deny}, true},
+		{"files only", Rule{Ops: OpFiles, Object: path("/home/u/x", false)}, true},
+		{"root tree", Rule{Ops: OpAll, Object: path("/", true)}, true},
+		{"exec", Rule{Ops: OpExec, Object: path("/usr/bin/git", false), Expires: now.Add(time.Hour)}, true},
+		{"expiring", Rule{Ops: OpAll, Object: path("/x", false), Expires: now.Add(300 * time.Millisecond)}, true},
+		{"inet", Rule{Ops: OpNet, Object: inet("1.2.3.4/32", 443, 443)}, true},
+		{"inet6", Rule{Ops: OpNet, Object: inet("2001:db8::1/128", 22, 22), Verdict: Ask}, true},
+		{"unix", Rule{Ops: OpNet, Object: ObjectMatch{Unix: &UnixMatch{Path: "/run/x.sock"}}}, true},
+		{"abstract", Rule{Ops: OpNet, Object: ObjectMatch{Unix: &UnixMatch{Abstract: true, Name: "bus"}}}, true},
+		{"all", Rule{Ops: OpNet, Object: ObjectMatch{AnyNet: true}, Verdict: Deny}, true},
+		{"proc", Rule{Ops: OpAll, Object: ObjectMatch{Proc: &ProcMatch{Name: "oom_score_adj", Comm: "Web Content"}}}, true},
+		{"unknown", Rule{Ops: OpAll, Object: ObjectMatch{Unknown: true}, Verdict: Deny}, true},
+
+		{"a file named **", Rule{Ops: OpAll, Object: path("/home/u/**", false), Verdict: Deny}, false},
+		{"a glob", Rule{Ops: OpAll, Object: path("/home/u/*.go", false)}, false},
+		{"for in a path", Rule{Ops: OpAll, Object: path("/x for 1h", false), Verdict: Deny}, false},
+		{"newline", Rule{Ops: OpAll, Object: path("/x\nallow write /**", false), Verdict: Deny}, false},
+		{"trailing space", Rule{Ops: OpExec, Object: path("/bin/x ", false)}, false},
+		{"exec and write", Rule{Ops: OpAll | OpExec, Object: path("/bin/x", false)}, false},
+		{"write only", Rule{Ops: OpWrite, Object: path("/x", false)}, false},
+		{"abstract name with *", Rule{Ops: OpNet, Object: ObjectMatch{Unix: &UnixMatch{Abstract: true, Name: "a*"}}}, false},
+		{"comm with for", Rule{Ops: OpAll, Object: ObjectMatch{Proc: &ProcMatch{Name: "environ", Comm: "x for 1h"}}}, false},
+		{"comm with spaces around", Rule{Ops: OpAll, Object: ObjectMatch{Proc: &ProcMatch{Name: "environ", Comm: " x"}}}, false},
+	} {
+		if got := tc.r.Editable(now); got != tc.want {
+			t.Errorf("%s: Editable() = %v, want %v (spec %q)", tc.name, got, tc.want, tc.r.EditSpec(now))
+		}
 	}
 }

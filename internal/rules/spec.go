@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -38,14 +39,16 @@ func ParseSpec(s string, now time.Time) (Rule, error) {
 	var r Rule
 	s = strings.TrimSpace(s)
 	if i := strings.LastIndex(s, " for "); i >= 0 {
-		d, err := time.ParseDuration(strings.TrimSpace(s[i+len(" for "):]))
-		if err == nil {
-			if d <= 0 {
-				return r, fmt.Errorf("%q: the duration must be positive", s)
-			}
-			r.Expires = now.Add(d)
-			s = strings.TrimSpace(s[:i])
+		dur := strings.TrimSpace(s[i+len(" for "):])
+		d, err := time.ParseDuration(dur)
+		if err != nil {
+			return r, fmt.Errorf("%q: %q is not a duration (10m, 2h...)", s, dur)
 		}
+		if d <= 0 {
+			return r, fmt.Errorf("%q: the duration must be positive", s)
+		}
+		r.Expires = now.Add(d)
+		s = strings.TrimSpace(s[:i])
 	}
 	verdict, rest, _ := strings.Cut(s, " ")
 	switch verdict {
@@ -157,7 +160,8 @@ func (r Rule) Spec() string {
 }
 
 // EditSpec writes r for editing: its spec, then the time it has left at now
-// rounded down, so that saving the text unchanged does not extend it.
+// rounded down, so that saving the text unchanged does not extend it; less
+// than a second left is written as a second, not as no expiry.
 func (r Rule) EditSpec(now time.Time) string {
 	s := r.Spec()
 	if r.Expires.IsZero() {
@@ -166,12 +170,28 @@ func (r Rule) EditSpec(now time.Time) string {
 	secs := int64(r.Expires.Sub(now) / time.Second)
 	switch {
 	case secs <= 0:
+		s += " for 1s"
 	case secs >= 120:
 		s += " for " + strconv.FormatInt(secs/60, 10) + "m"
 	default:
 		s += " for " + strconv.FormatInt(secs, 10) + "s"
 	}
 	return s
+}
+
+// Editable reports whether r reads back from its EditSpec at now. The
+// syntax has no quoting: a file named "**", a path with " for " or a
+// newline, a rule with ops of two kinds, an IPv6 zone... cannot be written
+// in it. Such a rule can be removed, not edited as text.
+func (r Rule) Editable(now time.Time) bool {
+	back, err := ParseSpec(r.EditSpec(now), now)
+	if err != nil || back.Verdict != r.Verdict || back.Expires.IsZero() != r.Expires.IsZero() {
+		return false
+	}
+	if back.Ops != r.Ops && back.relevantOps() != r.relevantOps() {
+		return false
+	}
+	return reflect.DeepEqual(back.Object, r.Object)
 }
 
 // EditLabel is the label an edit of r keeps: a program group's goes with

@@ -33,7 +33,7 @@ Rules live as long as the session: nothing is written back to the command line o
 
 ## Editing rules
 
-Every rule of a session can be edited, deleted or added, including those from the command line or the policy: from the [web UI](web.md#editing-rules), the [Headlamp plugin](../kubernetes/answer.md#headlamp-plugin), the Ctrl-] menu (`r`) or `hallpass answer`. A change applies to this session only. Rules are written as `VERDICT KIND VALUE [for DURATION]`:
+Every rule of a session can be edited, deleted or added, including those from the command line or the policy: from the [web UI](web.md#editing-rules), the [Headlamp plugin](../kubernetes/answer.md#headlamp-plugin), the Ctrl-] menu (`r`) or `hallpass answer`. A change applies to this session only. Rules are written as `VERDICT KIND VALUE [for DURATION]`. The syntax has no quoting: a rule on a name it cannot write (a file named `**`, a path containing ` for ` or a newline...) can be deleted, not edited.
 
 ```
 allow write /home/me/src/**       # writing in a tree; without /**, the file only

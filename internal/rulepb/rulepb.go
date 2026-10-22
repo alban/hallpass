@@ -26,7 +26,9 @@ func To(r rules.Rule) *pb.Rule {
 		Verdict: pb.RuleVerdict(r.Verdict),
 		Label:   r.Label,
 		Set:     r.Set,
-		Spec:    r.Spec(),
+	}
+	if r.Editable(time.Now()) {
+		out.Spec = r.Spec()
 	}
 	switch o := r.Object; {
 	case o.Path != nil:

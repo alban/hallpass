@@ -555,11 +555,12 @@ function renderActivity() {
 }
 
 // forText gives what is left of an expiry, rounded down, as a "for"
-// suffix: an edit can keep an expiry, not extend it.
+// suffix: an edit can keep an expiry, not extend it. Less than a second
+// left is a second, not no expiry.
 function forText(expires) {
   if (!expires) return "";
   const secs = Math.floor((new Date(expires) - Date.now()) / 1000);
-  if (secs <= 0) return "";
+  if (secs <= 0) return " for 1s";
   return " for " + (secs >= 120 ? Math.floor(secs / 60) + "m" : secs + "s");
 }
 
@@ -668,7 +669,7 @@ function ruleRow(pid, r) {
     el("td", {}, obj),
     el("td", {}, r.label || ""),
     el("td", {}, r.expires ? new Date(r.expires).toLocaleTimeString() : ""),
-    el("td", {}, ...(r.set === PROTECTED_SET ? [] : [edit, " ", remove, err])));
+    el("td", {}, ...(r.set === PROTECTED_SET ? [] : r.spec ? [edit, " ", remove, err] : [remove, err])));
 }
 
 function addRuleForm(pid) {

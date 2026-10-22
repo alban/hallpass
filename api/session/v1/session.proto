@@ -288,7 +288,9 @@ message Rule {
   google.protobuf.Timestamp expires = 6; // unset: until removed
   string set = 7;
   // The rule in the text syntax of hallpass answer add (e.g. "allow write
-  // /src/**"), without its expiry; set by the server, ignored in requests.
+  // /src/**"), without its expiry; empty when the rule cannot be written
+  // in it, and then cannot be edited as text (rules.Rule.Editable). Set by
+  // the server, ignored in requests.
   string spec = 8;
 }
 

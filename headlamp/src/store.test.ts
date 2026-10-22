@@ -236,7 +236,7 @@ describe('types', () => {
     const now = Date.parse('2026-10-20T10:00:00Z');
     expect(forSuffix('2026-10-20T11:00:30Z', now)).toBe(' for 60m');
     expect(forSuffix('2026-10-20T10:01:30Z', now)).toBe(' for 90s');
-    expect(forSuffix('2026-10-20T09:00:00Z', now)).toBe('');
+    expect(forSuffix('2026-10-20T09:00:00Z', now)).toBe(' for 1s');
     expect(forSuffix(undefined, now)).toBe('');
     expect(editLabel({ label: '@git' })).toBe('');
     expect(editLabel({ label: 'SSH keys' })).toBe('SSH keys');

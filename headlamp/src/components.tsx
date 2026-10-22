@@ -401,18 +401,20 @@ function RulesTable(props: { hp: Hallpass; agent: AgentState; session: Session }
                 </ButtonGroup>
               ) : r.set === protectedSet ? null : (
                 <ButtonGroup size="small" variant="outlined" disabled={busy}>
-                  <Button
-                    aria-label={`edit rule ${r.id}`}
-                    onClick={() =>
-                      setEditing({
-                        id: r.id || '',
-                        text: (r.spec || '') + forSuffix(r.expires, Date.now()),
-                        generation: session.generation || '',
-                      })
-                    }
-                  >
-                    Edit
-                  </Button>
+                  {r.spec ? (
+                    <Button
+                      aria-label={`edit rule ${r.id}`}
+                      onClick={() =>
+                        setEditing({
+                          id: r.id || '',
+                          text: r.spec + forSuffix(r.expires, Date.now()),
+                          generation: session.generation || '',
+                        })
+                      }
+                    >
+                      Edit
+                    </Button>
+                  ) : null}
                   <Button
                     color="error"
                     aria-label={`delete rule ${r.id}`}
