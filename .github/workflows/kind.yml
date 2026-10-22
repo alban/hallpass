@@ -1,0 +1,75 @@
+name: Kind
+
+# The Headlamp plugin's checks and the Kubernetes e2e tests (make
+# test-headlamp, test-kind, test-headlamp-kind), which need docker and take
+# longer than the Test workflow: on demand only, by workflow_dispatch from
+# the default branch, or by a pushed commit whose message has "[kind]".
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  KIND_VERSION: v0.33.0
+  KUBECTL_VERSION: v1.37.0
+  KUBECTL_SHA256: 6129359f4e1f3848a5572ccb0b26cf28b8ca08cef38c95a765b2f64a2c961a2f
+
+jobs:
+  headlamp:
+    name: Headlamp plugin
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[kind]')
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+    - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version-file: go.mod
+    - name: make test-headlamp
+      run: make test-headlamp
+
+  kind:
+    name: Kind e2e (${{ matrix.answer }})
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[kind]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        answer: [cli, headlamp]
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+    - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version-file: go.mod
+    - name: Install kind and kubectl
+      run: |
+        GOBIN=/usr/local/bin sudo -E env "PATH=$PATH" go install "sigs.k8s.io/kind@$KIND_VERSION"
+        curl -fsSLo kubectl "https://dl.k8s.io/release/$KUBECTL_VERSION/bin/linux/amd64/kubectl"
+        echo "$KUBECTL_SHA256  kubectl" | sha256sum -c -
+        sudo install -m 755 kubectl /usr/local/bin/kubectl
+        rm kubectl
+        kind version
+        kubectl version --client
+    - name: make test-kind
+      if: matrix.answer == 'cli'
+      run: make test-kind
+    - name: make test-headlamp-kind
+      if: matrix.answer == 'headlamp'
+      env:
+        CHROMIUM: /usr/bin/google-chrome
+      run: |
+        # Ubuntu 24.04 keeps unprivileged user namespaces from Chrome's
+        # sandbox.
+        sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        PROFILE="$RUNNER_TEMP/chrome-profile" make test-headlamp-kind
