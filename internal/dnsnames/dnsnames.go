@@ -62,6 +62,26 @@ func Servers(path string) ([]netip.Addr, error) {
 // queries only to port 53 of servers: if resolv.conf names another
 // server later, lookups fail rather than reach it.
 func HostLookup(servers []netip.Addr) LookupFunc {
+	r := serverResolver(servers)
+	return func(ctx context.Context, name string) ([]netip.Addr, error) {
+		return r.LookupNetIP(ctx, "ip", name)
+	}
+}
+
+// ReverseFunc returns the names the PTR records of addr give.
+type ReverseFunc func(ctx context.Context, addr netip.Addr) ([]string, error)
+
+// HostReverse returns a reverse lookup that sends its queries only to
+// port 53 of servers, as HostLookup.
+func HostReverse(servers []netip.Addr) ReverseFunc {
+	r := serverResolver(servers)
+	return func(ctx context.Context, addr netip.Addr) ([]string, error) {
+		return r.LookupAddr(ctx, addr.String())
+	}
+}
+
+// serverResolver returns Go's resolver, dialing only port 53 of servers.
+func serverResolver(servers []netip.Addr) *net.Resolver {
 	r := &net.Resolver{
 		PreferGo: true,
 		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
@@ -73,9 +93,7 @@ func HostLookup(servers []netip.Addr) LookupFunc {
 			return d.DialContext(ctx, network, address)
 		},
 	}
-	return func(ctx context.Context, name string) ([]netip.Addr, error) {
-		return r.LookupNetIP(ctx, "ip", name)
-	}
+	return r
 }
 
 func isServer(servers []netip.Addr, ap netip.AddrPort) bool {
@@ -115,6 +133,8 @@ const Floor = 5 * time.Minute
 // Bounds: names kept, lookups at once, and how long a lookup may take.
 const (
 	maxNames    = 4096
+	maxAddrs    = 4096
+	maxPerAddr  = 8
 	maxLookups  = 4
 	lookupLimit = 3 * time.Second
 	// fresh is how long a lookup is not repeated for the same name.
@@ -127,20 +147,38 @@ type LookupFunc func(ctx context.Context, name string) ([]netip.Addr, error)
 // Names maps addresses to the names a session asked about.
 type Names struct {
 	lookup  LookupFunc
+	reverse ReverseFunc
 	servers []netip.Addr
 	now     func() time.Time
 	sem     chan struct{}
 
-	mu       sync.Mutex
-	byAddr   map[netip.Addr][]entry // most recent first
-	looked   map[string]time.Time   // name -> when its lookup ended
-	inflight map[string]chan struct{}
+	mu sync.Mutex
+	// dns is whether the session's own DNS was allowed: a query to a
+	// server (Observe) or a relayed answer (Answer).
+	dns         bool
+	displayOnly bool
+	byAddr      map[netip.Addr][]entry // most recent first
+	looked      map[string]time.Time   // name -> when its lookup ended
+	ptr         map[netip.Addr]ptrEntry
+	inflight    map[string]chan struct{}
 }
 
 type entry struct {
 	name    string
 	expires time.Time
+	trust   Trust
 }
+
+// Trust says where a name of an address comes from.
+type Trust int
+
+const (
+	// LookedUp: hallpass looked up a name the session asked about, and
+	// the answer had the address (the session's own answer may differ).
+	LookedUp Trust = iota + 1
+	// Observed: hallpass relayed the session's own answer (Answer).
+	Observed
+)
 
 // New returns an empty map whose names are looked up with lookup, which
 // must send its queries only to servers (HostLookup).
@@ -152,6 +190,7 @@ func New(lookup LookupFunc, servers []netip.Addr) *Names {
 		sem:      make(chan struct{}, maxLookups),
 		byAddr:   map[netip.Addr][]entry{},
 		looked:   map[string]time.Time{},
+		ptr:      map[netip.Addr]ptrEntry{},
 		inflight: map[string]chan struct{}{},
 	}
 }
@@ -173,6 +212,7 @@ func (n *Names) Observe(name string) {
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	n.dns = true
 	if _, ok := n.inflight[name]; ok {
 		return
 	}
@@ -204,10 +244,51 @@ func (n *Names) Observe(name string) {
 		}
 		for _, a := range addrs {
 			a = a.Unmap()
-			es := slices.DeleteFunc(n.byAddr[a], func(e entry) bool { return e.name == name })
-			n.byAddr[a] = append([]entry{{name: name, expires: now.Add(Floor)}}, es...)
+			n.addLocked(a, entry{name: name, expires: now.Add(Floor), trust: LookedUp})
 		}
 	}()
+}
+
+// addLocked records e for a, most recent first, replacing the entry of the
+// same name.
+func (n *Names) addLocked(a netip.Addr, e entry) {
+	a = a.Unmap()
+	es := n.byAddr[a]
+	if _, ok := n.byAddr[a]; !ok && len(n.byAddr) >= maxAddrs {
+		n.pruneLocked()
+		if len(n.byAddr) >= maxAddrs {
+			return
+		}
+	}
+	es = slices.DeleteFunc(es, func(o entry) bool { return o.name == e.name })
+	if len(es) >= maxPerAddr {
+		es = es[:maxPerAddr-1]
+	}
+	n.byAddr[a] = append([]entry{e}, es...)
+}
+
+// Answer records that the session's own answer gave name the addresses
+// addrs, valid for ttl (at least Floor): an answer hallpass relayed, so
+// the names are those the session will use (Observed).
+func (n *Names) Answer(name string, addrs []netip.Addr, ttl time.Duration) {
+	name = normalize(name)
+	if !validName(name) {
+		return
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.dns = true
+	exp := n.now().Add(max(ttl, Floor))
+	for _, a := range addrs {
+		if a.IsValid() {
+			n.addLocked(a, entry{name: name, expires: exp, trust: Observed})
+		}
+	}
+}
+
+// normalize returns name lowercase, without the final dot.
+func normalize(name string) string {
+	return strings.ToLower(strings.TrimSuffix(name, "."))
 }
 
 // Lookup returns the names of addr, most recent first, after waiting at
@@ -243,6 +324,84 @@ func (n *Names) Lookup(addr netip.Addr, wait time.Duration) []string {
 		}
 	}
 	return out
+}
+
+// SetReverse sets the reverse lookup of Unverified, which must send its
+// queries only to the servers of New (HostReverse).
+func (n *Names) SetReverse(f ReverseFunc) { n.reverse = f }
+
+type ptrEntry struct {
+	names []string
+	when  time.Time
+}
+
+// maxPTR bounds the reverse lookups remembered.
+const maxPTR = 1024
+
+// Unverified returns the names the PTR records of addr give, looked up
+// with the reverse lookup (SetReverse) within wait: display hints only,
+// since whoever controls the address's reverse zone chooses them, never
+// rule matchers. None until the session's own DNS was allowed (Observe,
+// Answer): a session denied DNS must not get hallpass to send queries
+// for it (a PTR in a reverse zone the session's owner controls carries
+// data out).
+func (n *Names) Unverified(addr netip.Addr, wait time.Duration) []string {
+	addr = addr.Unmap()
+	if n.reverse == nil || !addr.IsValid() || addr.IsLoopback() || addr.IsUnspecified() {
+		return nil
+	}
+	n.mu.Lock()
+	dns := n.dns
+	e, ok := n.ptr[addr]
+	n.mu.Unlock()
+	if !dns {
+		return nil
+	}
+	if ok && n.now().Sub(e.when) < Floor {
+		return e.names
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), min(wait, lookupLimit))
+	defer cancel()
+	names, err := n.reverse(ctx, addr)
+	var out []string
+	for _, name := range names {
+		name = normalize(name)
+		if validName(name) && !slices.Contains(out, name) {
+			out = append(out, name)
+		}
+	}
+	if err != nil && len(out) == 0 && ctx.Err() != nil {
+		return nil // not remembered: try again next time
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if len(n.ptr) >= maxPTR {
+		clear(n.ptr)
+	}
+	n.ptr[addr] = ptrEntry{names: out, when: n.now()}
+	return out
+}
+
+// SetDisplayOnly makes n's names shown in prompts but never matched by
+// rules (Match): for a session that could forge the answers hallpass
+// relays (a container with CAP_NET_RAW sharing the forwarder's network
+// namespace).
+func (n *Names) SetDisplayOnly() {
+	n.mu.Lock()
+	n.displayOnly = true
+	n.mu.Unlock()
+}
+
+// Match is Lookup, for the host rules: none when the names are display
+// only (SetDisplayOnly).
+func (n *Names) Match(addr netip.Addr, wait time.Duration) []string {
+	n.mu.Lock()
+	d := n.displayOnly
+	n.mu.Unlock()
+	if d {
+		return nil
+	}
+	return n.Lookup(addr, wait)
 }
 
 // pruneLocked forgets the expired names and lookups.
