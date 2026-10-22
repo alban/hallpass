@@ -339,7 +339,7 @@ func (m *Monitor) open(l *listener, n seccomp.Notif, syscall string, op rules.Op
 	if v, id, ok := rules.Eval(m.rules, op, obj, m.now()); ok && v != rules.Ask {
 		return nil, Reason{Rule: id}, v == rules.Allow
 	}
-	key := requestKey(op, obj, **subject, n.ID)
+	key := requestKey(op, obj, names, **subject, n.ID)
 	if r := m.byKey[key]; r != nil {
 		r.waiters = append(r.waiters, notifWaiter(l, n.ID))
 		return r, Reason{}, false
@@ -668,7 +668,7 @@ func buildSubject(tid uint32, root int) rules.Subject {
 // same process (thread group). The prompt shows one process only, so an
 // answer must not reach another one. Unreadable paths, and processes whose
 // thread group is unknown, are never coalesced (id is the notification's).
-func requestKey(op rules.Op, obj rules.Object, subject rules.Subject, id uint64) string {
+func requestKey(op rules.Op, obj rules.Object, names []string, subject rules.Subject, id uint64) string {
 	tgid := 0
 	if len(subject.Chain) > 0 {
 		tgid = subject.Chain[0].PID
@@ -679,6 +679,10 @@ func requestKey(op rules.Op, obj rules.Object, subject rules.Subject, id uint64)
 		return fmt.Sprintf("%d\x00%d\x00path\x00%s", tgid, op, obj.Path.Path)
 	case obj.Proc != nil:
 		return fmt.Sprintf("%d\x00%d\x00proc\x00%s\x00%s", tgid, op, obj.Proc.Name, obj.Proc.Target.Chain[0].Comm)
+	case obj.Inet != nil && len(names) > 0:
+		// The addresses of one name, tried one after the other or at
+		// once (happy eyeballs): one question, answered by name.
+		return fmt.Sprintf("%d\x00%d\x00inet-name\x00%d\x00%s\x00%d", tgid, op, obj.Inet.Proto, names[0], obj.Inet.Addr.Port())
 	case obj.Inet != nil:
 		return fmt.Sprintf("%d\x00%d\x00inet\x00%d\x00%s", tgid, op, obj.Inet.Proto, obj.Inet.Addr)
 	case obj.Unix != nil:

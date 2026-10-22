@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -399,18 +400,25 @@ func TestRequestKey(t *testing.T) {
 	path := func(p string) rules.Object { return rules.Object{Path: &rules.PathObject{Path: p}} }
 	by := func(pid int) rules.Subject { return rules.Subject{Chain: []rules.Task{{PID: pid, TID: pid + 1}}} }
 	unknown := rules.Object{Unknown: errors.New("unreadable")}
+	addr := func(a string) rules.Object {
+		return rules.Object{Inet: &rules.InetObject{Proto: 6, Addr: netip.MustParseAddrPort(a)}}
+	}
+	gh := []string{"github.com"}
 	for _, tc := range []struct {
 		name string
 		a, b string
 		same bool
 	}{
-		{"same process, same path", requestKey(rules.OpMkdir, path("/x"), by(10), 1), requestKey(rules.OpMkdir, path("/x"), by(10), 2), true},
-		{"other process", requestKey(rules.OpMkdir, path("/x"), by(10), 1), requestKey(rules.OpMkdir, path("/x"), by(11), 2), false},
-		{"other path", requestKey(rules.OpMkdir, path("/x"), by(10), 1), requestKey(rules.OpMkdir, path("/y"), by(10), 2), false},
-		{"other op", requestKey(rules.OpMkdir, path("/x"), by(10), 1), requestKey(rules.OpDelete, path("/x"), by(10), 2), false},
-		{"unknown process", requestKey(rules.OpMkdir, path("/x"), by(0), 1), requestKey(rules.OpMkdir, path("/x"), by(0), 2), false},
-		{"no subject", requestKey(rules.OpMkdir, path("/x"), rules.Subject{}, 1), requestKey(rules.OpMkdir, path("/x"), rules.Subject{}, 2), false},
-		{"unknown path", requestKey(rules.OpMkdir, unknown, by(10), 1), requestKey(rules.OpMkdir, unknown, by(10), 2), false},
+		{"same process, same path", requestKey(rules.OpMkdir, path("/x"), nil, by(10), 1), requestKey(rules.OpMkdir, path("/x"), nil, by(10), 2), true},
+		{"other process", requestKey(rules.OpMkdir, path("/x"), nil, by(10), 1), requestKey(rules.OpMkdir, path("/x"), nil, by(11), 2), false},
+		{"other path", requestKey(rules.OpMkdir, path("/x"), nil, by(10), 1), requestKey(rules.OpMkdir, path("/y"), nil, by(10), 2), false},
+		{"other op", requestKey(rules.OpMkdir, path("/x"), nil, by(10), 1), requestKey(rules.OpDelete, path("/x"), nil, by(10), 2), false},
+		{"unknown process", requestKey(rules.OpMkdir, path("/x"), nil, by(0), 1), requestKey(rules.OpMkdir, path("/x"), nil, by(0), 2), false},
+		{"no subject", requestKey(rules.OpMkdir, path("/x"), nil, rules.Subject{}, 1), requestKey(rules.OpMkdir, path("/x"), nil, rules.Subject{}, 2), false},
+		{"unknown path", requestKey(rules.OpMkdir, unknown, nil, by(10), 1), requestKey(rules.OpMkdir, unknown, nil, by(10), 2), false},
+		{"addresses of one name", requestKey(rules.OpConnect, addr("1.2.3.4:443"), gh, by(10), 1), requestKey(rules.OpConnect, addr("[2001:db8::4]:443"), gh, by(10), 2), true},
+		{"other port of a name", requestKey(rules.OpConnect, addr("1.2.3.4:443"), gh, by(10), 1), requestKey(rules.OpConnect, addr("1.2.3.4:22"), gh, by(10), 2), false},
+		{"addresses without names", requestKey(rules.OpConnect, addr("1.2.3.4:443"), nil, by(10), 1), requestKey(rules.OpConnect, addr("1.2.3.5:443"), nil, by(10), 2), false},
 	} {
 		if got := tc.a == tc.b; got != tc.same {
 			t.Errorf("%s: same key %v, want %v (%q, %q)", tc.name, got, tc.same, tc.a, tc.b)
