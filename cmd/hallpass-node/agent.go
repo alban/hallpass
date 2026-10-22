@@ -274,7 +274,7 @@ func (a *agent) attach(st *specs.ContainerProcessState, fd int) error {
 	warn := func(msg string) { a.log.Warn(msg, "container", id) }
 	proxy, err := a.trust.start(id, st.Pid, dns, func(ctx context.Context, owner any, r egress.Request) (bool, string) {
 		return s.m.DecideHTTP(ctx, owner, rules.HTTPObject{Method: r.Method, Host: r.Host, Path: r.Path})
-	}, warn)
+	}, warn, s.credentialLeak)
 	switch {
 	case proxy != nil:
 		s.m.SetProxy(proxy)

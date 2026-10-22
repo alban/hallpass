@@ -33,6 +33,9 @@ const (
 	reasonPolicyDenied = "HallpassPolicyDenied"
 	// reasonStarted: the container is sandboxed, and how to answer.
 	reasonStarted = "HallpassStarted"
+	// reasonCredentialLeak: a request carrying a credential to another
+	// host than its own was refused.
+	reasonCredentialLeak = "HallpassCredentialLeak"
 	// reasonReleased: the workload gave back grants of its requests made
 	// in advance (hallpass-request release).
 	reasonReleased = "HallpassReleased"

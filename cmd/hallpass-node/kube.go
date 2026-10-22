@@ -9,12 +9,14 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/alban/hallpass/internal/policy"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -41,6 +43,8 @@ type cluster interface {
 	Selected(ns string) (bool, error)
 	// Policy returns HallpassPolicy name.
 	Policy(name string) (*Policy, error)
+	// Secret returns the value of key of Secret name in namespace ns.
+	Secret(ns, name, key string) (string, error)
 }
 
 // errNotSynced fails the lookups until the caches have synced.
@@ -156,4 +160,23 @@ func (k *kube) Policy(name string) (*Policy, error) {
 		return nil, fmt.Errorf("HallpassPolicy %q: %w", name, err)
 	}
 	return parsePolicy(name, spec)
+}
+
+// Secret reads a key of a Secret, without caching it: hallpass-node may
+// read only the Secrets a namespace's owner granted it, by name.
+func (k *kube) Secret(ns, name, key string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	s, err := k.cs.CoreV1().Secrets(ns).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsForbidden(err) {
+			return "", fmt.Errorf("secret %s/%s: hallpass-node may not read it: grant its service account get on it (see the docs, Credentials): %w", ns, name, err)
+		}
+		return "", fmt.Errorf("secret %s/%s: %w", ns, name, err)
+	}
+	v := strings.TrimSpace(string(s.Data[key]))
+	if v == "" {
+		return "", fmt.Errorf("secret %s/%s: no key %q, or an empty value", ns, name, key)
+	}
+	return v, nil
 }

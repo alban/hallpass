@@ -160,7 +160,7 @@ hallpass --mediate=write,exec,connect --allow-connect=github.com:443,api.github.
 - The credential's hosts go through the proxy; without `http` rules for them, their connections are asked about and allowed as any others, and their requests are not. An allowed connection that cannot be handed to the proxy is denied (reason `proxy-failed`), not sent with the placeholder.
 - The proxy knows a connection is for a credential's host only by the names of its address (see [Names](../how-it-works/network.md#names)): one the session made to an address without a name (a hard-coded address, a name resolved by DNS over HTTPS or `/etc/hosts`) goes out directly, with the placeholder, and the server refuses it (`401`).
 - The sandbox can still read the value where it lives (`~/.config/gh/hosts.yml`) unless reads of it are denied.
-- Not on Kubernetes yet: a HallpassPolicy with a `credential` line is refused.
+- On Kubernetes, the value comes from a Secret in the pod's namespace, named in the HallpassPolicy, never mounted in the pod; hallpass-node reads it when the container is created, only if the namespace's owner granted it (no Secret access by default). The built-in profiles only. See [Credentials](../kubernetes/policies.md#credentials).
 
 ## Rule files
 

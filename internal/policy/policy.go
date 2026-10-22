@@ -68,12 +68,29 @@ type Spec struct {
 	// these: the fields above with an equivalent rule are refused there
 	// (Structured), and no variables.
 	Rules string `json:"rules,omitempty"`
+	// Credentials say where the values of the credentials of the
+	// "credential NAME" lines come from on Kubernetes: a Secret in the
+	// pod's namespace, which hallpass-node reads (the namespace's owner
+	// grants it). The workstation takes the profile's source instead.
+	Credentials map[string]CredentialSource `json:"credentials,omitempty"`
 
 	// RuleFiles are rule files given on the command line (--rules),
 	// read; Vars expands their variables (and those of Rules), nil for
 	// none.
 	RuleFiles []RuleFile                        `json:"-"`
 	Vars      func(name string) (string, error) `json:"-"`
+}
+
+// CredentialSource is where a credential's value comes from on
+// Kubernetes.
+type CredentialSource struct {
+	SecretRef *SecretRef `json:"secretRef,omitempty"`
+}
+
+// SecretRef is a key of a Secret, in the pod's namespace.
+type SecretRef struct {
+	Name string `json:"name"`
+	Key  string `json:"key"`
 }
 
 // RuleFile is the text of a rule file and its name, for errors.

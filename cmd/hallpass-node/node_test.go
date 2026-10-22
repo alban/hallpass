@@ -180,6 +180,7 @@ func TestDefaultsForExec(t *testing.T) {
 type fakeCluster struct {
 	selected map[string]bool
 	policies map[string]*Policy
+	secrets  map[string]string // ns/name/key
 }
 
 func (f fakeCluster) Selected(ns string) (bool, error) {
@@ -188,6 +189,13 @@ func (f fakeCluster) Selected(ns string) (bool, error) {
 		return false, errors.New("unknown namespace")
 	}
 	return s, nil
+}
+
+func (f fakeCluster) Secret(ns, name, key string) (string, error) {
+	if v, ok := f.secrets[ns+"/"+name+"/"+key]; ok {
+		return v, nil
+	}
+	return "", errors.New("forbidden")
 }
 
 func (f fakeCluster) Policy(name string) (*Policy, error) {

@@ -7,7 +7,6 @@ import (
 	"context"
 	"crypto/x509"
 	"fmt"
-	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -66,33 +65,18 @@ func loadCredentials(dir string, names []string) (*credentials, error) {
 		if err != nil {
 			return nil, fmt.Errorf("credential %s: %w", name, err)
 		}
-		ec := egress.Credential{Name: name, Value: value}
-		shown := value
-		if p.Mask {
-			if ec.Placeholder, err = p.Shape.Placeholder(); err != nil {
-				return nil, err
-			}
-			shown = ec.Placeholder
+		b, err := p.Broker(value)
+		if err != nil {
+			return nil, err
 		}
-		for _, h := range p.Hosts {
-			host, suffix, err := rules.ParseHost(h)
-			if err != nil {
-				return nil, fmt.Errorf("credential %s: %w", name, err)
-			}
-			eh := egress.Host{Name: host, Suffix: suffix}
-			ec.Hosts = append(ec.Hosts, eh)
-			if !slices.Contains(c.hosts, eh) {
-				c.hosts = append(c.hosts, eh)
+		ec := b.Credential
+		for _, h := range ec.Hosts {
+			if !slices.Contains(c.hosts, h) {
+				c.hosts = append(c.hosts, h)
 			}
 		}
-		for _, k := range slices.Sorted(maps.Keys(p.Env)) {
-			c.env = append(c.env, k+"="+strings.ReplaceAll(p.Env[k], "{placeholder}", shown))
-		}
-		c.vars = append(c.vars, p.Strip...)
-		if p.Source.Kind == "env" {
-			// The value's own variable never reaches the sandbox.
-			c.vars = append(c.vars, p.Source.Arg)
-		}
+		c.env = append(c.env, b.Env...)
+		c.vars = append(c.vars, b.Strip...)
 		c.list = append(c.list, ec)
 	}
 	return c, nil

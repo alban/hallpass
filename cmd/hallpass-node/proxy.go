@@ -49,7 +49,14 @@ type trustStore struct {
 	upstream *x509.CertPool
 
 	mu  sync.Mutex
-	cas map[string]*egress.CA
+	cas map[string]*pendingTrust
+}
+
+// pendingTrust is what a container's proxy needs, from its creation to
+// its session: its CA, its credentials (their values in memory only).
+type pendingTrust struct {
+	ca    *egress.CA
+	creds []egress.Credential
 }
 
 // httpHosts returns the hosts of the http rules of rs.
@@ -66,13 +73,21 @@ func httpHosts(rs []rules.Rule) []egress.Host {
 	return out
 }
 
-// prepare makes the CA of container id for hosts and its directory, with
-// the CA alone for now (the bundle gets the container's own roots when
-// its session starts, see start), and adds to adj the read-only mount
-// of the directory and the variables naming the bundles.
-func (t *trustStore) prepare(id string, hosts []egress.Host, adj *api.ContainerAdjustment) error {
+// prepare makes the CA of container id for hosts and the hosts of creds,
+// and its directory, with the CA alone for now (the bundle gets the
+// container's own roots when its session starts, see start), and adds to
+// adj the read-only mount of the directory and the variables naming the
+// bundles. creds are put on the wire by the proxy.
+func (t *trustStore) prepare(id string, hosts []egress.Host, creds []egress.Credential, adj *api.ContainerAdjustment) error {
 	if id == "" || strings.ContainsAny(id, "/.") {
 		return fmt.Errorf("container id %q", id)
+	}
+	for _, c := range creds {
+		for _, h := range c.Hosts {
+			if !slices.Contains(hosts, h) {
+				hosts = append(hosts, h)
+			}
+		}
 	}
 	ca, err := egress.NewCA("hallpass container "+id, hosts, caLife)
 	if err != nil {
@@ -89,9 +104,9 @@ func (t *trustStore) prepare(id string, hosts []egress.Host, adj *api.ContainerA
 	}
 	t.mu.Lock()
 	if t.cas == nil {
-		t.cas = map[string]*egress.CA{}
+		t.cas = map[string]*pendingTrust{}
 	}
-	t.cas[id] = ca
+	t.cas[id] = &pendingTrust{ca: ca, creds: creds}
 	t.mu.Unlock()
 	adj.AddMount(&api.Mount{Source: dir, Destination: trustMount, Type: "bind", Options: []string{"rbind", "ro", "nosuid", "nodev", "noexec"}})
 	for _, v := range egress.TrustEnv {
@@ -118,14 +133,15 @@ var containerBundles = []string{
 // image's own bundle, so that it trusts what it trusted, and the CA; the
 // servers are verified with t.upstream. nil without a CA (no http rules,
 // or an agent restarted since the container was created).
-func (t *trustStore) start(id string, pid int, dns *dnsState, decide egress.Decide, warn func(string)) (*egress.Proxy, error) {
+func (t *trustStore) start(id string, pid int, dns *dnsState, decide egress.Decide, warn func(string), leak func(owner any, r egress.Request, name string)) (*egress.Proxy, error) {
 	t.mu.Lock()
-	ca := t.cas[id]
+	pt := t.cas[id]
 	delete(t.cas, id)
 	t.mu.Unlock()
-	if ca == nil {
+	if pt == nil {
 		return nil, nil
 	}
+	ca := pt.ca
 	if dns == nil {
 		return nil, errors.New("http rules need DNS names (no cgroup v2?)")
 	}
@@ -140,9 +156,11 @@ func (t *trustStore) start(id string, pid int, dns *dnsState, decide egress.Deci
 		return nil, err
 	}
 	return &egress.Proxy{
-		CA:     ca,
-		Roots:  t.upstream,
-		Decide: decide,
+		CA:          ca,
+		Roots:       t.upstream,
+		Decide:      decide,
+		Credentials: pt.creds,
+		Leak:        leak,
 		// Servers are reached from the pod's network namespace:
 		// NetworkPolicy applies as if the container connected. A thread
 		// per dial: a slow server must not hold the DNS forwarder's.

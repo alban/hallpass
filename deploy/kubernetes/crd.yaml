@@ -110,6 +110,29 @@ spec:
                   type: array
                   items:
                     type: string
+                credentials:
+                  description: >-
+                    Where the value of each "credential NAME" line of rules
+                    comes from: a key of a Secret in the pod's namespace,
+                    which hallpass-node reads when the container is created
+                    (the namespace's owner grants its service account get on
+                    that Secret). The container gets a placeholder; the
+                    HTTPS proxy puts the value on the wire, to the
+                    credential's hosts only.
+                  type: object
+                  maxProperties: 16
+                  additionalProperties:
+                    type: object
+                    required: [secretRef]
+                    properties:
+                      secretRef:
+                        type: object
+                        required: [name, key]
+                        properties:
+                          name:
+                            type: string
+                          key:
+                            type: string
                 groups:
                   description: >-
                     Groups of container programs, by name ("@tools"): a new

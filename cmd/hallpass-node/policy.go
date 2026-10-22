@@ -6,8 +6,10 @@ package main
 import (
 	"fmt"
 	"path"
+	"slices"
 
 	"github.com/alban/hallpass/internal/defaults"
+	"github.com/alban/hallpass/internal/egress/profiles"
 	"github.com/alban/hallpass/internal/policy"
 	"github.com/alban/hallpass/internal/procfs"
 	"github.com/alban/hallpass/internal/programs"
@@ -22,6 +24,9 @@ import (
 type Policy struct {
 	Name string
 	policy.Policy
+	// Secrets are where the values of the policy's credentials are, in
+	// the pod's namespace.
+	Secrets map[string]policy.CredentialSource
 }
 
 // parsePolicy validates spec, the HallpassPolicy name.
@@ -35,12 +40,23 @@ func parsePolicy(name string, spec policy.Spec) (*Policy, error) {
 	if err != nil {
 		return nil, fmt.Errorf("policy %s: %w", name, err)
 	}
-	if len(p.Credentials) > 0 {
-		// Secrets are not read yet: the line would do nothing, and
-		// must not look like it works.
-		return nil, fmt.Errorf("policy %s: credential %s: credentials are not supported on Kubernetes yet", name, p.Credentials[0])
+	// Each credential line takes its value from a Secret: no other
+	// source on a node (no $HOME, and no command run for a pod).
+	for _, c := range p.Credentials {
+		src, ok := spec.Credentials[c]
+		if !ok || src.SecretRef == nil || src.SecretRef.Name == "" || src.SecretRef.Key == "" {
+			return nil, fmt.Errorf("policy %s: credential %s: want credentials.%s.secretRef with a name and a key", name, c, c)
+		}
+		if _, err := profiles.Load("", c); err != nil {
+			return nil, fmt.Errorf("policy %s: %w", name, err)
+		}
 	}
-	return &Policy{Name: name, Policy: p}, nil
+	for c := range spec.Credentials {
+		if !slices.Contains(p.Credentials, c) {
+			return nil, fmt.Errorf("policy %s: credentials.%s: no \"credential %s\" line in rules", name, c, c)
+		}
+	}
+	return &Policy{Name: name, Policy: p, Secrets: spec.Credentials}, nil
 }
 
 // containerAllows are written by ordinary containers and hold nothing to

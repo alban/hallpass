@@ -14,6 +14,8 @@ import (
 	"github.com/containerd/nri/pkg/api"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 
+	"github.com/alban/hallpass/internal/egress"
+	"github.com/alban/hallpass/internal/egress/profiles"
 	"github.com/alban/hallpass/internal/ociseccomp"
 	"github.com/alban/hallpass/internal/seccomp"
 )
@@ -133,23 +135,66 @@ func (p *plugin) adjust(pod *api.PodSandbox, ctr *api.Container) (*api.Container
 	}
 	adj := &api.ContainerAdjustment{}
 	adj.SetLinuxSeccompPolicy(api.FromOCILinuxSeccomp(prof))
-	if hosts := httpHosts(pol.Rules); len(hosts) > 0 && cats&seccomp.Connect != 0 && p.trust != nil {
+	hosts := httpHosts(pol.Rules)
+	if (len(hosts) > 0 || len(pol.Credentials) > 0) && cats&seccomp.Connect != 0 && p.trust != nil {
+		creds, err := p.brokerCredentials(pod.GetNamespace(), pol, adj)
+		if err != nil {
+			// Fail closed: a credential that injects nothing must
+			// not look like it works.
+			return nil, fmt.Errorf("hallpass: %w", err)
+		}
 		// The proxy's CA, trusted through a read-only mount and the
 		// variables of the tools.
-		if err := p.trust.prepare(ctr.GetId(), hosts, adj); err != nil {
+		if err := p.trust.prepare(ctr.GetId(), hosts, creds, adj); err != nil {
 			return nil, fmt.Errorf("hallpass: https proxy: %w", err)
 		}
 	}
 	return adj, nil
 }
 
-// RemoveContainer drops the CA prepared for a container whose session
-// never started (created, never run).
+// RemoveContainer drops the CA and the credentials prepared for a
+// container whose session never started (created, never run).
 func (p *plugin) RemoveContainer(_ context.Context, _ *api.PodSandbox, ctr *api.Container) error {
 	if p.trust != nil {
 		p.trust.remove(ctr.GetId())
 	}
 	return nil
+}
+
+// brokerCredentials reads the values of pol's credentials from their
+// Secrets in namespace ns, and adds to adj the placeholders' variables
+// and the removal of the variables the profiles strip.
+func (p *plugin) brokerCredentials(ns string, pol *Policy, adj *api.ContainerAdjustment) ([]egress.Credential, error) {
+	var out []egress.Credential
+	for _, name := range pol.Credentials {
+		prof, err := profiles.Load("", name)
+		if err != nil {
+			return nil, err
+		}
+		if !prof.Mask {
+			// The value would be in the container, and in its OCI
+			// spec on the node.
+			return nil, fmt.Errorf("credential %s: mode %q gives the value to the container: not on Kubernetes", name, "pass")
+		}
+		ref := pol.Secrets[name].SecretRef
+		value, err := p.cluster.Secret(ns, ref.Name, ref.Key)
+		if err != nil {
+			return nil, fmt.Errorf("credential %s: %w", name, err)
+		}
+		b, err := prof.Broker(value)
+		if err != nil {
+			return nil, err
+		}
+		for _, kv := range b.Env {
+			k, v, _ := strings.Cut(kv, "=")
+			adj.AddEnv(k, v)
+		}
+		for _, k := range b.Strip {
+			adj.RemoveEnv(k)
+		}
+		out = append(out, b.Credential)
+	}
+	return out, nil
 }
 
 // envHome returns $HOME from a container's environment.

@@ -23,6 +23,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"math/big"
 	"os"
@@ -32,6 +33,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/alban/hallpass/internal/egress"
+	"github.com/alban/hallpass/internal/rules"
 	"github.com/alban/hallpass/internal/secrets"
 )
 
@@ -407,4 +410,47 @@ func parseString(s string) (any, string, error) {
 		}
 	}
 	return nil, "", errors.New("unterminated string")
+}
+
+// Brokered is a credential ready for the proxy, and what the sandbox
+// gets instead of its value.
+type Brokered struct {
+	Credential egress.Credential
+	Env        []string // KEY=value set in the sandbox: the placeholder
+	Strip      []string // variables removed from the sandbox
+}
+
+// Broker makes the credential of profile p with value: a placeholder of
+// the profile's shape (mask), the environment naming it, the hosts.
+func (p *Profile) Broker(value string) (*Brokered, error) {
+	if strings.TrimSpace(value) == "" {
+		// An empty value is in every header: every request to another
+		// host would look like a leak.
+		return nil, fmt.Errorf("credential %s: empty value", p.Name)
+	}
+	b := &Brokered{Credential: egress.Credential{Name: p.Name, Value: value}}
+	shown := value
+	if p.Mask {
+		ph, err := p.Shape.Placeholder()
+		if err != nil {
+			return nil, err
+		}
+		b.Credential.Placeholder, shown = ph, ph
+	}
+	for _, h := range p.Hosts {
+		host, suffix, err := rules.ParseHost(h)
+		if err != nil {
+			return nil, fmt.Errorf("credential %s: %w", p.Name, err)
+		}
+		b.Credential.Hosts = append(b.Credential.Hosts, egress.Host{Name: host, Suffix: suffix})
+	}
+	for _, k := range slices.Sorted(maps.Keys(p.Env)) {
+		b.Env = append(b.Env, k+"="+strings.ReplaceAll(p.Env[k], "{placeholder}", shown))
+	}
+	b.Strip = append(b.Strip, p.Strip...)
+	if p.Source.Kind == "env" {
+		// The value's own variable never reaches the sandbox.
+		b.Strip = append(b.Strip, p.Source.Arg)
+	}
+	return b, nil
 }

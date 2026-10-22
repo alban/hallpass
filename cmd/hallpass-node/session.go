@@ -18,6 +18,7 @@ import (
 	pb "github.com/alban/hallpass/api/session/v1"
 	"github.com/alban/hallpass/internal/answer"
 	"github.com/alban/hallpass/internal/defaults"
+	"github.com/alban/hallpass/internal/egress"
 	"github.com/alban/hallpass/internal/lsm"
 	"github.com/alban/hallpass/internal/monitor"
 	"github.com/alban/hallpass/internal/rules"
@@ -56,6 +57,7 @@ type session struct {
 
 	mu     sync.Mutex
 	timers map[uint64]*time.Timer
+	leaks  map[string]time.Time // credential and host -> last Event
 
 	// listeners are the attached listeners, guarded by agent.mu.
 	listeners []*attached
@@ -364,6 +366,31 @@ func (s *session) RulesChanged(who string, add, removed []rules.Rule) {
 	msg := strings.Join(parts, ", ")
 	s.log.Info("rules", "change", msg, "client", who)
 	s.event(false, reasonRules, fmt.Sprintf("rules %s by %s", msg, clean(who)))
+}
+
+// credentialLeak reports a request the proxy refused because it carried
+// a credential to another host: a Warning Event on the pod, once a
+// minute per credential and host at most.
+func (s *session) credentialLeak(owner any, r egress.Request, name string) {
+	key := name + "\x00" + r.Host
+	s.mu.Lock()
+	if s.leaks == nil {
+		s.leaks = map[string]time.Time{}
+	}
+	last, seen := s.leaks[key]
+	now := time.Now()
+	if seen && now.Sub(last) < time.Minute {
+		s.mu.Unlock()
+		return
+	}
+	s.leaks[key] = now
+	s.mu.Unlock()
+	who := ""
+	if subj, ok := owner.(rules.Subject); ok && len(subj.Chain) > 0 {
+		who = subj.Chain[0].Comm + " "
+	}
+	s.log.Warn("credential leak blocked", "credential", name, "host", r.Host, "method", r.Method, "path", r.Path)
+	s.event(true, reasonCredentialLeak, fmt.Sprintf("%ssent the %s credential to %s, not one of its hosts (%s %s): refused", who, name, r.Host, r.Method, r.URL()))
 }
 
 // denyWithoutProxy denies port 443 to s, whose policy has http rules

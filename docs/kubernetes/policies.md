@@ -131,3 +131,57 @@ hallpass's rules first, the rest kept.
 
 [deploy/kubernetes/sample.yaml](https://github.com/alban/hallpass/blob/main/deploy/kubernetes/sample.yaml)
 has a complete example.
+
+## Credentials
+
+A `credential NAME` line keeps a token out of the container: the
+container gets a placeholder in the profile's variable (`GH_TOKEN` for
+`gh`), and hallpass-node's HTTPS proxy puts the real value on the wire,
+to the credential's hosts only (see
+[Credentials](../workstation/usage.md#credentials-experimental)). The
+value is a key of a Secret in the pod's namespace, never mounted in the
+pod:
+
+```yaml
+apiVersion: hallpass.io/v1alpha1
+kind: HallpassPolicy
+metadata: {name: ci}
+spec:
+  mediate: [write, connect]
+  rules: |
+    allow connect github.com:443
+    allow http GET https://api.github.com/**
+    credential gh
+  credentials:
+    gh: {secretRef: {name: gh-token, key: token}}
+```
+
+hallpass-node reads no Secret by default. The namespace's owner grants
+it the ones its pods use, by name:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: hallpass-credentials, namespace: ci}
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [gh-token]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: hallpass-credentials, namespace: ci}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: hallpass-credentials}
+subjects:
+  - {kind: ServiceAccount, name: hallpass-node, namespace: hallpass-system}
+```
+
+Without the grant, or without the Secret, the container is not created,
+with the reason in its events. The value stays in hallpass-node's
+memory; a restart of the agent before the container starts loses it
+(requests then carry the placeholder). A request carrying the
+credential to another host is refused and reported as a
+`HallpassCredentialLeak` Warning Event on the pod: a tripwire for the
+naive attempt, not the protection (see
+[Credentials](../workstation/usage.md#credentials-experimental)).
