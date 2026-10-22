@@ -181,7 +181,8 @@ const (
 )
 
 // New returns an empty map whose names are looked up with lookup, which
-// must send its queries only to servers (HostLookup).
+// must send its queries only to servers (HostLookup); with a nil lookup,
+// names come only from answers (Answer, AnswerMsg).
 func New(lookup LookupFunc, servers []netip.Addr) *Names {
 	return &Names{
 		lookup:   lookup,
@@ -213,6 +214,9 @@ func (n *Names) Observe(name string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.dns = true
+	if n.lookup == nil {
+		return
+	}
 	if _, ok := n.inflight[name]; ok {
 		return
 	}
