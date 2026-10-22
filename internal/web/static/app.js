@@ -35,7 +35,8 @@ function el(tag, props, ...children) {
 function opName(op) {
   op = op || 0;
   const names = [[1, "write"], [2, "create"], [4, "create directory"], [8, "create symlink"],
-    [16, "delete"], [32, "link"], [64, "rename"], [128, "truncate"], [256, "connect"], [512, "send"]];
+    [16, "delete"], [32, "link"], [64, "rename"], [128, "truncate"], [256, "connect"], [512, "send"],
+    [0x400, "exec"], [0x800, "http"]];
   for (const [bit, name] of names) if (op & bit) return name;
   return "?";
 }
@@ -44,7 +45,8 @@ function opsNames(ops) {
   const names = ["write", "create", "mkdir", "symlink", "delete", "link", "rename", "truncate", "connect", "send"];
   const out = [];
   names.forEach((n, i) => { if (ops & (1 << i)) out.push(n); });
-  const exec = ops & 0x400 ? ["exec"] : [];
+  // The kinds outside OpAll (rules.Op).
+  const exec = [[0x400, "exec"], [0x800, "http"]].filter(([bit]) => ops & bit).map(([, n]) => n);
   if (out.length === 10) return ["all", ...exec].join(",");
   if ((ops & 0xff) === 0xff) return ["write", ...out.slice(8), ...exec].join(",");
   if ((ops & 0x300) === 0x300) return [...out.slice(0, -2), "connect", ...exec].join(",");
