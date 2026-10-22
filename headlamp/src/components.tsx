@@ -23,6 +23,7 @@ import {
 } from '@mui/material';
 import { useSnackbar } from 'notistack';
 import { useState, useSyncExternalStore } from 'react';
+import { Draft, draftMatches, draftPath, draftText, methods, newDraft, toggle, Verdict } from './builder';
 import { getStore, Hallpass, useHallpass } from './hooks';
 import { policyAnnotation } from './sandbox';
 import { pendingCount, RulesChange } from './store';
@@ -110,6 +111,111 @@ function AnswerButtons(props: {
   );
 }
 
+// RuleBuilder makes an http rule from a pending HTTPS request: verdict,
+// methods, the URL's path segments (click: any value of that segment;
+// "/**": everything below), the rule's text, and how many of the
+// session's pending requests it matches, before adding it.
+function RuleBuilder(props: { hp: Hallpass; agent: AgentState; session: Session; request: PendingRequest }) {
+  const { hp, agent, session, request } = props;
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const [busy, setBusy] = useState(false);
+  const { enqueueSnackbar } = useSnackbar();
+  if (!newDraft(request.prompt)) {
+    return null;
+  }
+  if (!draft) {
+    return (
+      <Button size="small" onClick={() => setDraft(newDraft(request.prompt))}>
+        Make a rule
+      </Button>
+    );
+  }
+  const d = draft;
+  const text = draftText(d);
+  const matches = (session.pending || []).filter(r => draftMatches(d, r.prompt)).length;
+  const add = async () => {
+    setBusy(true);
+    try {
+      await hp.rules(agent.pod, session.info.id || '', { add: [text] });
+      setDraft(null);
+    } catch (e) {
+      enqueueSnackbar(`hallpass: add rule: ${e}`, { variant: 'error' });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const segs = d.cut >= 0 ? d.segs.slice(0, d.cut) : d.segs;
+  return (
+    <Box border={1} borderColor="divider" borderRadius={1} p={1} mt={1}>
+      <Box display="flex" gap={1} flexWrap="wrap" alignItems="center">
+        <ButtonGroup size="small" disabled={busy}>
+          {(['allow', 'ask', 'deny'] as Verdict[]).map(v => (
+            <Button key={v} variant={d.verdict === v ? 'contained' : 'outlined'} onClick={() => setDraft({ ...d, verdict: v })}>
+              {v}
+            </Button>
+          ))}
+        </ButtonGroup>
+        <ButtonGroup size="small" disabled={busy}>
+          {methods.map(m => (
+            <Button
+              key={m}
+              variant={d.methods.includes(m) ? 'contained' : 'outlined'}
+              onClick={() => setDraft({ ...d, methods: toggle(d.methods, m) })}
+            >
+              {m}
+            </Button>
+          ))}
+        </ButtonGroup>
+      </Box>
+      <Box display="flex" flexWrap="wrap" alignItems="center" mt={1} sx={{ fontFamily: 'monospace' }}>
+        https://{d.host}
+        {segs.map((seg, i) => (
+          <span key={i}>
+            /
+            <Tooltip title="Any value of this segment">
+              <Button
+                size="small"
+                sx={{ minWidth: 0, textTransform: 'none', fontFamily: 'monospace' }}
+                variant={d.wild.includes(i) ? 'contained' : 'text'}
+                onClick={() => setDraft({ ...d, wild: toggle(d.wild, i) })}
+              >
+                {d.wild.includes(i) ? '*' : seg}
+              </Button>
+            </Tooltip>
+            <Tooltip title="Everything below">
+              <Button
+                size="small"
+                sx={{ minWidth: 0, textTransform: 'none' }}
+                onClick={() => setDraft({ ...d, cut: i + 1 })}
+              >
+                /**
+              </Button>
+            </Tooltip>
+          </span>
+        ))}
+        {d.cut >= 0 && (
+          <>
+            /**{' '}
+            <Button size="small" onClick={() => setDraft({ ...d, cut: -1 })}>
+              Exact
+            </Button>
+          </>
+        )}
+      </Box>
+      <Typography variant="body2" sx={{ fontFamily: 'monospace' }} mt={1} aria-label="rule text">
+        {text}
+      </Typography>
+      <Typography variant="body2" color="text.secondary">
+        Path {draftPath(d)}; matches {matches} of this container's pending requests.
+      </Typography>
+      <ButtonGroup size="small" variant="outlined" disabled={busy}>
+        <Button onClick={add}>Add rule</Button>
+        <Button onClick={() => setDraft(null)}>Cancel</Button>
+      </ButtonGroup>
+    </Box>
+  );
+}
+
 interface PendingRow {
   agent: AgentState;
   session: Session;
@@ -186,6 +292,7 @@ function PendingTable(props: {
               reason given by the program (unverified): <q>{r.request.prompt.reason}</q>
             </Typography>
           )}
+          <RuleBuilder hp={hp} agent={r.agent} session={r.session} request={r.request} />
         </>
       ),
     },
