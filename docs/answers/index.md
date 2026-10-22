@@ -51,8 +51,8 @@ ID  RULE                           LABEL
 1   allow write /home/me/proj/**
 ...
 42  allow write /home/me/.cache/**
-$ hallpass answer edit 42 allow write /home/me/.cache/pip/**
-$ hallpass answer add deny exec /usr/bin/curl
+$ hallpass answer edit 42 'allow write /home/me/.cache/pip/**'
+$ hallpass answer add 'deny exec /usr/bin/curl'
 $ hallpass answer delete 43
 ```
 

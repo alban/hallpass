@@ -46,8 +46,8 @@ function opsNames(ops) {
   names.forEach((n, i) => { if (ops & (1 << i)) out.push(n); });
   const exec = ops & 0x400 ? ["exec"] : [];
   if (out.length === 10) return ["all", ...exec].join(",");
-  if ((ops & 0xff) === 0xff) return ["files", ...out.slice(8), ...exec].join(",");
-  if ((ops & 0x300) === 0x300) return [...out.slice(0, -2), "network", ...exec].join(",");
+  if ((ops & 0xff) === 0xff) return ["write", ...out.slice(8), ...exec].join(",");
+  if ((ops & 0x300) === 0x300) return [...out.slice(0, -2), "connect", ...exec].join(",");
   return [...out, ...exec].join(",");
 }
 

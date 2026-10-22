@@ -66,7 +66,7 @@ spec:
   started in the container are allowed without asking.
 - `askNet`: destinations asked about even inside what `allowNet`
   allows (`--ask-net`). The most specific rule decides, an ask wins over
-  an allow as specific, and a deny wins over both. Needs `network` in
+  an allow as specific, and a deny wins over both. Needs `connect` in
   `mediate`.
 - `allowExec` and `denyExec`: programs in the container, like `allowPaths`:
   `/usr/bin/make` is that program, `/opt/tools/**` every program below

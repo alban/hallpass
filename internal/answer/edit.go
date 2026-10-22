@@ -27,7 +27,7 @@ func CheckRules(p Policy, add, removed, next []rules.Rule) error {
 		if r.Verdict != rules.Allow || Grantable(p, r) || narrows(r, removed, next) {
 			continue
 		}
-		return fmt.Errorf("%v: %w; allow a single program, destination or file, or a folder that a prompt would offer", r, ErrTooWide)
+		return fmt.Errorf("%s: %w; allow a single program, destination or file, or a folder that a prompt would offer", r.Spec(), ErrTooWide)
 	}
 	return nil
 }
@@ -44,7 +44,7 @@ func CheckTighten(add, removed, next []rules.Rule) error {
 	}
 	for _, r := range add {
 		if r.Verdict == rules.Allow && !narrows(r, removed, next) {
-			return fmt.Errorf("%v: %w: this session never prompts", r, ErrTooWide)
+			return fmt.Errorf("%s: %w: this session never prompts", r.Spec(), ErrTooWide)
 		}
 	}
 	return nil
