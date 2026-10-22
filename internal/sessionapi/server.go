@@ -78,9 +78,10 @@ type Session interface {
 	Answer(id uint64, answer, client string) error
 	// CheckRules checks that client may remove the rules removed and add
 	// the rules add (validated by the monitor already, their paths
-	// resolved); it fails with answer.ErrTooWide if the session's policy
-	// does not let it. The monitor is locked: CheckRules must not call it.
-	CheckRules(client string, add, removed []rules.Rule) error
+	// resolved), next being the rules after the change; it fails with
+	// answer.ErrTooWide if the session's policy does not let it. The
+	// monitor is locked: CheckRules must not call it.
+	CheckRules(client string, add, removed, next []rules.Rule) error
 	// RulesChanged reports that client removed and added rules, after
 	// CheckRules.
 	RulesChanged(client string, add, removed []rules.Rule)
@@ -262,9 +263,9 @@ func ApplyRules(m *monitor.Monitor, sess Session, d monitor.Decision) (uint64, e
 		return 0, err
 	}
 	var added, removed []rules.Rule
-	d.Check = func(add, rm []rules.Rule) error {
+	d.Check = func(add, rm, next []rules.Rule) error {
 		added, removed = add, rm
-		return sess.CheckRules(d.Client, add, rm)
+		return sess.CheckRules(d.Client, add, rm, next)
 	}
 	gen, err := m.Apply(d)
 	if err != nil {

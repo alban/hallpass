@@ -43,7 +43,7 @@ allow proc oom_score_adj chrome   # /proc/<pid>/oom_score_adj of the processes n
 deny unknown                      # the paths hallpass could not read (lite mode)
 ```
 
-Editing gives no more power than answering: an allow rule may only grant what `always` could (a [folder](#the-folder-of-temp-and-always), one program, one destination), or narrow the allow rule it replaces, for no longer. Deny and ask rules can be added and removed freely. The built-in denials (`~/.config/hallpass`, the hallpass binary, the session sockets and web UI ports) are not rules you can change. In Kubernetes, a session whose policy does not ask can only be tightened. An edit fails if the rules changed since they were shown: look again and redo it.
+Editing gives no more power than answering: an allow rule may only grant what `always` could (a [folder](#the-folder-of-temp-and-always), one program, one destination), or narrow the allow rule it replaces, for no longer, without getting past an ask rule the replaced one did not. Deny and ask rules can be added and removed freely. The built-in denials (`~/.config/hallpass`, the hallpass binary, the session sockets and web UI ports) are not rules you can change. In Kubernetes, a session whose policy does not ask can only be tightened. An edit fails if the rules changed since they were shown: look again and redo it.
 
 ```console
 $ hallpass answer rules

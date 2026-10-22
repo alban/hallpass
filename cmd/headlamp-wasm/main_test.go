@@ -69,7 +69,7 @@ func (s *session) Info() *pb.SessionInfo {
 	return &pb.SessionInfo{Labels: map[string]string{"namespace": "ns", "pod": s.name, "container": "c"}}
 }
 func (s *session) Prompt(*monitor.Request) *pb.Prompt { return &pb.Prompt{} }
-func (s *session) CheckRules(string, []rules.Rule, []rules.Rule) error {
+func (s *session) CheckRules(string, []rules.Rule, []rules.Rule, []rules.Rule) error {
 	return nil
 }
 func (s *session) RulesChanged(string, []rules.Rule, []rules.Rule) {}

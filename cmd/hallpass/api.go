@@ -62,8 +62,8 @@ func (s *session) Answer(id uint64, answer, who string) error {
 }
 
 // CheckRules implements sessionapi.Session.
-func (s *session) CheckRules(_ string, add, removed []rules.Rule) error {
-	return answer.CheckRules(s.cfg.Defaults, add, removed)
+func (s *session) CheckRules(_ string, add, removed, next []rules.Rule) error {
+	return answer.CheckRules(s.cfg.Defaults, add, removed, next)
 }
 
 // RulesChanged implements sessionapi.Session.

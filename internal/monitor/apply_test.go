@@ -43,7 +43,7 @@ func TestApplyCheck(t *testing.T) {
 	d := Decision{
 		RemoveRules: []uint64{before[0].ID},
 		AddRules:    []rules.Rule{tree(link, rules.Allow)},
-		Check: func(a, r []rules.Rule) error {
+		Check: func(a, r, _ []rules.Rule) error {
 			add, removed = a, r
 			return refused
 		},
@@ -62,7 +62,7 @@ func TestApplyCheck(t *testing.T) {
 		t.Errorf("refused Apply changed the rules: %+v at %d, was %+v at %d", after, gen2, before, gen)
 	}
 
-	d.Check = func(a, r []rules.Rule) error { return nil }
+	d.Check = func(a, r, _ []rules.Rule) error { return nil }
 	if _, err := m.Apply(d); err != nil {
 		t.Fatal(err)
 	}

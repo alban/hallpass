@@ -40,8 +40,8 @@ func (f fakeSession) Answer(id uint64, answer, client string) error {
 	f.answered <- strconv.FormatUint(id, 10) + " " + answer + " " + client
 	return nil
 }
-func (fakeSession) CheckRules(_ string, add, removed []rules.Rule) error {
-	return answer.CheckRules(defaults.New("/home/u", "", nil, nil), add, removed)
+func (fakeSession) CheckRules(_ string, add, removed, next []rules.Rule) error {
+	return answer.CheckRules(defaults.New("/home/u", "", nil, nil), add, removed, next)
 }
 func (fakeSession) RulesChanged(string, []rules.Rule, []rules.Rule) {}
 

@@ -79,10 +79,16 @@ func TestCheckRules(t *testing.T) {
 	now := time.Now()
 	all := mustSpec(t, "allow connect all", now)
 	ask := mustSpec(t, "ask write /home/u/.ssh/**", now)
+	work := mustSpec(t, "allow write /work/**", now)
+	secret := mustSpec(t, "allow write /work/secret/**", now)
+	askSecret := mustSpec(t, "ask write /work/secret/**", now)
+	askWork := mustSpec(t, "ask write /work/**", now)
+	askNet := mustSpec(t, "ask connect 10.0.0.0/24:22", now)
+	key := mustSpec(t, "allow write /work/secret/key", now)
 	for _, tc := range []struct {
-		name    string
-		add, rm []rules.Rule
-		ok, tOK bool // CheckRules, CheckTighten
+		name          string
+		add, rm, next []rules.Rule
+		ok, tOK       bool // CheckRules, CheckTighten
 	}{
 		{name: "deny", add: []rules.Rule{mustSpec(t, "deny write /**", now)}, ok: true, tOK: true},
 		{name: "grantable", add: []rules.Rule{mustSpec(t, "allow connect 1.2.3.4:443", now)}, ok: true},
@@ -90,12 +96,46 @@ func TestCheckRules(t *testing.T) {
 		{name: "narrowed", rm: []rules.Rule{all}, add: []rules.Rule{mustSpec(t, "allow connect 1.2.3.0/24:443", now)}, ok: true, tOK: true},
 		{name: "remove an allow", rm: []rules.Rule{all}, ok: true, tOK: true},
 		{name: "remove an ask", rm: []rules.Rule{ask}, ok: true},
+		// The wider allow lost to the ask rule, the narrower one wins;
+		// answering "always" to the ask could give it.
+		{name: "narrowed past an ask", rm: []rules.Rule{work}, add: []rules.Rule{work, key}, next: []rules.Rule{askSecret, work, key}, ok: true},
+		{name: "narrowed past a network ask", rm: []rules.Rule{all}, add: []rules.Rule{mustSpec(t, "allow connect 10.0.0.1:22", now)}, next: []rules.Rule{askNet}, ok: true},
+		{name: "narrowed beside an ask", rm: []rules.Rule{work}, add: []rules.Rule{mustSpec(t, "allow write /work/other", now)}, next: []rules.Rule{askSecret}, ok: true, tOK: true},
+		// The wider allow already won over the ask rule.
+		{name: "narrowed under a shallower ask", rm: []rules.Rule{secret}, add: []rules.Rule{key}, next: []rules.Rule{askWork, key}, ok: true, tOK: true},
 	} {
-		if err := CheckRules(p, tc.add, tc.rm); (err == nil) != tc.ok || (err != nil && !errors.Is(err, ErrTooWide)) {
+		if err := CheckRules(p, tc.add, tc.rm, tc.next); (err == nil) != tc.ok || (err != nil && !errors.Is(err, ErrTooWide)) {
 			t.Errorf("%s: CheckRules: %v", tc.name, err)
 		}
-		if err := CheckTighten(tc.add, tc.rm); (err == nil) != tc.tOK || (err != nil && !errors.Is(err, ErrTooWide)) {
+		if err := CheckTighten(tc.add, tc.rm, tc.next); (err == nil) != tc.tOK || (err != nil && !errors.Is(err, ErrTooWide)) {
 			t.Errorf("%s: CheckTighten: %v", tc.name, err)
+		}
+	}
+}
+
+// TestCheckTightenEval checks CheckTighten against rules.Eval: an edit it
+// accepts allows nothing more.
+func TestCheckTightenEval(t *testing.T) {
+	now := time.Now()
+	before := []rules.Rule{
+		mustSpec(t, "allow write /work/**", now),
+		mustSpec(t, "ask write /work/secret/**", now),
+	}
+	before[0].ID, before[1].ID = 1, 2
+	objs := []string{"/work/a", "/work/secret/key", "/work/secret/x/y"}
+	for _, add := range []string{"allow write /work/secret/key", "allow write /work/secret/x/**", "allow write /work/a", "allow write /work/secret/**"} {
+		r := mustSpec(t, add, now)
+		r.ID = 3
+		next := []rules.Rule{before[1], r}
+		err := CheckTighten([]rules.Rule{r}, before[:1], next)
+		for _, p := range objs {
+			obj := rules.Object{Path: &rules.PathObject{Path: p}}
+			v0, _, ok0 := rules.Eval(before, rules.OpWrite, obj, now)
+			v1, _, ok1 := rules.Eval(next, rules.OpWrite, obj, now)
+			wider := ok1 && v1 == rules.Allow && !(ok0 && v0 == rules.Allow)
+			if wider && err == nil {
+				t.Errorf("%s accepted, but allows %s", add, p)
+			}
 		}
 	}
 }

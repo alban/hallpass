@@ -167,10 +167,11 @@ type Decision struct {
 	// advance request then fails with ETIMEDOUT rather than EPERM.
 	TimedOut bool
 	// Check, if set, is called by Apply with the rules d adds, validated
-	// and with their paths resolved, and the rules d removes, before
-	// anything changes: an error fails Apply. It judges the very rules
-	// applied, atomically. The Monitor is locked: Check must not call it.
-	Check func(add, removed []rules.Rule) error
+	// and with their paths resolved, the rules d removes, and the rules
+	// after the change, before anything changes: an error fails Apply. It
+	// judges the very rules applied, atomically. The Monitor is locked:
+	// Check must not call it.
+	Check func(add, removed, next []rules.Rule) error
 }
 
 // Verdict allows or denies one request, once. In strict mode, an allow is
@@ -492,7 +493,7 @@ func (m *Monitor) nextRules(old []rules.Rule, d Decision) ([]rules.Rule, bool, e
 		added = append(added, r)
 	}
 	if d.Check != nil {
-		if err := d.Check(added, removed); err != nil {
+		if err := d.Check(added, removed, next); err != nil {
 			return nil, false, err
 		}
 	}

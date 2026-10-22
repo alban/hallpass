@@ -320,10 +320,10 @@ func (s *session) Answer(id uint64, a, who string) error {
 
 // CheckRules implements sessionapi.Session: with a policy that does not
 // prompt, rules can only be tightened.
-func (s *session) CheckRules(who string, add, removed []rules.Rule) error {
-	err := answer.CheckRules(s.d, add, removed)
+func (s *session) CheckRules(who string, add, removed, next []rules.Rule) error {
+	err := answer.CheckRules(s.d, add, removed, next)
 	if !s.policy.Prompt {
-		err = answer.CheckTighten(add, removed)
+		err = answer.CheckTighten(add, removed, next)
 	}
 	if err != nil {
 		s.log.Info("rules refused", "client", who, "error", err)
