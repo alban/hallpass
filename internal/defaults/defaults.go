@@ -526,6 +526,10 @@ func (d *Defaults) Summary(rs []rules.Rule) (deny, allow, ask, run []string) {
 			s = "network: listeners started inside the sandbox"
 		case o.IsNet():
 			s = "network: " + o.NetString()
+		case o.HTTP != nil:
+			s = "https: " + strings.ReplaceAll(o.HTTP.String(), ",", " ")
+		default:
+			continue
 		}
 		if !r.Expires.IsZero() {
 			s += " (until " + r.Expires.Format("15:04:05") + ")"

@@ -338,3 +338,23 @@ func TestMetadata(t *testing.T) {
 		t.Errorf("another port: %v", v)
 	}
 }
+
+// TestSummaryHTTP: http rules are listed with their methods as words, as
+// rules write them.
+func TestSummaryHTTP(t *testing.T) {
+	d := New("/home/u", "", nil, nil)
+	r, err := rules.ParseSpec("allow http GET POST https://api.github.com/**", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.AddRules([]rules.Rule{r})
+	_, allow, _, _ := d.Summary(d.Rules())
+	if !slices.Contains(allow, "https: GET POST https://api.github.com/**") {
+		t.Errorf("allowed %q", allow)
+	}
+	for _, s := range allow {
+		if s == "" {
+			t.Errorf("an empty line in %q", allow)
+		}
+	}
+}

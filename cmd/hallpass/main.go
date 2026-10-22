@@ -19,6 +19,7 @@ import (
 
 	"github.com/alban/hallpass/internal/config"
 	"github.com/alban/hallpass/internal/defaults"
+	"github.com/alban/hallpass/internal/egress/profiles"
 	"github.com/alban/hallpass/internal/launch"
 	"github.com/alban/hallpass/internal/lsm"
 	"github.com/alban/hallpass/internal/policy"
@@ -424,7 +425,7 @@ func runMain(argv []string, printPolicy bool) int {
 	}
 	engine := o.buildPolicy(home)
 	if printPolicy {
-		o.printRules(engine)
+		o.printRules(engine, filepath.Join(cfgDir, "credentials.d"))
 		return 0
 	}
 
@@ -576,8 +577,8 @@ func lookPrograms(dir string, names []string) []string {
 }
 
 // printRules prints engine's rules, with placeholders for the $TMPDIR and
-// terminal a run would get.
-func (o *options) printRules(engine *defaults.Defaults) {
+// terminal a run would get, then the credentials (profiles in dir).
+func (o *options) printRules(engine *defaults.Defaults, dir string) {
 	if !o.noImplicit {
 		engine.SetTmpdir(filepath.Join(os.TempDir(), "hallpass-*"))
 	}
@@ -590,6 +591,17 @@ func (o *options) printRules(engine *defaults.Defaults) {
 	rs := append(engine.Rules(), protectedRules(engine, o.policy.Mediate, sessionapi.SocketDir(), sessionapi.ProtectedPorts())...)
 	for _, l := range engine.Describe(rs) {
 		fmt.Println(l)
+	}
+	if len(o.policy.Credentials) > 0 {
+		fmt.Println("Credentials, put on the wire by the HTTPS proxy:")
+	}
+	for _, name := range o.policy.Credentials {
+		p, err := profiles.Load(dir, name)
+		if err != nil {
+			fmt.Printf("  %s: %v\n", name, err)
+			continue
+		}
+		fmt.Printf("  %s, to %s only\n", name, strings.Join(p.Hosts, ", "))
 	}
 }
 
