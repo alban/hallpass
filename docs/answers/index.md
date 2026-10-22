@@ -9,6 +9,7 @@ When a write needs a human, the session holds it as a **pending request**: what 
 | `o` | once | allow this access only |
 | `t` | temp | allow the folder shown for 5 minutes |
 | `a` | always | allow the folder shown for the rest of the session |
+| `s` | domain | (connection to an address with a host name) allow every name below its registrable domain, `*.github.com:443`, for the rest of the session |
 | `g` | grant | (request made [in advance](../workstation/usage.md#asking-in-advance)) allow what was asked for (a folder, a program, destinations), for the duration asked |
 | `d` | deny | deny this access; a retry asks again |
 | `n` | never | deny this path for the rest of the session, without asking |
@@ -27,7 +28,7 @@ They are not offered for a file directly in your home or in `/`, nor when the fo
 
 Processes of the sandbox may write each other's `/proc/<pid>` files (agents tune `oom_score_adj`, for example). Writing those of a process outside the sandbox is asked about, and `t`, `a` and `n` then apply to that file for every process with the same command name.
 
-For a network destination (with network [mediated](../workstation/usage.md#network-experimental)), `t`, `a` and `n` cover that destination only: address and port, any protocol (looking up a name connects a UDP socket to each address before the TCP connection: one question for both), or the unix socket.
+For a network destination (with network [mediated](../workstation/usage.md#network-experimental)), `t`, `a` and `n` cover that destination only: address and port, any protocol (looking up a name connects a UDP socket to each address before the TCP connection: one question for both), or the unix socket. For an address with a host name, `t` and `a` cover the name and port instead (`github.com:443`, any address the sandbox's DNS gives that name), and `s` the names below its registrable domain; `n` stays on the address. For an [HTTPS request](../workstation/usage.md#https-requests-experimental), they cover that method on that URL.
 
 Rules live as long as the session: nothing is written back to the command line or to the policy. Press Ctrl-] in a terminal session to see them, and [edit them](#editing-rules).
 
@@ -39,12 +40,14 @@ Every rule of a session can be edited, deleted or added, including those from th
 allow write /home/me/src/**       # writing in a tree; without /**, the file only
 deny exec /usr/bin/curl for 1h    # running a program, for an hour
 ask connect tcp:140.82.112.21:443 # a destination; unix:/run/x.sock, unix:@name, all...
+allow connect github.com:443      # the addresses with that name; *.github.com:443 the names below
+allow http GET https://api.github.com/repos/**  # HTTPS requests through hallpass's proxy
 allow proc oom_score_adj chrome   # /proc/<pid>/oom_score_adj of the processes named chrome
 allow write "/home/me/My Documents/**"
 deny unknown                      # the paths hallpass could not read (lite mode)
 ```
 
-Editing gives no more power than answering: an allow rule may only grant what `always` could (a [folder](#the-folder-of-temp-and-always), one program, one destination), or narrow the allow rule it replaces, for no longer, without getting past an ask rule the replaced one did not. Deny and ask rules can be added and removed freely. The built-in denials (`~/.config/hallpass`, the hallpass binary, the session sockets and web UI ports) are not rules you can change. In Kubernetes, a session whose policy does not ask can only be tightened. An edit fails if the rules changed since they were shown: look again and redo it.
+Editing gives no more power than answering: an allow rule may only grant what `always` or `s` could (a [folder](#the-folder-of-temp-and-always), one program, one destination, a host name and port or the names below a domain, one HTTPS method and URL), or narrow the allow rule it replaces, for no longer, without getting past an ask rule the replaced one did not. Deny and ask rules can be added and removed freely. The built-in denials (`~/.config/hallpass`, the hallpass binary, the session sockets and web UI ports) are not rules you can change. In Kubernetes, a session whose policy does not ask can only be tightened. An edit fails if the rules changed since they were shown: look again and redo it.
 
 ```console
 $ hallpass answer rules
