@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
+	"strings"
 
 	"github.com/alban/hallpass/internal/rules"
 )
@@ -90,8 +92,31 @@ func overlaps(a, b rules.ObjectMatch) bool {
 		return *a.Proc == *b.Proc
 	case a.Unknown || b.Unknown:
 		return a.Unknown && b.Unknown
+	case a.HTTP != nil || b.HTTP != nil:
+		return a.HTTP != nil && b.HTTP != nil && httpOverlaps(a.HTTP, b.HTTP)
 	}
 	return a.OverlapsNet(b)
+}
+
+// httpOverlaps reports whether a and b may match a request in common:
+// a host in common and a method in common. The paths are not compared:
+// saying yes when they cannot overlap only refuses an edit.
+func httpOverlaps(a, b *rules.HTTPMatch) bool {
+	hostIn := func(h string, m *rules.HTTPMatch) bool {
+		return h == m.Host || (m.HostSuffix && strings.HasSuffix(h, "."+m.Host))
+	}
+	if !hostIn(a.Host, b) && !hostIn(b.Host, a) {
+		return false
+	}
+	if len(a.Methods) == 0 || len(b.Methods) == 0 {
+		return true
+	}
+	for _, m := range a.Methods {
+		if slices.Contains(b.Methods, m) {
+			return true
+		}
+	}
+	return false
 }
 
 // Grantable reports whether an "allow always" answer, with policy p, could
