@@ -358,12 +358,22 @@ type prompter struct {
 	c pb.SessionClient
 }
 
+// socketWait is how long a test waits for a session's socket: 20s, or
+// $HALLPASS_E2E_SOCKET_WAIT (make test-vm without KVM, where loading the
+// BPF programs of strict mode takes about 25s).
+func socketWait() time.Duration {
+	if d, err := time.ParseDuration(os.Getenv("HALLPASS_E2E_SOCKET_WAIT")); err == nil && d > 0 {
+		return d
+	}
+	return 20 * time.Second
+}
+
 func dialPrompts(t *testing.T, e env, c *exec.Cmd) prompter {
 	t.Helper()
 	sock := fmt.Sprintf("%s/hallpass/%d.sock", e.runtime, c.Process.Pid)
 	start := time.Now()
 	var err error
-	for time.Since(start) < 20*time.Second {
+	for time.Since(start) < socketWait() {
 		if _, err = os.Stat(sock); err == nil {
 			conn, client, derr := sessionapi.Dial(sock)
 			if derr != nil {

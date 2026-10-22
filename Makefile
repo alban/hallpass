@@ -126,7 +126,7 @@ TEST_VM_MEMORY ?= 1G
 .PHONY: test-vm
 test-vm: all
 	$(if $(MUSL_GCC_FOUND),$(MAKE) hallpass-request)
-	$(if $(wildcard /dev/kvm),,VIMTO_DISABLE_KVM=1) CGO_ENABLED=0 \
+	$(if $(wildcard /dev/kvm),,VIMTO_DISABLE_KVM=1 HALLPASS_E2E_SOCKET_WAIT=5m) CGO_ENABLED=0 \
 	HALLPASS_BIN=$(CURDIR)/hallpass \
 	$(if $(MUSL_GCC_FOUND),HALLPASS_REQUEST_BIN=$(CURDIR)/hallpass-request) \
 		$(VIMTO) -smp cpus=2 -memory $(TEST_VM_MEMORY) -sudo -kernel $(TEST_VM_KERNEL) -- \
