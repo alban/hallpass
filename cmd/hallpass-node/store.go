@@ -223,7 +223,7 @@ func (a *agent) adopt(c *fdstore.Client, e fdstore.Entry) {
 			return
 		}
 	}
-	s, err := newSession(e.Key, sv.Pid, sv.Metadata, &pol, rs, ks, a.log, a.rec)
+	s, err := newSession(e.Key, sv.Pid, sv.Metadata, &pol, rs, ks, nil, a.log, a.rec)
 	if err != nil {
 		fdstore.CloseAll(e.FDs[1:])
 		drop("restore session", err)

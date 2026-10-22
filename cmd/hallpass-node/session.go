@@ -42,7 +42,9 @@ type session struct {
 	d      *defaults.Defaults
 	m      *monitor.Monitor
 	// ks is the session in the kernel, strict mode only. Closed after m.
-	ks     *lsm.Session
+	ks *lsm.Session
+	// dns names the destinations (connect mediated); nil: none.
+	dns    *dnsState
 	evs    <-chan []monitor.Event
 	start  time.Time
 	log    *slog.Logger
@@ -67,24 +69,30 @@ type attached struct {
 
 // newSession creates the monitor of container id with policy p and rules
 // rs, or the policy's if nil, enforced by kernel session ks too if not nil
-// (strict). The caller attaches the listeners. On an error, ks is closed.
-func newSession(id string, pid int, md metadata, p *Policy, rs []rules.Rule, ks *lsm.Session, log *slog.Logger, rec recorder) (*session, error) {
+// (strict), naming destinations with dns if not nil. The caller attaches
+// the listeners. On an error, ks and dns are closed.
+func newSession(id string, pid int, md metadata, p *Policy, rs []rules.Rule, ks *lsm.Session, dns *dnsState, log *slog.Logger, rec recorder) (*session, error) {
 	cats, err := md.categories()
 	if err != nil {
 		if ks != nil {
 			ks.Close()
 		}
+		dns.close()
 		return nil, fmt.Errorf("listener metadata: %w", err)
 	}
 	cfg := monitor.Config{ProcRoot: true, Mediate: cats}
 	if ks != nil {
 		cfg.Kernel = ks
 	}
+	if dns != nil {
+		cfg.Names = dns.names
+	}
 	m, err := monitor.New(cfg)
 	if err != nil {
 		if ks != nil {
 			ks.Close()
 		}
+		dns.close()
 		return nil, err
 	}
 	d := defaultsFor(p, md, cats, pid)
@@ -96,10 +104,11 @@ func newSession(id string, pid int, md metadata, p *Policy, rs []rules.Rule, ks 
 		if ks != nil {
 			ks.Close()
 		}
+		dns.close()
 		return nil, err
 	}
 	s := &session{
-		id: id, pid: pid, md: md, policy: p, d: d, m: m, ks: ks,
+		id: id, pid: pid, md: md, policy: p, d: d, m: m, ks: ks, dns: dns,
 		// Subscribed before the first Attach: no request is missed.
 		// Decided: to report the automatic denials.
 		evs:    m.Events(monitor.EventOptions{Decided: true}),
@@ -117,12 +126,14 @@ func (s *session) event(warning bool, reason, msg string) {
 	s.rec.event(s.md, warning, reason, "container "+s.md.Container+": "+msg)
 }
 
-// close stops mediating, then deletes the kernel's rules (strict).
+// close stops mediating, then deletes the kernel's rules (strict), then
+// stops the DNS redirect.
 func (s *session) close() {
 	s.m.Close()
 	if s.ks != nil {
 		s.ks.Close()
 	}
+	s.dns.close()
 }
 
 // run handles the requests until the container is gone: without prompt,

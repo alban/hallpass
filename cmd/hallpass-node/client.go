@@ -99,10 +99,10 @@ func cmdPending(args []string) error {
 		return err
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(w, "REQUEST\tOP\tPATH\tEXE\tPID")
+	fmt.Fprintln(w, "REQUEST\tOP\tPATH\tEXE\tPID\tHOST NAMES")
 	for _, r := range snap.Pending {
 		p := r.GetPrompt()
-		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%d\n", r.GetId(), p.GetOp(), p.GetPath(), p.GetExe(), p.GetPid())
+		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%d\t%s\n", r.GetId(), p.GetOp(), p.GetPath(), p.GetExe(), p.GetPid(), ui.Sanitize(p.GetHostNames()))
 		if s := advanceLine(p); s != "" {
 			// No tab: a line's last cell does not size the columns.
 			fmt.Fprintln(w, s)

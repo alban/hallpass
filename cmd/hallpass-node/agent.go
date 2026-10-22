@@ -21,6 +21,8 @@ import (
 
 	"github.com/alban/hallpass/internal/fdstore"
 	"github.com/alban/hallpass/internal/lsm"
+	"github.com/alban/hallpass/internal/monitor"
+	"github.com/alban/hallpass/internal/rules"
 	"github.com/alban/hallpass/internal/seccomp"
 	"github.com/alban/hallpass/internal/sessionapi"
 )
@@ -241,11 +243,27 @@ func (a *agent) attach(st *specs.ContainerProcessState, fd int) error {
 			return fmt.Errorf("strict mode: %w", err)
 		}
 	}
-	s, err = newSession(id, st.Pid, md, pol, nil, ks, a.log, a.rec)
+	// Names for the prompts: the program has not run yet (still the
+	// runtime's init), so none of its queries goes out unredirected; and
+	// with connect mediated, its first query waits for the attach below.
+	var dns *dnsState
+	note := ""
+	if cats, err := md.categories(); err == nil && cats&seccomp.Connect != 0 {
+		dns, err = startDNS(st.Pid, func(msg string) { a.log.Warn(msg, "container", id) })
+		switch {
+		case err != nil:
+			note = dnsNote(err)
+			a.log.Warn("no DNS names", "container", id, "err", err)
+		case dns.rawSockets:
+			note = "DNS names for display only: the container has CAP_NET_RAW, it could forge its answers (drop it for host rules)"
+		}
+	}
+	s, err = newSession(id, st.Pid, md, pol, nil, ks, dns, a.log, a.rec)
 	if err != nil {
 		a.mu.Unlock()
 		return err
 	}
+	a.denyForwardersLocked(s)
 	if err := a.attachLocked(s, fd, st.Pid, nil); err != nil {
 		a.mu.Unlock()
 		s.close()
@@ -253,10 +271,39 @@ func (a *agent) attach(st *specs.ContainerProcessState, fd int) error {
 	}
 	a.startLocked(s)
 	a.mu.Unlock()
-	a.log.Info("session started", "container", id, "namespace", md.Namespace, "pod", md.Pod, "name", md.Container, "policy", pol.Name, "strict", ks != nil, "pid", st.Pid)
-	s.event(false, reasonStarted, startedMessage(pol, ks != nil))
+	a.log.Info("session started", "container", id, "namespace", md.Namespace, "pod", md.Pod, "name", md.Container, "policy", pol.Name, "strict", ks != nil, "pid", st.Pid, "dns", dns != nil)
+	msg := startedMessage(pol, ks != nil)
+	if note != "" {
+		msg += "; " + note
+	}
+	s.event(false, reasonStarted, msg)
 	a.persist(s)
 	return nil
+}
+
+// denyForwardersLocked denies new session s the DNS forwarders of the
+// other mediated sessions in its network namespace, and them its own: a
+// forwarder listens on the namespace's loopback, which the containers of
+// a pod share, and must serve only its own container.
+func (a *agent) denyForwardersLocked(s *session) {
+	if s.dns == nil {
+		return
+	}
+	var mine []rules.Rule
+	for _, o := range a.sessions {
+		if o == s || o.dns == nil || o.dns.netns != s.dns.netns {
+			continue
+		}
+		mine = append(mine, o.dns.denials()...)
+		if _, err := o.m.Apply(monitor.Decision{AddRules: s.dns.denials(), Client: client}); err != nil {
+			a.log.Warn("deny the DNS forwarder of a neighbour", "container", o.id, "err", err)
+		}
+	}
+	if len(mine) > 0 {
+		if _, err := s.m.Apply(monitor.Decision{AddRules: mine, Client: client}); err != nil {
+			a.log.Warn("deny the DNS forwarders of neighbours", "container", s.id, "err", err)
+		}
+	}
 }
 
 // attachLocked attaches listener fd of process pid to s, with journal j,

@@ -14,7 +14,8 @@
 # not select must run unmediated. Then (without E2E_ANSWER) it restarts the
 # agent while a request is pending (test/kind/e2e-restart.yaml): the new
 # agent must get the request, and the rules granted before, from the
-# fd-store. Also, a pod races its path checks (test/kind/e2e-race.yaml), in
+# fd-store. A pod with two containers, glibc and musl, resolves a name and
+# connects: the prompts must name the address (DNS redirect). Also, a pod races its path checks (test/kind/e2e-race.yaml), in
 # its main process and through kubectl exec: the race must never win in
 # strict mode; in lite mode the result is only logged.
 #
@@ -26,6 +27,7 @@
 #                    containerd 2.3)
 #   KEEP_CLUSTER=1   keep a cluster this script created
 #   BUSYBOX          test image (default busybox:1.37)
+#   ALPINE           musl test image (default alpine:3.22)
 #   HALLPASS_E2E_WORK  parent of the scratch directory (default: the repository)
 #   E2E_ANSWER       command that answers the two requests instead of the
 #                    CLI, with KUBECONTEXT and WORK set (test/kind/headlamp)
@@ -45,6 +47,7 @@ cd "$(dirname "$0")/../.."
 CLUSTER=${KIND_CLUSTER:-hallpass-e2e}
 NODE_IMAGE=${KIND_NODE_IMAGE:-kindest/node:v1.37.0}
 BUSYBOX=${BUSYBOX:-busybox:1.37}
+ALPINE=${ALPINE:-alpine:3.22}
 IMAGE=hallpass-node:e2e
 PORT=${HALLPASS_E2E_PORT:-17323}
 KUBECTL=(kubectl --context "kind-$CLUSTER")
@@ -134,7 +137,7 @@ if [ "${E2E_STRICT:-}" = 1 ]; then
 fi
 
 log "starting the test pods"
-sed "s|BUSYBOX|$BUSYBOX|" test/kind/e2e.yaml >"$WORK/e2e.yaml"
+sed "s|BUSYBOX|$BUSYBOX|; s|ALPINE|$ALPINE|" test/kind/e2e.yaml >"$WORK/e2e.yaml"
 "${KUBECTL[@]}" delete --ignore-not-found --wait=true -f "$WORK/e2e.yaml" >/dev/null
 "${KUBECTL[@]}" apply -f "$WORK/e2e.yaml"
 
@@ -173,6 +176,27 @@ succeeded() {
 }
 for p in hallpass-e2e/mediated hallpass-e2e/plain hallpass-e2e-off/unselected; do
 	wait_for 120 succeeded "${p%/*}" "${p#*/}" || fail "pod $p did not succeed"
+done
+
+# The connect requests of the dns pod name the API server: its name from
+# the answers the forwarder relayed. Denied, so nc fails.
+for c in glibc musl; do
+	named() {
+		line=$("$CLIENT" pending --addr "$ADDR" "hallpass-e2e/dns/$c" 2>/dev/null | grep -E ':443 .*kubernetes\.default\.svc\.cluster\.local' | head -1)
+		[ -n "$line" ]
+	}
+	wait_for 120 named || {
+		"$CLIENT" pending --addr "$ADDR" "hallpass-e2e/dns/$c" >&2 || true
+		fail "dns/$c: no connect request named kubernetes.default.svc.cluster.local"
+	}
+	id=$(awk '{ print $1 }' <<<"$line")
+	log "dns/$c: $line"
+	"$CLIENT" answer --addr "$ADDR" "hallpass-e2e/dns/$c" "$id" deny
+done
+wait_for 120 succeeded hallpass-e2e dns || fail "pod hallpass-e2e/dns did not succeed"
+for c in glibc musl; do
+	out=$("${KUBECTL[@]}" -n hallpass-e2e logs dns -c "$c")
+	grep -qx "$c=[1-9][0-9]*" <<<"$out" || fail "dns/$c: nc was not denied: $out"
 done
 
 check_log() {

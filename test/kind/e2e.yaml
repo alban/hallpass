@@ -78,3 +78,36 @@ spec:
     - name: unselected
       image: BUSYBOX
       command: [sh, -c, "echo x > /etc/unselected && echo unselected=ok"]
+---
+# DNS names (hallpass-node redirects the queries to a forwarder): two
+# mediated containers in one pod, glibc and musl, resolve the API server's
+# name and connect to it; the prompts name the address. DNS is allowed,
+# the connection asked about.
+apiVersion: hallpass.io/v1alpha1
+kind: HallpassPolicy
+metadata:
+  name: e2e-dns
+spec:
+  mediate: [write, connect]
+  rules: |
+    allow connect udp:*:53
+    allow connect tcp:*:53
+  prompt: true
+  promptTimeout: 3m
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: dns
+  namespace: hallpass-e2e
+  annotations:
+    hallpass.io/policy: e2e-dns
+spec:
+  restartPolicy: Never
+  containers:
+    - name: glibc
+      image: BUSYBOX
+      command: [sh, -c, "nc -w 5 kubernetes.default.svc.cluster.local 443 </dev/null; echo glibc=$?"]
+    - name: musl
+      image: ALPINE
+      command: [sh, -c, "nc -w 5 kubernetes.default.svc.cluster.local 443 </dev/null; echo musl=$?"]

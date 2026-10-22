@@ -48,7 +48,7 @@ See [Limitations](limitations.md#network).
 
 ## Names
 
-With `--dns=observe` (the default of `hallpass`; not in Kubernetes yet), connect prompts name the address: `github.com (140.82.112.3:443)`.
+Connect prompts name the address: `github.com (140.82.112.3:443)`. On a workstation, with `--dns=observe` (the default of `hallpass`), hallpass watches the sandbox's DNS queries; on Kubernetes, hallpass-node relays them (see [below](#names-on-kubernetes)).
 
 - hallpass reads the names the sandbox's DNS queries ask about (A, AAAA), in the sends to port 53 it already sees: `sendto`, `sendmsg` or `sendmmsg` with the server's address (musl), and `sendmsg` or `sendmmsg` on a socket connected to port 53 (glibc's `getaddrinfo`).
 - It then looks each name up itself, through the host's resolver, and names an address only with a name that has it: a sandbox asking about `github.com` and connecting elsewhere gets no name. A content delivery network that answers hallpass with other addresses than the sandbox leaves the address unnamed.
@@ -58,3 +58,16 @@ With `--dns=observe` (the default of `hallpass`; not in Kubernetes yet), connect
 - No name for queries sent with `write`, or `send` and `sendto` without an address (Go's resolver, glibc's single queries).
 - An address with no name from the above is shown with the names of its reverse DNS (PTR), marked unverified: `140.82.112.3:443 (reverse DNS, unverified: lb-140-82-112-3-iad.github.com)`. Whoever controls the address chooses them. hallpass makes that lookup only once the sandbox's own DNS was allowed (a query to the host's name server, or the varlink socket), through the same servers, so a sandbox denied DNS cannot use it to send data out either.
 - Names are display only, in lite and strict mode: rules match addresses, so a rule on a name is not possible yet.
+
+### Names on Kubernetes
+
+A container that mediates `connect` has its DNS queries relayed by hallpass-node, which reads the answers:
+
+- Before the container's program starts, hallpass-node starts a forwarder for each name server of the container's `/etc/resolv.conf`, listening on a port the kernel picks on `127.0.0.1` (or `[::1]`) of the pod's network namespace, and attaches cgroup BPF programs (`connect`, `sendmsg` and `recvmsg` hooks) to the container's cgroup: a query to port 53 of one of those servers goes to its forwarder, and the replies show the server as their source, so the program's resolver (glibc, musl, Go) accepts them. UDP and TCP, connected or not.
+- The rules see the real name server: seccomp and the LSM hooks run before the cgroup programs, so a container whose rules deny DNS gets no forwarding.
+- The forwarder's own sockets are made in the pod's network namespace: queries leave from the pod's address, and NetworkPolicy still applies. Replies are passed on byte for byte.
+- The name servers are those of `/etc/resolv.conf` when the container starts: one the container writes later is not used.
+- Other mediated containers of the same pod (or of the node, with `hostNetwork: true`) are denied the forwarder's port: they share its loopback.
+- A node with cgroup v1 has no cgroup per container to attach to: no names there (the started Event says "no DNS names: the node has no cgroup v2"); mediation is unchanged.
+- The forwarder records only replies that answer a query it sent (same ID and question). A container with `CAP_NET_RAW` (containerd's default) can still sniff the forwarder's query and forge its reply: its names are shown in prompts but never matched by host rules (the started Event says so). Drop `NET_RAW` from the container's capabilities for host rules.
+- The name servers are the container's own, which the pod's author chooses (`dnsConfig`): a host rule trusts them. Where pod authors are not trusted, prefer address rules, or the HTTPS proxy, which checks the servers' certificates.
