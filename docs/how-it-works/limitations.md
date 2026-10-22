@@ -29,7 +29,7 @@ hallpass is a proof of concept. It mediates filesystem writes and the programs r
 - Sockets inherited from outside the sandbox, or received with `SCM_RIGHTS`, are already connected: their traffic is not asked about.
 - Only IPv4, IPv6 and unix sockets are mediated; other families (netlink, packet, vsock...) are not.
 - A UDP socket bound inside the sandbox is not a listener: sending to it is asked.
-- Answers cover one destination; there are no answers for a subnet or a folder of sockets yet (use `--allow-net`).
+- Answers cover one destination; there are no answers for a subnet or a folder of sockets yet (use `--allow-connect`).
 - Lite mode: the destination address is read from memory after the check (TOCTOU), and a listener inherited from outside the sandbox counts as started inside it.
 - Strict mode: a TCP listener counts as started inside the sandbox as in lite mode (racy); the kernel then lets through only the address granted. A `sendmmsg` to more than 4 addresses sends the first 4 and fails on the fifth with `EACCES`; resending the rest asks again.
 

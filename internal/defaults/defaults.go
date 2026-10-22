@@ -42,7 +42,7 @@ type Defaults struct {
 	// sandbox.
 	ownListeners bool
 	// netAllow, netDeny and netAsk are network destinations
-	// (--allow-net, --deny-net, --ask-net).
+	// (--allow-connect, --deny-connect, --ask-connect).
 	netAllow, netDeny, netAsk []rules.ObjectMatch
 	// execAllow and execDeny are programs (--allow-exec, --deny-exec).
 	execAllow, execDeny []rules.PathMatch
@@ -152,16 +152,16 @@ func (d *Defaults) AskPath(path string) {
 	}
 }
 
-// AllowNet allows connections and sends to m, a network match
+// AllowConnect allows connections and sends to m, a network match
 // (rules.ParseNet).
-func (d *Defaults) AllowNet(m rules.ObjectMatch) { d.netAllow = append(d.netAllow, m) }
+func (d *Defaults) AllowConnect(m rules.ObjectMatch) { d.netAllow = append(d.netAllow, m) }
 
-// DenyNet denies connections and sends to m, a network match.
-func (d *Defaults) DenyNet(m rules.ObjectMatch) { d.netDeny = append(d.netDeny, m) }
+// DenyConnect denies connections and sends to m, a network match.
+func (d *Defaults) DenyConnect(m rules.ObjectMatch) { d.netDeny = append(d.netDeny, m) }
 
-// AskNet asks about connections and sends to m, a network match, even
+// AskConnect asks about connections and sends to m, a network match, even
 // when a less specific allow covers them.
-func (d *Defaults) AskNet(m rules.ObjectMatch) { d.netAsk = append(d.netAsk, m) }
+func (d *Defaults) AskConnect(m rules.ObjectMatch) { d.netAsk = append(d.netAsk, m) }
 
 // AllowExec lets the program at path run without asking, or with tree
 // every program below path. path is absolute; it is resolved like the
@@ -204,11 +204,11 @@ func (d *Defaults) AddRules(rs []rules.Rule) {
 		} else if r.Ops == rules.OpNet && !o.OwnListener {
 			switch r.Verdict {
 			case rules.Allow:
-				d.AllowNet(o)
+				d.AllowConnect(o)
 			case rules.Deny:
-				d.DenyNet(o)
+				d.DenyConnect(o)
 			case rules.Ask:
-				d.AskNet(o)
+				d.AskConnect(o)
 			}
 			continue
 		}

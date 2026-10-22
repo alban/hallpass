@@ -28,7 +28,7 @@ type Policy struct {
 func parsePolicy(name string, spec policy.Spec) (*Policy, error) {
 	if f := spec.Structured(); f != "" {
 		// Kept in the CRD's schema so that the API server does not
-		// prune them silently: a lost denyNet would fail open.
+		// prune them silently: a lost denyConnect would fail open.
 		return nil, fmt.Errorf("policy %s: %s: replaced by rules (one rule per line, as \"allow write /workspace/**\")", name, f)
 	}
 	p, err := spec.Validate()

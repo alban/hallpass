@@ -44,14 +44,14 @@ type Spec struct {
 	// Mediate lists the mediated syscall categories: write, exec,
 	// connect. Default: seccomp.DefaultCategories.
 	Mediate []string `json:"mediate,omitempty"`
-	// AllowNet and DenyNet are network destinations (rules.ParseNet
+	// AllowConnect and DenyConnect are network destinations (rules.ParseNet
 	// syntax: "all", "tcp:10.0.0.0/8:443", "unix:@name"...). They need
-	// connect in Mediate. AskNet are destinations asked about even when
+	// connect in Mediate. AskConnect are destinations asked about even when
 	// a less specific allow covers them (10.0.0.1:22 inside an allowed
 	// 10.0.0.0/8).
-	AllowNet []string `json:"allowNet,omitempty"`
-	DenyNet  []string `json:"denyNet,omitempty"`
-	AskNet   []string `json:"askNet,omitempty"`
+	AllowConnect []string `json:"allowConnect,omitempty"`
+	DenyConnect  []string `json:"denyConnect,omitempty"`
+	AskConnect   []string `json:"askConnect,omitempty"`
 	// AllowExec and DenyExec are programs, by absolute path: "/usr/bin/make"
 	// is that program only, "/opt/tools/**" every program below
 	// /opt/tools. AllowExec also takes groups: "@shells", "@coreutils"
@@ -82,7 +82,7 @@ type RuleFile struct {
 }
 
 // Structured returns the JSON name of the first field of s that a rule
-// in Rules replaces (allowPaths, allowNet...), "" for none: a
+// in Rules replaces (allowPaths, allowConnect...), "" for none: a
 // HallpassPolicy refuses them, the flags still fill them.
 func (s Spec) Structured() string {
 	for _, f := range []struct {
@@ -90,7 +90,7 @@ func (s Spec) Structured() string {
 		set  bool
 	}{
 		{"allowPaths", len(s.AllowPaths) > 0}, {"denyPaths", len(s.DenyPaths) > 0}, {"askPaths", len(s.AskPaths) > 0},
-		{"allowNet", len(s.AllowNet) > 0}, {"denyNet", len(s.DenyNet) > 0}, {"askNet", len(s.AskNet) > 0},
+		{"allowConnect", len(s.AllowConnect) > 0}, {"denyConnect", len(s.DenyConnect) > 0}, {"askConnect", len(s.AskConnect) > 0},
 		{"allowExec", len(s.AllowExec) > 0}, {"denyExec", len(s.DenyExec) > 0},
 	} {
 		if f.set {
@@ -108,9 +108,9 @@ type Policy struct {
 	Prompt        bool
 	PromptTimeout time.Duration // 0: wait forever
 	// Mediate is the mediated syscall categories.
-	Mediate                   seccomp.Category
-	AllowNet, DenyNet, AskNet []rules.ObjectMatch
-	AllowExec, DenyExec       []rules.PathMatch
+	Mediate                               seccomp.Category
+	AllowConnect, DenyConnect, AskConnect []rules.ObjectMatch
+	AllowExec, DenyExec                   []rules.PathMatch
 	// AllowGroups are the program groups of AllowExec, e.g. "@shells".
 	AllowGroups []string
 	// Groups are the policy's own groups, sorted by name (GroupDefs).
@@ -167,7 +167,7 @@ func (s Spec) Validate() (Policy, error) {
 		name string
 		in   []string
 		out  *[]rules.ObjectMatch
-	}{{"allowNet", s.AllowNet, &p.AllowNet}, {"denyNet", s.DenyNet, &p.DenyNet}, {"askNet", s.AskNet, &p.AskNet}} {
+	}{{"allowConnect", s.AllowConnect, &p.AllowConnect}, {"denyConnect", s.DenyConnect, &p.DenyConnect}, {"askConnect", s.AskConnect, &p.AskConnect}} {
 		if len(f.in) > 0 && p.Mediate&seccomp.Connect == 0 {
 			// A deny that does nothing must not look like it works.
 			return Policy{}, &FieldError{f.name, errors.New("needs connect in mediate")}
@@ -386,14 +386,14 @@ func (p Policy) Defaults(c Context) *defaults.Defaults {
 	if c.OwnListeners {
 		d.AllowOwnListeners()
 	}
-	for _, m := range p.AllowNet {
-		d.AllowNet(m)
+	for _, m := range p.AllowConnect {
+		d.AllowConnect(m)
 	}
-	for _, m := range p.DenyNet {
-		d.DenyNet(m)
+	for _, m := range p.DenyConnect {
+		d.DenyConnect(m)
 	}
-	for _, m := range p.AskNet {
-		d.AskNet(m)
+	for _, m := range p.AskConnect {
+		d.AskConnect(m)
 	}
 	for _, e := range c.Execs {
 		d.AllowExec(e, false)

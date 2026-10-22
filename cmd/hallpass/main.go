@@ -53,7 +53,7 @@ var flagGroups = []struct {
 	{"Sandbox", []string{"mode", "mediate", "escalate", "allow-userns", "no-implicit", "rules"}},
 	{"Files", []string{"C", "workdir", "allow-path", "deny-path", "ask-path", "allow-tty"}},
 	{"Programs", []string{"allow-exec", "deny-exec", "group"}},
-	{"Network (experimental)", []string{"allow-net", "deny-net", "ask-net", "dns"}},
+	{"Network (experimental)", []string{"allow-connect", "deny-connect", "ask-connect", "dns"}},
 	{"Prompts", []string{"prompt", "timeout"}},
 	{"Session", []string{"log", "wait", "version"}},
 }
@@ -141,7 +141,7 @@ type options struct {
 	wait        string
 	dns         string
 	// policy is the policy the flags give (--allow-path, --deny-path,
-	// --mediate, --allow-net...).
+	// --mediate, --allow-connect...).
 	policy policy.Policy
 	// protect is denied for good on top of policy, in the monitor's
 	// protected set: hallpass's own config and binary.
@@ -159,9 +159,9 @@ var flagNames = map[string]string{
 	"askPaths":      "--ask-path",
 	"promptTimeout": "--timeout",
 	"mediate":       "--mediate",
-	"allowNet":      "--allow-net",
-	"denyNet":       "--deny-net",
-	"askNet":        "--ask-net",
+	"allowConnect":  "--allow-connect",
+	"denyConnect":   "--deny-connect",
+	"askConnect":    "--ask-connect",
 	"allowExec":     "--allow-exec",
 	"denyExec":      "--deny-exec",
 	"groups":        "--group",
@@ -193,10 +193,10 @@ func parseFlags(argv []string, printPolicy bool) (o options, code int, ok bool) 
 	fs.StringVar(&o.dns, "dns", "observe", "with connect mediated: observe (name the destinations in prompts, from the DNS queries the sandbox sends; hallpass then looks the names up itself) | off")
 	fs.StringVar(&o.wait, "wait", "main", "exit when the main process exits (main), or keep supervising its background processes until they all exit (all)")
 	mediate := fs.String("mediate", seccomp.DefaultCategories.String(), "comma-separated `categories` of syscalls to mediate: write, exec, connect (connect is experimental)")
-	var allowNet, denyNet, askNet listFlag
-	fs.Var(&allowNet, "allow-net", "network `destination` allowed without asking (repeatable; needs --mediate with connect): all, [tcp:|udp:]ADDR[/N][:PORT[-PORT]] (ADDR * for any, IPv6 in brackets), unix:/path, unix:/dir/**, unix:@name, unix:@prefix*")
-	fs.Var(&denyNet, "deny-net", "network `destination` always denied (repeatable, same syntax, wins over --allow-net)")
-	fs.Var(&askNet, "ask-net", "network `destination` asked about even inside a less specific --allow-net (repeatable, same syntax; a more specific --allow-net still allows)")
+	var allowConnect, denyConnect, askConnect listFlag
+	fs.Var(&allowConnect, "allow-connect", "network `destination` allowed without asking (repeatable; needs --mediate with connect): all, [tcp:|udp:]ADDR[/N][:PORT[-PORT]] (ADDR * for any, IPv6 in brackets), unix:/path, unix:/dir/**, unix:@name, unix:@prefix*")
+	fs.Var(&denyConnect, "deny-connect", "network `destination` always denied (repeatable, same syntax, wins over --allow-connect)")
+	fs.Var(&askConnect, "ask-connect", "network `destination` asked about even inside a less specific --allow-connect (repeatable, same syntax; a more specific --allow-connect still allows)")
 	var allowExec, denyExec listFlag
 	fs.Var(&allowExec, "allow-exec", "`program` allowed to run without asking (repeatable, comma-separated): a name looked up in $PATH, a path, dir/** for every program below dir, or a group of programs: "+strings.Join(programs.Names(), ", "))
 	fs.Var(&denyExec, "deny-exec", "`program` never allowed to run (repeatable, comma-separated, same syntax but no groups, wins over --allow-exec)")
@@ -220,7 +220,7 @@ func parseFlags(argv []string, printPolicy bool) (o options, code int, ok bool) 
 		return o, 0, false
 	}
 	var err error
-	spec := o.spec(allow, deny, ask, *mediate, allowNet, denyNet, askNet)
+	spec := o.spec(allow, deny, ask, *mediate, allowConnect, denyConnect, askConnect)
 	spec.AllowExec, spec.DenyExec = programPaths(allowExec), programPaths(denyExec)
 	if spec.Groups, err = groupSpecs(groupFlags); err != nil {
 		return o, fail(err), false
@@ -264,7 +264,7 @@ func parseFlags(argv []string, printPolicy bool) (o options, code int, ok bool) 
 
 // spec is the policy.Spec of the flags. Relative --allow-path,
 // --deny-path and --ask-path paths are relative to the current directory.
-func (o *options) spec(allow, deny, ask []string, mediate string, allowNet, denyNet, askNet []string) policy.Spec {
+func (o *options) spec(allow, deny, ask []string, mediate string, allowConnect, denyConnect, askConnect []string) policy.Spec {
 	abs := func(l []string) []string {
 		out := make([]string, 0, len(l))
 		for _, p := range l {
@@ -283,9 +283,9 @@ func (o *options) spec(allow, deny, ask []string, mediate string, allowNet, deny
 		Prompt:        &prompt,
 		PromptTimeout: o.timeout.String(),
 		Mediate:       strings.Split(mediate, ","),
-		AllowNet:      allowNet,
-		DenyNet:       denyNet,
-		AskNet:        askNet,
+		AllowConnect:  allowConnect,
+		DenyConnect:   denyConnect,
+		AskConnect:    askConnect,
 	}
 }
 

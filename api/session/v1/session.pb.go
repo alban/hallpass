@@ -937,7 +937,7 @@ type Advance struct {
 	Tree   bool                   `protobuf:"varint,1,opt,name=tree,proto3" json:"tree,omitempty"`    // the path and everything below it
 	For    *durationpb.Duration   `protobuf:"bytes,2,opt,name=for,proto3" json:"for,omitempty"`       // unset: the rest of the session
 	Reason string                 `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"` // written by the workload: untrusted, display only
-	Dest   string                 `protobuf:"bytes,4,opt,name=dest,proto3" json:"dest,omitempty"`     // network destinations, in --allow-net's syntax
+	Dest   string                 `protobuf:"bytes,4,opt,name=dest,proto3" json:"dest,omitempty"`     // network destinations, in --allow-connect's syntax
 	// A program (or folder of programs) the workload may write without
 	// asking: a grant lets it run what it writes there.
 	Writable      bool `protobuf:"varint,5,opt,name=writable,proto3" json:"writable,omitempty"`

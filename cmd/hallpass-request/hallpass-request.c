@@ -47,7 +47,7 @@ static const char help_text[] =
 	"  exec PROG      run a program: a path, a name looked up in $PATH, or\n"
 	"                 DIR/** for every program below DIR\n"
 	"  connect DEST   connect and send to network destinations, as hallpass\n"
-	"                 --allow-net takes them: [tcp:|udp:]ADDR[/N][:PORT[-PORT]],\n"
+	"                 --allow-connect takes them: [tcp:|udp:]ADDR[/N][:PORT[-PORT]],\n"
 	"                 * for any address, [IPv6], unix:/path, unix:/dir/**,\n"
 	"                 unix:@name, unix:@prefix*; addresses, not host names\n"
 	"check: only tell whether a request would ask the user.\n"
@@ -287,7 +287,7 @@ int main(int argc, char **argv)
 		fprintf(stderr, "hallpass-request: not allowed yet: a request, or trying to %s, would ask the user\n", what);
 		return EXIT_WOULD_ASK;
 	case EINVAL:
-		msg = net ? "invalid request: DEST is an address as hallpass --allow-net takes it (not a host name, not all), DURATION is like 90s, 10m or 2h"
+		msg = net ? "invalid request: DEST is an address as hallpass --allow-connect takes it (not a host name, not all), DURATION is like 90s, 10m or 2h"
 			  : "invalid request: PATH takes no glob but a final /**, DURATION is like 90s, 10m or 2h";
 		code = EXIT_INVALID;
 		break;

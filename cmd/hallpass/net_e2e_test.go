@@ -348,7 +348,7 @@ H abstract inside-unix %s
 	}
 }
 
-// TestNetAllow checks --allow-net and --deny-net.
+// TestNetAllow checks --allow-connect and --deny-connect.
 func TestNetAllow(t *testing.T) {
 	for _, mode := range modes(t) {
 		for _, tc := range []struct {
@@ -356,14 +356,14 @@ func TestNetAllow(t *testing.T) {
 			flags func(e env) []string
 			want  map[string]string // label: outcome; the others: denied
 		}{
-			{"all", func(env) []string { return []string{"--allow-net=all"} }, map[string]string{
+			{"all", func(env) []string { return []string{"--allow-connect=all"} }, map[string]string{
 				"tcp": "ok", "mapped": "ok", "udpto": "ok", "udpmsg": "ok", "udpunspec": "ok", "unix": "ok", "unixgram": "ok", "abstract": "ok",
 			}},
-			{"deny wins", func(env) []string { return []string{"--allow-net=all", "--deny-net=tcp:127.0.0.0/8"} }, map[string]string{
+			{"deny wins", func(env) []string { return []string{"--allow-connect=all", "--deny-connect=tcp:127.0.0.0/8"} }, map[string]string{
 				"udpto": "ok", "udpmsg": "ok", "udpunspec": "ok", "unix": "ok", "unixgram": "ok", "abstract": "ok",
 			}},
 			{"some", func(e env) []string {
-				return []string{"--allow-net=udp:127.0.0.1", "--allow-net=unix:@hallpass-e2e-*", "--allow-net=unix:" + e.root + "/s.sock"}
+				return []string{"--allow-connect=udp:127.0.0.1", "--allow-connect=unix:@hallpass-e2e-*", "--allow-connect=unix:" + e.root + "/s.sock"}
 			}, map[string]string{
 				"udpto": "ok", "udpmsg": "ok", "udpunspec": "ok", "unix": "ok", "abstract": "ok",
 			}},
@@ -560,7 +560,7 @@ func TestNetSendmmsg(t *testing.T) {
 				addrs = append(addrs, c.LocalAddr().String())
 			}
 			c := e.cmd(`HALLPASS_E2E_HELPER=sendmmsg "$HP_SELF" `+strings.Join(addrs, ","),
-				"--allow-net=udp:127.0.0.1", "--prompt=deny", "--mediate=write,exec,connect", "--mode="+mode)
+				"--allow-connect=udp:127.0.0.1", "--prompt=deny", "--mediate=write,exec,connect", "--mode="+mode)
 			self, err := os.Executable()
 			if err != nil {
 				t.Fatal(err)

@@ -117,11 +117,11 @@ func TestDNSNames(t *testing.T) {
 			for _, c := range []struct {
 				name, style, server, netFlag, wantName string
 			}{
-				{"connected", "connected", ns, "--allow-net=udp:" + ns + ":53", "localhost"},
-				{"sendto", "sendto", ns, "--allow-net=udp:" + ns + ":53", "localhost"},
-				{"denied", "sendto", ns, "--deny-net=udp:" + ns + ":53", ""},
-				{"other-server", "sendto", other, "--allow-net=udp:" + other + ":53", ""},
-				{"other-server-connected", "connected", other, "--allow-net=udp:" + other + ":53", ""},
+				{"connected", "connected", ns, "--allow-connect=udp:" + ns + ":53", "localhost"},
+				{"sendto", "sendto", ns, "--allow-connect=udp:" + ns + ":53", "localhost"},
+				{"denied", "sendto", ns, "--deny-connect=udp:" + ns + ":53", ""},
+				{"other-server", "sendto", other, "--allow-connect=udp:" + other + ":53", ""},
+				{"other-server-connected", "connected", other, "--allow-connect=udp:" + other + ":53", ""},
 			} {
 				t.Run(c.name, func(t *testing.T) {
 					e := newEnv(t)

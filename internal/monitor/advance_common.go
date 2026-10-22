@@ -57,7 +57,7 @@ type Advance struct {
 
 // Grant returns the rule that grants r, a request made in advance, until
 // expires (zero: until removed): the same rule as the allow flags'
-// (--allow-path, --allow-exec, --allow-net), in AdvanceSet.
+// (--allow-path, --allow-exec, --allow-connect), in AdvanceSet.
 func (r *Request) Grant(expires time.Time) rules.Rule {
 	g := rules.Rule{Ops: grantOps(r.Op), Verdict: rules.Allow, Expires: expires, Set: AdvanceSet}
 	if r.Advance.Net.IsNet() {

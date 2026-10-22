@@ -85,17 +85,17 @@ spec:
                   type: array
                   items:
                     type: string
-                allowNet:
+                allowConnect:
                   description: Replaced by rules; refused.
                   type: array
                   items:
                     type: string
-                denyNet:
+                denyConnect:
                   description: Replaced by rules; refused.
                   type: array
                   items:
                     type: string
-                askNet:
+                askConnect:
                   description: Replaced by rules; refused.
                   type: array
                   items:
@@ -134,12 +134,12 @@ spec:
               x-kubernetes-validations:
                 - rule: >-
                     !has(self.allowPaths) && !has(self.denyPaths) &&
-                    !has(self.askPaths) && !has(self.allowNet) &&
-                    !has(self.denyNet) && !has(self.askNet) &&
+                    !has(self.askPaths) && !has(self.allowConnect) &&
+                    !has(self.denyConnect) && !has(self.askConnect) &&
                     !has(self.allowExec) && !has(self.denyExec)
                   message: >-
-                    allowPaths, denyPaths, askPaths, allowNet, denyNet,
-                    askNet, allowExec and denyExec are replaced by rules,
+                    allowPaths, denyPaths, askPaths, allowConnect, denyConnect,
+                    askConnect, allowExec and denyExec are replaced by rules,
                     one rule per line ("allow write /workspace/**")
                 - rule: >-
                     !has(self.groups) || !has(self.mediate) || 'exec' in self.mediate

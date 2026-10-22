@@ -128,7 +128,7 @@ message Advance {
   bool tree = 1; // the path and everything below it
   google.protobuf.Duration for = 2; // unset: the rest of the session
   string reason = 3; // written by the workload: untrusted, display only
-  string dest = 4; // network destinations, in --allow-net's syntax
+  string dest = 4; // network destinations, in --allow-connect's syntax
   // A program (or folder of programs) the workload may write without
   // asking: a grant lets it run what it writes there.
   bool writable = 5;

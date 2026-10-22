@@ -46,8 +46,8 @@ func TestValidate(t *testing.T) {
 		t.Errorf("promptTimeout 0: %+v, %v", p, err)
 	}
 
-	p, err = Spec{Mediate: []string{"write", "exec", "connect"}, AllowNet: []string{"all"}, DenyNet: []string{"tcp:169.254.169.254"}}.Validate()
-	if err != nil || p.Mediate != seccomp.AllCategories || len(p.AllowNet) != 1 || !p.AllowNet[0].AnyNet || p.DenyNet[0].NetString() != "tcp:169.254.169.254" {
+	p, err = Spec{Mediate: []string{"write", "exec", "connect"}, AllowConnect: []string{"all"}, DenyConnect: []string{"tcp:169.254.169.254"}}.Validate()
+	if err != nil || p.Mediate != seccomp.AllCategories || len(p.AllowConnect) != 1 || !p.AllowConnect[0].AnyNet || p.DenyConnect[0].NetString() != "tcp:169.254.169.254" {
 		t.Errorf("network: %+v, %v", p, err)
 	}
 
@@ -66,10 +66,10 @@ func TestValidate(t *testing.T) {
 		{Spec{Mediate: []string{"files"}}, "mediate"},
 		{Spec{Mediate: []string{}}, "mediate"},
 		{Spec{Mediate: []string{""}}, "mediate"},
-		{Spec{AllowNet: []string{"all"}}, "allowNet"},
-		{Spec{Mediate: []string{"connect"}, DenyNet: []string{"tcp:nowhere"}}, "denyNet"},
-		{Spec{AskNet: []string{"tcp:*:22"}}, "askNet"},
-		{Spec{Mediate: []string{"connect"}, AskNet: []string{"tcp:nowhere"}}, "askNet"},
+		{Spec{AllowConnect: []string{"all"}}, "allowConnect"},
+		{Spec{Mediate: []string{"connect"}, DenyConnect: []string{"tcp:nowhere"}}, "denyConnect"},
+		{Spec{AskConnect: []string{"tcp:*:22"}}, "askConnect"},
+		{Spec{Mediate: []string{"connect"}, AskConnect: []string{"tcp:nowhere"}}, "askConnect"},
 		{Spec{AllowExec: []string{"ls"}}, "allowExec"},
 		{Spec{AllowExec: []string{"/usr/*/ls"}}, "allowExec"},
 		{Spec{Mediate: []string{"write"}, DenyExec: []string{"/usr/bin/curl"}}, "denyExec"},
@@ -94,13 +94,13 @@ func TestValidate(t *testing.T) {
 
 func TestDefaults(t *testing.T) {
 	p, err := Spec{
-		AllowPaths: []string{"/workspace"},
-		DenyPaths:  []string{"/workspace/.git"},
-		AskPaths:   []string{"/workspace/secret"},
-		Mediate:    []string{"write", "connect"},
-		AllowNet:   []string{"unix:@x"},
-		DenyNet:    []string{"tcp:*:22"},
-		AskNet:     []string{"tcp:10.0.0.1"},
+		AllowPaths:   []string{"/workspace"},
+		DenyPaths:    []string{"/workspace/.git"},
+		AskPaths:     []string{"/workspace/secret"},
+		Mediate:      []string{"write", "connect"},
+		AllowConnect: []string{"unix:@x"},
+		DenyConnect:  []string{"tcp:*:22"},
+		AskConnect:   []string{"tcp:10.0.0.1"},
 	}.Validate()
 	if err != nil {
 		t.Fatal(err)

@@ -83,7 +83,7 @@ func TestCheckRules(t *testing.T) {
 	secret := mustSpec(t, "allow write /work/secret/**", now)
 	askSecret := mustSpec(t, "ask write /work/secret/**", now)
 	askWork := mustSpec(t, "ask write /work/**", now)
-	askNet := mustSpec(t, "ask connect 10.0.0.0/24:22", now)
+	askConnect := mustSpec(t, "ask connect 10.0.0.0/24:22", now)
 	key := mustSpec(t, "allow write /work/secret/key", now)
 	for _, tc := range []struct {
 		name          string
@@ -99,7 +99,7 @@ func TestCheckRules(t *testing.T) {
 		// The wider allow lost to the ask rule, the narrower one wins;
 		// answering "always" to the ask could give it.
 		{name: "narrowed past an ask", rm: []rules.Rule{work}, add: []rules.Rule{work, key}, next: []rules.Rule{askSecret, work, key}, ok: true},
-		{name: "narrowed past a network ask", rm: []rules.Rule{all}, add: []rules.Rule{mustSpec(t, "allow connect 10.0.0.1:22", now)}, next: []rules.Rule{askNet}, ok: true},
+		{name: "narrowed past a network ask", rm: []rules.Rule{all}, add: []rules.Rule{mustSpec(t, "allow connect 10.0.0.1:22", now)}, next: []rules.Rule{askConnect}, ok: true},
 		{name: "narrowed beside an ask", rm: []rules.Rule{work}, add: []rules.Rule{mustSpec(t, "allow write /work/other", now)}, next: []rules.Rule{askSecret}, ok: true, tOK: true},
 		// The wider allow already won over the ask rule.
 		{name: "narrowed under a shallower ask", rm: []rules.Rule{secret}, add: []rules.Rule{key}, next: []rules.Rule{askWork, key}, ok: true, tOK: true},

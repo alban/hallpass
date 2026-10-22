@@ -256,7 +256,7 @@ Measures:
 A few denials are in the `protected` rule set, which the monitor refuses
 to remove or to extend with anything but denials without expiry
 (`monitor.ErrProtected`, `PermissionDenied` on the session API). A deny
-wins over any allow, `--allow-net=all` and the listener-inside rule
+wins over any allow, `--allow-connect=all` and the listener-inside rule
 included, in the rule engine and in the BPF walk, so these denials hold
 even after "allow all networking":
 

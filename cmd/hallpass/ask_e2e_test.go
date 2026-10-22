@@ -50,8 +50,8 @@ H udp sendto %[2]s
 H aonce connect %[3]s
 `, nt.tcp, nt.udp, nt.abstract)
 			c := e.cmd(script, "--mode="+mode, "--prompt=answer", "--timeout=20s", "--mediate=write,exec,connect",
-				"--allow-net=127.0.0.0/8", "--ask-net=127.0.0.1", "--allow-net=udp:"+nt.udp,
-				"--allow-net=unix:@hallpass-e2e-*", "--ask-net=unix:"+nt.abstract)
+				"--allow-connect=127.0.0.0/8", "--ask-connect=127.0.0.1", "--allow-connect=udp:"+nt.udp,
+				"--allow-connect=unix:@hallpass-e2e-*", "--ask-connect=unix:"+nt.abstract)
 			c.Env = append(c.Env, "HP_SELF="+self)
 			var out strings.Builder
 			c.Stdout, c.Stderr = &out, &out

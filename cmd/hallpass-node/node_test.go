@@ -80,11 +80,11 @@ deny write /var/run/secrets/**
 			t.Errorf("%+v: no error", bad)
 		}
 	}
-	// The fields rules replaced are refused, not ignored: a denyNet that
+	// The fields rules replaced are refused, not ignored: a denyConnect that
 	// silently did nothing would fail open.
 	for _, old := range []policy.Spec{
 		{AllowPaths: []string{"/workspace/**"}},
-		{Mediate: []string{"write", "connect"}, DenyNet: []string{"169.254.169.254"}},
+		{Mediate: []string{"write", "connect"}, DenyConnect: []string{"169.254.169.254"}},
 		{AllowExec: []string{"@coreutils"}},
 	} {
 		if _, err := parsePolicy("old", old); err == nil || !strings.Contains(err.Error(), "replaced by rules") {

@@ -196,9 +196,9 @@ func TestNet(t *testing.T) {
 	all, _ := rules.ParseNet("all")
 	ssh, _ := rules.ParseNet("tcp:10.0.0.0/8:22")
 	box, _ := rules.ParseNet("10.0.0.1")
-	d.AllowNet(all)
-	d.DenyNet(ssh)
-	d.AskNet(box)
+	d.AllowConnect(all)
+	d.DenyConnect(ssh)
+	d.AskConnect(box)
 	rs := d.Rules()
 	at := time.Now()
 	for _, tc := range []struct {
@@ -211,7 +211,7 @@ func TestNet(t *testing.T) {
 		}
 	}
 	if v, _, ok := rules.Eval(rs, rules.OpWrite, rules.Object{Path: &rules.PathObject{Path: "/etc/x"}}, at); ok && v == rules.Allow {
-		t.Error("allow-net all allows files")
+		t.Error("allow-connect all allows files")
 	}
 	s := strings.Join(d.Describe(rs), "\n")
 	if !strings.Contains(s, "network: tcp:10.0.0.0/8:22\nAllowed") || !strings.Contains(s, "network: all\n") ||

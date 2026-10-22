@@ -28,7 +28,7 @@ hallpass-request release write|exec|connect PATH|PROG|DEST
   `@group`. The prompt warns you when the sandbox may write the program
   (or below DIR) without asking: a grant would let it run anything it
   writes there. Needs exec mediated.
-- `connect DEST`: network destinations, as `--allow-net` takes them
+- `connect DEST`: network destinations, as `--allow-connect` takes them
   (`[tcp:|udp:]ADDR[/N][:PORT[-PORT]]`, `*`, `[IPv6]`, `unix:/path`,
   `unix:/dir/**`, `unix:@name`, `unix:@prefix*`), for connecting and
   sending. Addresses only, no host names; not `all`. Needs network

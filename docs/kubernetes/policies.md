@@ -81,7 +81,7 @@ start, as for a missing policy.
   `binfmt_misc` handler needs an allow in strict mode (it is never
   asked about), and a `memfd` is never allowed for good. See
   [Programs](../workstation/usage.md#programs) for details.
-- `connect DESTINATION`: destinations in the `--allow-net` syntax
+- `connect DESTINATION`: destinations in the `--allow-connect` syntax
   ([Network](../workstation/usage.md#network-experimental)); `all` is every
   destination, unix sockets included. They need `connect` in `mediate`.
   Loopback and unix listeners started in the container are allowed
@@ -110,7 +110,7 @@ The other fields:
   They need `exec` in `mediate`.
 
 The fields `rules` replaced (`allowPaths`, `denyPaths`, `askPaths`,
-`allowNet`, `denyNet`, `askNet`, `allowExec`, `denyExec`) are refused:
+`allowConnect`, `denyConnect`, `askConnect`, `allowExec`, `denyExec`) are refused:
 the API server rejects a policy that has them.
 
 Policy changes apply to containers started afterwards: a running
