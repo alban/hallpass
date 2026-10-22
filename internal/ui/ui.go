@@ -107,9 +107,10 @@ type Request struct {
 	Scope string
 	// Never describes what AnswerNever covers.
 	Never string
-	// Group describes the program group AnswerAllowGroup allows, e.g.
-	// "@coreutils (cat, ls, cp, … 104 programs)"; "" hides that choice.
-	Group string
+	// ProgramGroup describes the program group AnswerAllowGroup allows,
+	// e.g. "@coreutils (cat, ls, cp, … 104 programs)"; "" hides that
+	// choice.
+	ProgramGroup string
 	// Warn, when set, is a warning about the request (e.g. "SSH keys —
 	// secret store"); the prompt shows it in red.
 	Warn string
@@ -258,7 +259,7 @@ func (r Request) Valid(a Answer) bool {
 	case AnswerAllowTemp, AnswerAllowAlways:
 		return r.Scope != ""
 	case AnswerAllowGroup:
-		return r.Group != ""
+		return r.ProgramGroup != ""
 	}
 	return true
 }
@@ -412,8 +413,8 @@ func (r Request) Text() (string, map[string]Answer) {
 		fmt.Fprintf(&b, "[t] allow %s for %v  [a] always  ", sanitize(r.Scope), TempGrant)
 		keys["t"], keys["a"] = AnswerAllowTemp, AnswerAllowAlways
 	}
-	if r.Group != "" {
-		fmt.Fprintf(&b, "[g] group %s  ", sanitize(r.Group))
+	if r.ProgramGroup != "" {
+		fmt.Fprintf(&b, "[g] group %s  ", sanitize(r.ProgramGroup))
 		keys["g"] = AnswerAllowGroup
 	}
 	b.WriteString("[d] deny  [n] never")

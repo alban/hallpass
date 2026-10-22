@@ -493,8 +493,8 @@ function pendingCard(pid, r) {
       el("button", { class: "allow", onclick: answer("temp") }, "Allow " + p.scope + " for " + TEMP_GRANT),
       el("button", { class: "allow", onclick: answer("always") }, "Always"));
   }
-  if (p.group) {
-    buttons.append(el("button", { class: "allow", onclick: answer("group") }, "Group " + p.group));
+  if (p.programGroup) {
+    buttons.append(el("button", { class: "allow", onclick: answer("group") }, "Group " + p.programGroup));
   }
   buttons.append(
     el("button", { class: "deny", onclick: answer("deny") }, "Deny"),

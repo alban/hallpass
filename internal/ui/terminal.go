@@ -83,8 +83,8 @@ func (a *Terminal) Ask(ctx context.Context, r Request) Answer {
 			keys += fmt.Sprintf("  %s for %v  %s always", bold("[t]"), TempGrant, bold("[a]"))
 			accept += "tTaA"
 		}
-		if r.Group != "" {
-			lines = append(lines, fmt.Sprintf(" [g] allows the group: %s", sanitize(r.Group)))
+		if r.ProgramGroup != "" {
+			lines = append(lines, fmt.Sprintf(" [g] allows the group: %s", sanitize(r.ProgramGroup)))
 			keys += fmt.Sprintf("  %s group", bold("[g]"))
 			accept += "gG"
 		}

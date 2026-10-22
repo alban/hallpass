@@ -272,7 +272,7 @@ func TestExecPromptGroup(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read prompt: %v\n%s", err, out.String())
 			}
-			if g := req.Prompt.GetGroup(); !strings.HasPrefix(g, "@coreutils (") || !strings.HasSuffix(req.Prompt.GetPath(), "/ls") {
+			if g := req.Prompt.GetProgramGroup(); !strings.HasPrefix(g, "@coreutils (") || !strings.HasSuffix(req.Prompt.GetPath(), "/ls") {
 				t.Errorf("prompt %v, want ls in @coreutils", req.Prompt)
 			}
 			p.answer(req.Id, "group")
@@ -281,7 +281,7 @@ func TestExecPromptGroup(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read prompt: %v\n%s", err, out.String())
 			}
-			if req.Prompt.GetPath() != bin+"/other" || req.Prompt.GetGroup() != "" {
+			if req.Prompt.GetPath() != bin+"/other" || req.Prompt.GetProgramGroup() != "" {
 				t.Errorf("prompt %v, want %s without a group", req.Prompt, bin+"/other")
 			}
 			p.answer(req.Id, "deny")

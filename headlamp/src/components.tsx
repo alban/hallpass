@@ -82,7 +82,7 @@ function AnswerButtons(props: {
         // Only execs have a group: no disabled button on every other prompt.
         .filter(a => a !== 'group' || answerAllowed(a, request.prompt))
         .map(a => (
-          <Tooltip key={a} title={a === 'group' ? `Allow ${request.prompt?.group}` : answerHelp[a]}>
+          <Tooltip key={a} title={a === 'group' ? `Allow ${request.prompt?.programGroup}` : answerHelp[a]}>
             <span>
               <Button
                 color={a === 'deny' || a === 'never' ? 'error' : 'primary'}

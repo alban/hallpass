@@ -31,7 +31,7 @@ export interface Prompt {
   advance?: boolean;
   reason?: string; // written by the workload: show it as its claim
   grantFor?: string; // protojson Duration, e.g. "600s"; unset: the session
-  group?: string; // the program group "group" allows, e.g. "@git (git: 1 program)"
+  programGroup?: string; // the program group "group" allows, e.g. "@git (git: 1 program)"
   hostNames?: string; // host names of a network address in path, display only
 }
 
@@ -109,7 +109,7 @@ export function answerAllowed(answer: Answer, prompt?: Prompt): boolean {
     return false;
   }
   if (answer === 'group') {
-    return !!prompt?.group;
+    return !!prompt?.programGroup;
   }
   return (answer !== 'temp' && answer !== 'always') || !!prompt?.scope;
 }

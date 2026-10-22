@@ -215,7 +215,7 @@ func promptRequest(p *pb.Prompt, waiting int) ui.Request {
 	return ui.Request{
 		Op: p.Op, Path: p.Path, Exe: p.Exe, PID: p.Pid,
 		Cmdline: p.Cmdline, Parents: p.Parents,
-		Scope: p.Scope, Never: p.Never, Warn: p.Warn, Note: p.Note, Detail: p.Detail, Group: p.Group, HostNames: p.HostNames,
+		Scope: p.Scope, Never: p.Never, Warn: p.Warn, Note: p.Note, Detail: p.Detail, ProgramGroup: p.ProgramGroup, HostNames: p.HostNames,
 		Advance: p.Advance, Reason: p.Reason, For: p.GrantFor.AsDuration(),
 		Waiting: waiting,
 	}

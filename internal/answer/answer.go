@@ -235,7 +235,7 @@ func Request(p Policy, req *monitor.Request, waiting int) ui.Request {
 		r.Path = obj.Path.Path
 		r.Scope, r.Never = r.Path, "this program"
 		if g, ok := p.Group(r.Path); ok {
-			r.Group = g.String()
+			r.ProgramGroup = g.String()
 		}
 	case obj.Path != nil:
 		r.Path = obj.Path.Path

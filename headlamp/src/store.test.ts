@@ -193,8 +193,8 @@ describe('types', () => {
     expect(answerAllowed('always', { scope: '/etc' })).toBe(true);
     expect(answerAllowed('grant', { scope: '/etc' })).toBe(false);
     expect(answerAllowed('group', { scope: '/usr/bin/ls' })).toBe(false);
-    expect(answerAllowed('group', { group: '@coreutils (ls: 1 program)' })).toBe(true);
-    expect(answerAllowed('group', { advance: true, group: '@x (x: 1 program)' })).toBe(false);
+    expect(answerAllowed('group', { programGroup: '@coreutils (ls: 1 program)' })).toBe(true);
+    expect(answerAllowed('group', { advance: true, programGroup: '@x (x: 1 program)' })).toBe(false);
   });
 
   it('answers requests made in advance with grant or deny', () => {

@@ -204,7 +204,7 @@ func TestExecAnswers(t *testing.T) {
 		t.Errorf("write answers: %v", answerOps(rules.OpWrite))
 	}
 	req := Request(p, &monitor.Request{Op: rules.OpExec, Objects: []rules.Object{obj}}, 0)
-	if req.Scope != "/opt/tool/bin/run" || req.Op != "exec" || req.Group != "" {
+	if req.Scope != "/opt/tool/bin/run" || req.Op != "exec" || req.ProgramGroup != "" {
 		t.Errorf("request: %+v", req)
 	}
 }
@@ -221,7 +221,7 @@ func TestGroupAnswer(t *testing.T) {
 	p.SetGroups([]programs.Group{{Name: "@coreutils", Members: []string{"/opt/cu/cat", "/opt/cu/ls", "/opt/cu/cp"}}})
 	obj := rules.Object{Path: &rules.PathObject{Path: "/opt/cu/ls"}}
 	req := &monitor.Request{ID: 9, Op: rules.OpExec, Objects: []rules.Object{obj}}
-	if got := Request(p, req, 0).Group; got != "@coreutils (cat, ls, cp: 3 programs)" {
+	if got := Request(p, req, 0).ProgramGroup; got != "@coreutils (cat, ls, cp: 3 programs)" {
 		t.Errorf("group %q", got)
 	}
 	cat := rules.Rule{ID: 1, Ops: rules.OpExec, Verdict: rules.Allow, Object: rules.ObjectMatch{Path: &rules.PathMatch{Path: "/opt/cu/cat"}}}

@@ -1025,7 +1025,7 @@ type Prompt struct {
 	GrantFor *durationpb.Duration `protobuf:"bytes,14,opt,name=grant_for,json=grantFor,proto3" json:"grant_for,omitempty"` // unset: the rest of the session
 	// The program group the "group" answer allows, e.g. "@coreutils (cat,
 	// ls, cp, … 104 programs)"; empty: no such answer.
-	Group string `protobuf:"bytes,15,opt,name=group,proto3" json:"group,omitempty"`
+	ProgramGroup string `protobuf:"bytes,15,opt,name=program_group,json=programGroup,proto3" json:"program_group,omitempty"`
 	// The host names of a network address in path, from the workload's DNS
 	// queries, e.g. "github.com": show "github.com (140.82.112.4:443)".
 	// Display only: answers cover the address.
@@ -1162,9 +1162,9 @@ func (x *Prompt) GetGrantFor() *durationpb.Duration {
 	return nil
 }
 
-func (x *Prompt) GetGroup() string {
+func (x *Prompt) GetProgramGroup() string {
 	if x != nil {
-		return x.Group
+		return x.ProgramGroup
 	}
 	return ""
 }
@@ -2852,7 +2852,7 @@ const file_session_proto_rawDesc = "" +
 	"\x03for\x18\x02 \x01(\v2\x19.google.protobuf.DurationR\x03for\x12\x16\n" +
 	"\x06reason\x18\x03 \x01(\tR\x06reason\x12\x12\n" +
 	"\x04dest\x18\x04 \x01(\tR\x04dest\x12\x1a\n" +
-	"\bwritable\x18\x05 \x01(\bR\bwritable\"\x8f\x03\n" +
+	"\bwritable\x18\x05 \x01(\bR\bwritable\"\x9e\x03\n" +
 	"\x06Prompt\x12\x0e\n" +
 	"\x02op\x18\x01 \x01(\tR\x02op\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12\x10\n" +
@@ -2868,8 +2868,8 @@ const file_session_proto_rawDesc = "" +
 	"\x06detail\x18\v \x01(\tR\x06detail\x12\x18\n" +
 	"\aadvance\x18\f \x01(\bR\aadvance\x12\x16\n" +
 	"\x06reason\x18\r \x01(\tR\x06reason\x126\n" +
-	"\tgrant_for\x18\x0e \x01(\v2\x19.google.protobuf.DurationR\bgrantFor\x12\x14\n" +
-	"\x05group\x18\x0f \x01(\tR\x05group\x12\x1d\n" +
+	"\tgrant_for\x18\x0e \x01(\v2\x19.google.protobuf.DurationR\bgrantFor\x12#\n" +
+	"\rprogram_group\x18\x0f \x01(\tR\fprogramGroup\x12\x1d\n" +
 	"\n" +
 	"host_names\x18\x10 \x01(\tR\thostNames\"\x88\x02\n" +
 	"\x06Object\x125\n" +
