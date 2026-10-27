@@ -43,7 +43,9 @@ func TestParseAdvance(t *testing.T) {
 		{"release?op=exec&path=/a&reason=done", unix.EINVAL, advanceQuery{}, ""},
 		{"request?op=connect&dest=all", unix.EINVAL, advanceQuery{}, ""},
 		{"request?op=connect&dest=own-listeners", unix.EINVAL, advanceQuery{}, ""},
-		{"request?op=connect&dest=example.com:443", unix.EINVAL, advanceQuery{}, ""},
+		{"request?op=connect&dest=example.com:443", 0, advanceQuery{op: rules.OpNet}, "example.com:443"},
+		// Not a host: the own listeners of rules, which a request cannot ask for.
+		{"request?op=connect&dest=tcp:own-listeners", unix.EINVAL, advanceQuery{}, ""},
 		{"request?op=connect", unix.EINVAL, advanceQuery{}, ""},
 		{"request?op=connect&path=/a", unix.EINVAL, advanceQuery{}, ""},
 		{"request?op=connect&dest=*&path=/a", unix.EINVAL, advanceQuery{}, ""},

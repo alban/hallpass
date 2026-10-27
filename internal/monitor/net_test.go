@@ -11,9 +11,11 @@ import (
 	"fmt"
 	"net/netip"
 	"path/filepath"
+	"slices"
 	"testing"
 	"unsafe"
 
+	"github.com/alban/hallpass/internal/dnsnames"
 	"github.com/alban/hallpass/internal/netdiag"
 	"github.com/alban/hallpass/internal/rules"
 	"golang.org/x/sys/unix"
@@ -268,4 +270,52 @@ func TestNetOwnListener(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.expect(t, id, int32(unix.EACCES))
+}
+
+// TestNetHost: host rules match the addresses the session's names have;
+// in strict mode, the kernel has no host rules and is granted each
+// connect a host rule allows; reverse DNS names never match.
+func TestNetHost(t *testing.T) {
+	for _, strict := range []bool{false, true} {
+		t.Run(fmt.Sprint("strict=", strict), func(t *testing.T) {
+			names := dnsnames.New(nil, nil)
+			gh := netip.MustParseAddr("192.0.2.10")
+			names.Answer("github.com", []netip.Addr{gh}, 0)
+			names.Answer("evil.example", []netip.Addr{netip.MustParseAddr("192.0.2.66")}, 0)
+			cfg := Config{Names: names}
+			k := &fakeKernel{}
+			if strict {
+				cfg.Kernel = k
+			}
+			fx := setupConfig(t, cfg, false)
+			if _, err := fx.m.Apply(rulesDecision(
+				netRule(t, "tcp:github.com:443", rules.Allow),
+				netRule(t, "*.example", rules.Deny),
+			)); err != nil {
+				t.Fatal(err)
+			}
+			tcp := sock(t, unix.AF_INET, unix.SOCK_STREAM)
+			f := fx.f
+			f.expect(t, f.connect(tcp, sockaddrInet("192.0.2.10:443")), 0)
+			if strict {
+				k.mu.Lock()
+				g := k.netGrants
+				k.mu.Unlock()
+				if len(g) != 1 || len(g[0].Inet) != 1 || g[0].Inet[0].Addr != netip.MustParseAddrPort("192.0.2.10:443") {
+					t.Errorf("grants %+v, want 192.0.2.10:443", g)
+				}
+			}
+			f.expect(t, f.connect(tcp, sockaddrInet("192.0.2.66:443")), int32(unix.EACCES))
+			// Another port of github.com: asked, with the name.
+			id := f.connect(tcp, sockaddrInet("192.0.2.10:22"))
+			req := fx.next(t, opened).Opened
+			if req.Objects[0].Inet.Addr.Port() != 22 || !slices.Equal(req.Names, []string{"github.com"}) {
+				t.Fatalf("request %+v %+v", req, req.Objects[0].Inet)
+			}
+			if _, err := fx.m.Apply(Decision{Verdicts: []Verdict{{req.ID, false}}}); err != nil {
+				t.Fatal(err)
+			}
+			f.expect(t, id, int32(unix.EACCES))
+		})
+	}
 }

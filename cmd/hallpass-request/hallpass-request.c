@@ -48,8 +48,9 @@ static const char help_text[] =
 	"                 DIR/** for every program below DIR\n"
 	"  connect DEST   connect and send to network destinations, as hallpass\n"
 	"                 --allow-connect takes them: [tcp:|udp:]ADDR[/N][:PORT[-PORT]],\n"
-	"                 * for any address, [IPv6], unix:/path, unix:/dir/**,\n"
-	"                 unix:@name, unix:@prefix*; addresses, not host names\n"
+	"                 * for any address, [IPv6], a host name (github.com:443,\n"
+	"                 *.github.com:443), unix:/path, unix:/dir/**,\n"
+	"                 unix:@name, unix:@prefix*\n"
 	"check: only tell whether a request would ask the user.\n"
 	"release: give back what a granted request asked for, exactly as asked.\n"
 	"  --for DURATION  how long: 90s, 10m, 2h... (default: the session)\n"
@@ -287,7 +288,7 @@ int main(int argc, char **argv)
 		fprintf(stderr, "hallpass-request: not allowed yet: a request, or trying to %s, would ask the user\n", what);
 		return EXIT_WOULD_ASK;
 	case EINVAL:
-		msg = net ? "invalid request: DEST is an address as hallpass --allow-connect takes it (not a host name, not all), DURATION is like 90s, 10m or 2h"
+		msg = net ? "invalid request: DEST is a destination as hallpass --allow-connect takes it (not all; a host name only when hallpass names addresses), DURATION is like 90s, 10m or 2h"
 			  : "invalid request: PATH takes no glob but a final /**, DURATION is like 90s, 10m or 2h";
 		code = EXIT_INVALID;
 		break;

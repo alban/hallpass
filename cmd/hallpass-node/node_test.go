@@ -74,7 +74,7 @@ deny write /var/run/secrets/**
 		{Mediate: []string{}},
 		{Rules: "allow connect all"},
 		{Rules: "deny exec /usr/bin/curl", Mediate: []string{"write"}},
-		{Mediate: []string{"connect"}, Rules: "deny connect tcp:nowhere"},
+		{Mediate: []string{"connect"}, Rules: "deny connect tcp:1.2.3.4:x"},
 	} {
 		if _, err := parsePolicy("bad", bad); err == nil {
 			t.Errorf("%+v: no error", bad)
@@ -133,7 +133,8 @@ func TestDefaultsFor(t *testing.T) {
 			nets = append(nets, r.Verdict.String()+" "+r.Object.NetString())
 		}
 	}
-	if want := []string{"allow own-listeners", "deny tcp:*:22", "allow unix:@x", "ask unix:@xy"}; !slices.Equal(nets, want) {
+	// The cloud metadata addresses are denied unless a rule names them.
+	if want := []string{"deny 169.254.169.254", "deny [fd00:ec2::254]", "deny 168.63.129.16", "deny 100.100.100.200", "allow own-listeners", "deny tcp:*:22", "allow unix:@x", "ask unix:@xy"}; !slices.Equal(nets, want) {
 		t.Errorf("network rules %q, want %q", nets, want)
 	}
 }

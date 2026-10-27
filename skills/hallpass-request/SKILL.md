@@ -42,9 +42,11 @@ hallpass-request release write|exec|connect PATH|PROG|DEST
 - `PROG`: a program path, a name found in `$PATH`, or `'DIR/**'` for every
   program below DIR.
 - `DEST`: `[tcp:|udp:]ADDR[/N][:PORT[-PORT]]` (IPv6 in brackets:
-  `[2001:db8::1]:443`), `*` for any address, `unix:/path`,
-  `unix:/dir/**`, `unix:@name`, `unix:@prefix*`. IP addresses only, not
-  host names; `all` is refused. Covers connecting and sending.
+  `[2001:db8::1]:443`), `*` for any address, a host name
+  (`github.com:443`, or `'*.githubusercontent.com:443'` for the names
+  below it), `unix:/path`, `unix:/dir/**`, `unix:@name`,
+  `unix:@prefix*`; `all` is refused. Covers connecting and sending.
+  Prefer a host name to an address: the user recognises it.
 - `--for`: `90s`, `10m`, `2h`... Without it, the grant lasts the rest of
   the session.
 - `--reason`: one short sentence saying why, in plain words. The user sees

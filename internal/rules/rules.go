@@ -90,6 +90,11 @@ type InetObject struct {
 	// OwnListener: the destination is on loopback and its listener was
 	// started inside the sandbox.
 	OwnListener bool
+	// Names are the host names Addr has, as host rules match them:
+	// lowercase, without the final dot, from the session's DNS answers
+	// or hallpass's own lookups of the names it asked about (dnsnames),
+	// never from reverse DNS.
+	Names []string
 }
 
 // UnixObject is a unix socket destination, bound to a path or an abstract
@@ -165,6 +170,11 @@ type Rule struct {
 	Label   string    // for Ask: shown in prompts, e.g. "SSH keys"; "@name" for an exec allow from a program group
 	Expires time.Time // zero: until removed
 	Set     string    // opaque, chosen by the client
+	// Yield marks an implicit deny that a rule naming its object
+	// overrides: it loses to an allow or ask on addresses at least as
+	// deep (e.g. the cloud metadata address, allowed by a rule naming
+	// that address); never to a host rule.
+	Yield bool
 }
 
 // SubjectMatch selects the processes a rule applies to. The zero value
@@ -191,6 +201,12 @@ type InetMatch struct {
 	Prefix netip.Prefix // invalid (zero): any address of any family
 	// PortLo..PortHi, inclusive; both 0: any port.
 	PortLo, PortHi uint16
+	// Host, when set (and Prefix invalid), selects the addresses that
+	// have this name (InetObject.Names): lowercase, without the final
+	// dot. With HostSuffix, the names below it instead ("*.github.com":
+	// api.github.com, not github.com).
+	Host       string
+	HostSuffix bool
 }
 
 // UnixMatch is a unix socket path (with Prefix, a tree), or an abstract
@@ -272,9 +288,15 @@ func (r Rule) relevantOps() Op {
 
 // Eval returns the decision of rs on op on obj at now, and the deciding
 // rule's ID; ok is false when no rule matches. Any Deny wins, at any depth;
-// otherwise the deepest Allow or Ask decides (Ask on a tie).
+// otherwise the deepest Allow or Ask decides (Ask on a tie). A Yield deny
+// wins only over the allows and asks shallower than it.
 func Eval(rs []Rule, op Op, obj Object, now time.Time) (v Verdict, id uint64, ok bool) {
 	depth := -1
+	yieldDepth, yieldID := -1, uint64(0)
+	// The deepest allow or ask naming addresses: only such a rule
+	// overrides a Yield deny, never one by name (a name can be made to
+	// point anywhere: DNS rebinding).
+	addrDepth := -1
 	for _, r := range rs {
 		if r.Expired(now) || r.Ops&op == 0 {
 			continue
@@ -284,7 +306,13 @@ func Eval(rs []Rule, op Op, obj Object, now time.Time) (v Verdict, id uint64, ok
 			continue
 		}
 		if r.Verdict == Deny {
-			return Deny, r.ID, true
+			if !r.Yield {
+				return Deny, r.ID, true
+			}
+			if d > yieldDepth {
+				yieldDepth, yieldID = d, r.ID
+			}
+			continue
 		}
 		if op&^r.Ops != 0 {
 			// An allow must cover every op of the access.
@@ -293,6 +321,12 @@ func Eval(rs []Rule, op Op, obj Object, now time.Time) (v Verdict, id uint64, ok
 		if d > depth || (d == depth && r.Verdict == Ask) {
 			depth, v, id, ok = d, r.Verdict, r.ID, true
 		}
+		if i := r.Object.Inet; i != nil && i.Prefix.IsValid() {
+			addrDepth = max(addrDepth, d)
+		}
+	}
+	if yieldDepth >= 0 && (!ok || addrDepth < yieldDepth) {
+		return Deny, yieldID, true
 	}
 	return v, id, ok
 }
@@ -360,12 +394,43 @@ func (m *InetMatch) match(o *InetObject) bool {
 			return false
 		}
 	}
+	if m.Host != "" {
+		if a := o.Addr.Addr().Unmap(); (a.IsLoopback() && m.Host != "localhost") || a.IsLinkLocalUnicast() || a.IsUnspecified() {
+			// A name the workload's DNS answer points at the host
+			// itself or the link (the cloud metadata) is not the
+			// service the rule names (DNS rebinding): no host rule
+			// for them, but "localhost" for the loopback.
+			return false
+		}
+		for _, n := range o.Names {
+			if m.hostMatch(n) {
+				return true
+			}
+		}
+		return false
+	}
 	return !m.Prefix.IsValid() || m.Prefix.Contains(o.Addr.Addr().Unmap())
+}
+
+// hostMatch reports whether host name n is m's, or below it for a suffix.
+func (m *InetMatch) hostMatch(n string) bool {
+	if m.HostSuffix {
+		return strings.HasSuffix(n, "."+m.Host)
+	}
+	return n == m.Host
 }
 
 func (m *InetMatch) depth() int {
 	d := 1
-	if m.Prefix.IsValid() {
+	switch {
+	case m.Host != "" && !m.HostSuffix:
+		// As deep as one address.
+		d += 4 * (128 + 1)
+	case m.Host != "":
+		// Deeper than any IPv4 address (as mapped, /96) or IPv6 /112,
+		// longer suffixes deeper, never as deep as one name.
+		d += 4 * (112 + min(strings.Count(m.Host, ".")+1, 15) + 1)
+	case m.Prefix.IsValid():
 		bits := m.Prefix.Bits()
 		if m.Prefix.Addr().Is4() {
 			bits += 96

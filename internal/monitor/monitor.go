@@ -462,6 +462,11 @@ func (m *Monitor) check(r *rules.Rule) error {
 		if i.PortLo > i.PortHi || (i.PortLo == 0) != (i.PortHi == 0) {
 			return fmt.Errorf("monitor: rule ports %d-%d", i.PortLo, i.PortHi)
 		}
+		if i.Host != "" {
+			if h, suffix, err := rules.ParseHost(i.Host); err != nil || h != i.Host || suffix || i.Prefix.IsValid() {
+				return fmt.Errorf("monitor: rule host %q: want a lowercase name and no address", i.Host)
+			}
+		}
 		in := *i
 		if in.Prefix.IsValid() {
 			if in.Prefix.Addr().Is4In6() && in.Prefix.Bits() >= 96 {

@@ -213,7 +213,32 @@ func (m *Monitor) handleNet(l *listener, n seccomp.Notif, sc seccomp.Rule) (ask 
 		}
 	}
 	m.markOwnListeners(n, root, op, items)
+	m.nameItems(items)
 	return m.decide(l, n, sc, op, items)
+}
+
+// nameItems sets the names of the inet items (InetObject.Names), for the
+// host rules: only when a rule has a host, waiting at most dnsWait for
+// the lookups in progress (the workload connects as soon as its own
+// answer comes).
+func (m *Monitor) nameItems(items []item) {
+	if m.names == nil || !hasHostRule(m.currentRules()) {
+		return
+	}
+	for _, it := range items {
+		if it.obj.Inet != nil {
+			it.obj.Inet.Names = m.names.Match(it.obj.Inet.Addr.Addr(), dnsWait)
+		}
+	}
+}
+
+// hasHostRule reports whether a rule of rs selects addresses by name.
+func hasHostRule(rs []rules.Rule) bool {
+	return slices.ContainsFunc(rs, isHostRule)
+}
+
+func isHostRule(r rules.Rule) bool {
+	return r.Object.Inet != nil && r.Object.Inet.Host != ""
 }
 
 // markOwnListeners sets the OwnListener fact of the items whose listener

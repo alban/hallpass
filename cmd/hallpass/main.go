@@ -531,6 +531,7 @@ func (o *options) buildPolicy(home string) *defaults.Defaults {
 		c.Workdir = o.workdir
 		c.Allow = defaults.DefaultAllows()
 		c.OwnListeners = o.policy.Mediate&seccomp.Connect != 0
+		c.Metadata = o.policy.Mediate&seccomp.Connect != 0
 		if o.policy.Mediate&seccomp.Exec != 0 {
 			c.AllowGroups = programs.Implicit()
 		}

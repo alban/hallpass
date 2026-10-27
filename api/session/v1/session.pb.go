@@ -1042,7 +1042,10 @@ type Prompt struct {
 	// address gives: chosen by whoever controls the address, so unverified,
 	// e.g. "140.82.112.4:443 (reverse DNS, unverified: lb.github.com)".
 	// Never on the node (hallpass-node looks nothing up).
-	ReverseNames  string `protobuf:"bytes,17,opt,name=reverse_names,json=reverseNames,proto3" json:"reverse_names,omitempty"`
+	ReverseNames string `protobuf:"bytes,17,opt,name=reverse_names,json=reverseNames,proto3" json:"reverse_names,omitempty"`
+	// The host names the "domain" answer allows, e.g. "*.github.com:443";
+	// empty: no such answer.
+	Domain        string `protobuf:"bytes,18,opt,name=domain,proto3" json:"domain,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1192,6 +1195,13 @@ func (x *Prompt) GetHostNames() string {
 func (x *Prompt) GetReverseNames() string {
 	if x != nil {
 		return x.ReverseNames
+	}
+	return ""
+}
+
+func (x *Prompt) GetDomain() string {
+	if x != nil {
+		return x.Domain
 	}
 	return ""
 }
@@ -2473,11 +2483,15 @@ func (*ObjectMatch_OwnListener) isObjectMatch_Kind() {}
 func (*ObjectMatch_AnyNet) isObjectMatch_Kind() {}
 
 type InetMatch struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Proto         uint32                 `protobuf:"varint,1,opt,name=proto,proto3" json:"proto,omitempty"`                 // 0: any
-	Prefix        string                 `protobuf:"bytes,2,opt,name=prefix,proto3" json:"prefix,omitempty"`                // e.g. "10.0.0.0/8"; empty: any address, any family
-	PortLo        uint32                 `protobuf:"varint,3,opt,name=port_lo,json=portLo,proto3" json:"port_lo,omitempty"` // both 0: any port
-	PortHi        uint32                 `protobuf:"varint,4,opt,name=port_hi,json=portHi,proto3" json:"port_hi,omitempty"`
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Proto  uint32                 `protobuf:"varint,1,opt,name=proto,proto3" json:"proto,omitempty"`                 // 0: any
+	Prefix string                 `protobuf:"bytes,2,opt,name=prefix,proto3" json:"prefix,omitempty"`                // e.g. "10.0.0.0/8"; empty: any address, any family
+	PortLo uint32                 `protobuf:"varint,3,opt,name=port_lo,json=portLo,proto3" json:"port_lo,omitempty"` // both 0: any port
+	PortHi uint32                 `protobuf:"varint,4,opt,name=port_hi,json=portHi,proto3" json:"port_hi,omitempty"`
+	// Set instead of prefix: the addresses that have this host name, e.g.
+	// "github.com"; with host_suffix, the names below it ("*.github.com").
+	Host          string `protobuf:"bytes,5,opt,name=host,proto3" json:"host,omitempty"`
+	HostSuffix    bool   `protobuf:"varint,6,opt,name=host_suffix,json=hostSuffix,proto3" json:"host_suffix,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2538,6 +2552,20 @@ func (x *InetMatch) GetPortHi() uint32 {
 		return x.PortHi
 	}
 	return 0
+}
+
+func (x *InetMatch) GetHost() string {
+	if x != nil {
+		return x.Host
+	}
+	return ""
+}
+
+func (x *InetMatch) GetHostSuffix() bool {
+	if x != nil {
+		return x.HostSuffix
+	}
+	return false
 }
 
 type UnixMatch struct {
@@ -2873,7 +2901,7 @@ const file_session_proto_rawDesc = "" +
 	"\x03for\x18\x02 \x01(\v2\x19.google.protobuf.DurationR\x03for\x12\x16\n" +
 	"\x06reason\x18\x03 \x01(\tR\x06reason\x12\x12\n" +
 	"\x04dest\x18\x04 \x01(\tR\x04dest\x12\x1a\n" +
-	"\bwritable\x18\x05 \x01(\bR\bwritable\"\xc3\x03\n" +
+	"\bwritable\x18\x05 \x01(\bR\bwritable\"\xdb\x03\n" +
 	"\x06Prompt\x12\x0e\n" +
 	"\x02op\x18\x01 \x01(\tR\x02op\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12\x10\n" +
@@ -2893,7 +2921,8 @@ const file_session_proto_rawDesc = "" +
 	"\rprogram_group\x18\x0f \x01(\tR\fprogramGroup\x12\x1d\n" +
 	"\n" +
 	"host_names\x18\x10 \x01(\tR\thostNames\x12#\n" +
-	"\rreverse_names\x18\x11 \x01(\tR\freverseNames\"\x88\x02\n" +
+	"\rreverse_names\x18\x11 \x01(\tR\freverseNames\x12\x16\n" +
+	"\x06domain\x18\x12 \x01(\tR\x06domain\"\x88\x02\n" +
 	"\x06Object\x125\n" +
 	"\x04path\x18\x01 \x01(\v2\x1f.hallpass.session.v1.PathObjectH\x00R\x04path\x125\n" +
 	"\x04proc\x18\x02 \x01(\v2\x1f.hallpass.session.v1.ProcObjectH\x00R\x04proc\x12\x1a\n" +
@@ -2991,12 +3020,15 @@ const file_session_proto_rawDesc = "" +
 	"\x04unix\x18\x05 \x01(\v2\x1e.hallpass.session.v1.UnixMatchH\x00R\x04unix\x12#\n" +
 	"\fown_listener\x18\x06 \x01(\bH\x00R\vownListener\x12\x19\n" +
 	"\aany_net\x18\a \x01(\bH\x00R\x06anyNetB\x06\n" +
-	"\x04kind\"k\n" +
+	"\x04kind\"\xa0\x01\n" +
 	"\tInetMatch\x12\x14\n" +
 	"\x05proto\x18\x01 \x01(\rR\x05proto\x12\x16\n" +
 	"\x06prefix\x18\x02 \x01(\tR\x06prefix\x12\x17\n" +
 	"\aport_lo\x18\x03 \x01(\rR\x06portLo\x12\x17\n" +
-	"\aport_hi\x18\x04 \x01(\rR\x06portHi\"g\n" +
+	"\aport_hi\x18\x04 \x01(\rR\x06portHi\x12\x12\n" +
+	"\x04host\x18\x05 \x01(\tR\x04host\x12\x1f\n" +
+	"\vhost_suffix\x18\x06 \x01(\bR\n" +
+	"hostSuffix\"g\n" +
 	"\tUnixMatch\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x1a\n" +
 	"\babstract\x18\x02 \x01(\bR\babstract\x12\x12\n" +

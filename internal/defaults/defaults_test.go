@@ -304,3 +304,37 @@ func TestExecRules(t *testing.T) {
 		t.Error("Group(other)")
 	}
 }
+
+// TestMetadata: the cloud metadata addresses are denied, even with every
+// destination allowed, unless a rule names one.
+func TestMetadata(t *testing.T) {
+	at := time.Now()
+	eval := func(d *Defaults, addr string) rules.Verdict {
+		obj := rules.Object{Inet: &rules.InetObject{Proto: 6, Addr: netip.MustParseAddrPort(addr)}}
+		v, _, ok := rules.Eval(d.Rules(), rules.OpConnect, obj, at)
+		if !ok {
+			return -1
+		}
+		return v
+	}
+	d := newTest()
+	d.DenyMetadata()
+	all, _ := rules.ParseNet("all")
+	d.AllowConnect(all)
+	for _, a := range []string{"169.254.169.254:80", "[fd00:ec2::254]:80"} {
+		if v := eval(d, a); v != rules.Deny {
+			t.Errorf("%s: %v", a, v)
+		}
+	}
+	if v := eval(d, "169.254.1.1:80"); v != rules.Allow {
+		t.Errorf("another link-local address: %v", v)
+	}
+	named, _ := rules.ParseNet("169.254.169.254:80")
+	d.AllowConnect(named)
+	if v := eval(d, "169.254.169.254:80"); v != rules.Allow {
+		t.Errorf("named: %v", v)
+	}
+	if v := eval(d, "169.254.169.254:443"); v != rules.Deny {
+		t.Errorf("another port: %v", v)
+	}
+}

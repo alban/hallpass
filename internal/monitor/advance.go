@@ -96,6 +96,11 @@ func parseAdvance(raw string) (advanceQuery, unix.Errno) {
 			}
 		case "dest":
 			m, err := rules.ParseNet(v[0])
+			if i := m.Inet; err == nil && i != nil && i.Host == "own-listeners" {
+				// The rules' word for the listeners started inside
+				// the sandbox, not a host.
+				err = unix.EINVAL
+			}
 			if err != nil || m.AnyNet {
 				// "all" (unix sockets included) is mediation off,
 				// not a scope: the user decides it with a flag.
@@ -152,6 +157,12 @@ func (m *Monitor) advance(l *listener, n seccomp.Notif, sc seccomp.Rule, raw str
 	}
 	if m.mediate&q.category() == 0 {
 		reply(unix.ENOSYS)
+		return nil
+	}
+	if i := q.adv.Net.Inet; i != nil && i.Host != "" && m.names == nil {
+		// Nothing names the addresses (--dns=off): a grant by name would
+		// never match.
+		reply(unix.EINVAL)
 		return nil
 	}
 	if m.kernel != nil {

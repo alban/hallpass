@@ -57,7 +57,7 @@ Connect prompts name the address: `github.com (140.82.112.3:443)`. On a workstat
 - systemd-resolved's varlink socket (`/run/systemd/resolve/io.systemd.Resolve`), which glibc programs use instead of port 53 on Fedora and Arch (`resolve` in `nsswitch.conf`): when the sandbox's `connect` to it is allowed, hallpass connects to resolved itself and puts one end of a socket pair in place of the sandbox's socket, then passes the messages both ways. The names come from resolved's own answers, so they are the addresses the program gets; resolved sees hallpass's user, the same as the program's. Only this socket is relayed. Socket options set before the `connect` are lost, which resolved's clients do not use.
 - No name for queries sent with `write`, or `send` and `sendto` without an address (Go's resolver, glibc's single queries).
 - An address with no name from the above is shown with the names of its reverse DNS (PTR), marked unverified: `140.82.112.3:443 (reverse DNS, unverified: lb-140-82-112-3-iad.github.com)`. Whoever controls the address chooses them. hallpass makes that lookup only once the sandbox's own DNS was allowed (a query to the host's name server, or the varlink socket), through the same servers, so a sandbox denied DNS cannot use it to send data out either.
-- Names are display only, in lite and strict mode: rules match addresses, so a rule on a name is not possible yet.
+- Host rules (`allow connect github.com:443`) match these names, in lite and strict mode: hallpass's own lookups and the relayed answers (varlink, Kubernetes), never the reverse DNS names.
 
 ### Names on Kubernetes
 

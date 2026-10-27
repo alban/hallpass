@@ -154,3 +154,58 @@ func TestDNSNames(t *testing.T) {
 		})
 	}
 }
+
+// TestHostRule: a host rule allows the address the sandbox's DNS query
+// named, without asking; without the query (denied), the address is
+// asked about and denied here.
+func TestHostRule(t *testing.T) {
+	servers, _ := dnsnames.Servers("/etc/resolv.conf")
+	if len(servers) == 0 || !servers[0].Is4() {
+		t.Skipf("no IPv4 name server in /etc/resolv.conf: %v", servers)
+	}
+	ns := servers[0].String()
+	for _, mode := range modes(t) {
+		t.Run(mode, func(t *testing.T) {
+			l, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer l.Close()
+			go func() {
+				for {
+					c, err := l.Accept()
+					if err != nil {
+						return
+					}
+					c.Close()
+				}
+			}()
+			dest := l.Addr().String()
+			port := dest[strings.LastIndex(dest, ":")+1:]
+			self, err := os.Executable()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, c := range []struct {
+				name, dnsFlag, want string
+			}{
+				{"named", "--allow-connect=udp:" + ns + ":53", "d=ok"},
+				{"unnamed", "--deny-connect=udp:" + ns + ":53", "d=denied"},
+			} {
+				t.Run(c.name, func(t *testing.T) {
+					e := newEnv(t)
+					script := fmt.Sprintf(`HALLPASS_E2E_HELPER=dns "$HP_SELF" d sendto %s localhost %s`, ns, dest)
+					cmd := e.cmd(script, "--prompt=deny", "--mediate=write,exec,connect", c.dnsFlag, "--allow-connect=tcp:localhost:"+port, "--mode="+mode)
+					cmd.Env = append(cmd.Env, "HP_SELF="+self)
+					out, err := cmd.CombinedOutput()
+					if err != nil {
+						t.Fatalf("hallpass: %v\n%s", err, out)
+					}
+					if !strings.Contains(string(out), c.want+"\n") {
+						t.Errorf("want %s, output:\n%s", c.want, out)
+					}
+				})
+			}
+		})
+	}
+}

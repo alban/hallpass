@@ -38,7 +38,7 @@ func To(r rules.Rule) *pb.Rule {
 	case o.Unknown:
 		out.Object.Kind = &pb.ObjectMatch_Unknown{Unknown: true}
 	case o.Inet != nil:
-		m := &pb.InetMatch{Proto: uint32(o.Inet.Proto), PortLo: uint32(o.Inet.PortLo), PortHi: uint32(o.Inet.PortHi)}
+		m := &pb.InetMatch{Proto: uint32(o.Inet.Proto), PortLo: uint32(o.Inet.PortLo), PortHi: uint32(o.Inet.PortHi), Host: o.Inet.Host, HostSuffix: o.Inet.HostSuffix}
 		if o.Inet.Prefix.IsValid() {
 			m.Prefix = o.Inet.Prefix.String()
 		}
@@ -83,6 +83,13 @@ func From(r *pb.Rule) (rules.Rule, error) {
 			return out, errors.New("inet rule: protocol or port out of range")
 		}
 		m := &rules.InetMatch{Proto: uint16(i.GetProto()), PortLo: uint16(i.GetPortLo()), PortHi: uint16(i.GetPortHi())}
+		if h := i.GetHost(); h != "" {
+			host, _, err := rules.ParseHost(h)
+			if err != nil || i.GetPrefix() != "" {
+				return out, fmt.Errorf("inet rule: host %q: %v", h, err)
+			}
+			m.Host, m.HostSuffix = host, i.GetHostSuffix()
+		}
 		if s := i.GetPrefix(); s != "" {
 			p, err := netip.ParsePrefix(s)
 			if err != nil {

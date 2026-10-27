@@ -37,6 +37,8 @@ func TestParseSpec(t *testing.T) {
 		{in: "deny connect all", spec: "deny connect all", ops: OpNet},
 		{in: "allow connect own-listeners", spec: "allow connect own-listeners", ops: OpNet},
 		{in: "ask connect unix:@name*", spec: "ask connect unix:@name*", ops: OpNet},
+		{in: "allow connect GitHub.com:443", spec: "allow connect github.com:443", ops: OpNet},
+		{in: "deny connect *.example.com", spec: "deny connect *.example.com", ops: OpNet},
 		{in: "allow proc oom_score_adj chrome", spec: "allow proc oom_score_adj chrome", ops: OpAll},
 		{in: `allow proc oom_score_adj "Web Content"`, spec: `allow proc oom_score_adj "Web Content"`, ops: OpAll},
 		{in: "deny unknown", spec: "deny unknown", ops: OpAll},

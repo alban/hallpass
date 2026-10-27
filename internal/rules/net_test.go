@@ -27,7 +27,8 @@ func TestParseNet(t *testing.T) {
 		"all", "*", "tcp:*", "*:443", "1.2.3.4", "tcp:1.2.3.4:443", "10.0.0.0/8",
 		"udp:10.0.0.0/8:53", "[2001:db8::1]", "[2001:db8::1]:443", "[2001:db8::]/32",
 		"tcp:[2001:db8::]/32:8000-8999", "unix:/run/x.sock", "unix:/run/**", "unix:@foo",
-		"unix:@foo*", "unix:@*",
+		"unix:@foo*", "unix:@*", "github.com", "github.com:443", "tcp:*.githubusercontent.com:443",
+		"localhost:8000-8999",
 	} {
 		m, err := ParseNet(s)
 		if err != nil {
@@ -45,13 +46,14 @@ func TestParseNet(t *testing.T) {
 		"10.1.2.3/8":          "10.0.0.0/8",
 		"unix:/run/../run/x":  "unix:/run/x",
 		"unix:/**":            "unix:/**",
+		"GitHub.COM.:443":     "github.com:443",
 	} {
 		m, err := ParseNet(in)
 		if err != nil || m.NetString() != want {
 			t.Errorf("ParseNet(%q) = %q, %v; want %q", in, m.NetString(), err, want)
 		}
 	}
-	for _, s := range []string{"", "foo", "1.2.3.4:0", "1.2.3.4:70000", "1.2.3.4:9-8", "[::1", "unix:rel", "unix:@", "tcp:1.2.3.4:x"} {
+	for _, s := range []string{"", "*.", "a..b", "*foo.com", "foo*.com", "*.*.com", "a b", "github.com:0", "1.2.3.4:0", "1.2.3.4:70000", "1.2.3.4:9-8", "[::1", "unix:rel", "unix:@", "tcp:1.2.3.4:x"} {
 		if _, err := ParseNet(s); err == nil {
 			t.Errorf("ParseNet(%q): no error", s)
 		}
@@ -200,5 +202,128 @@ func TestCoversNet(t *testing.T) {
 	}
 	if !own.CoversNet(own) || own.CoversNet(ObjectMatch{AnyNet: true}) || !(ObjectMatch{AnyNet: true}).CoversNet(own) {
 		t.Error("own listeners cover only themselves")
+	}
+}
+
+func named(proto uint16, ap string, names ...string) Object {
+	o := inet(proto, ap)
+	o.Inet.Names = names
+	return o
+}
+
+func TestEvalHost(t *testing.T) {
+	now := time.Now()
+	rs := []Rule{
+		netRule(t, "github.com:443", Allow, 1),
+		netRule(t, "*.githubusercontent.com:443", Allow, 2),
+		netRule(t, "tcp:*:443", Ask, 3),
+		netRule(t, "evil.github.com", Deny, 4),
+		netRule(t, "140.82.112.0/24", Ask, 5),
+		netRule(t, "*.example.com", Allow, 6),
+		netRule(t, "*.a.example.com", Ask, 7),
+	}
+	for _, c := range []struct {
+		obj Object
+		v   Verdict
+		id  uint64
+		ok  bool
+	}{
+		{named(6, "140.82.112.4:443", "github.com"), Allow, 1, true},
+		// The name is deeper than a /24, as deep as the address.
+		{named(6, "140.82.112.4:443", "api.example", "github.com"), Allow, 1, true},
+		{named(6, "140.82.112.4:22", "github.com"), Ask, 5, true},
+		{named(6, "185.199.108.133:443", "objects.githubusercontent.com"), Allow, 2, true},
+		// A suffix does not match the name itself.
+		{named(6, "185.199.108.133:443", "githubusercontent.com"), Ask, 3, true},
+		{named(6, "1.2.3.4:443"), Ask, 3, true},
+		{named(6, "1.2.3.4:80", "evil.github.com", "github.com"), Deny, 4, true},
+		// The longer suffix is deeper.
+		{named(6, "1.2.3.4:80", "x.a.example.com"), Ask, 7, true},
+		{named(6, "1.2.3.4:80", "x.b.example.com"), Allow, 6, true},
+		{named(17, "9.9.9.9:53"), 0, 0, false},
+	} {
+		v, id, ok := Eval(rs, OpConnect, c.obj, now)
+		if v != c.v || id != c.id || ok != c.ok {
+			t.Errorf("%v %q: %v %d %v, want %v %d %v", c.obj.Inet.Addr, c.obj.Inet.Names, v, id, ok, c.v, c.id, c.ok)
+		}
+	}
+}
+
+func TestEvalYield(t *testing.T) {
+	now := time.Now()
+	meta := netRule(t, "169.254.169.254", Deny, 1)
+	meta.Yield = true
+	for _, c := range []struct {
+		name  string
+		rules []Rule
+		v     Verdict
+		id    uint64
+	}{
+		{"alone", []Rule{meta}, Deny, 1},
+		{"all allowed", []Rule{meta, netRule(t, "all", Allow, 2)}, Deny, 1},
+		{"subnet allowed", []Rule{meta, netRule(t, "169.254.0.0/16", Allow, 2)}, Deny, 1},
+		{"named", []Rule{meta, netRule(t, "169.254.169.254:80", Allow, 2)}, Allow, 2},
+		{"asked", []Rule{meta, netRule(t, "169.254.169.254", Ask, 2)}, Ask, 2},
+		{"explicit deny", []Rule{meta, netRule(t, "169.254.169.254:80", Allow, 2), netRule(t, "169.254.0.0/16", Deny, 3)}, Deny, 3},
+	} {
+		v, id, ok := Eval(c.rules, OpConnect, inet(6, "169.254.169.254:80"), now)
+		if !ok || v != c.v || id != c.id {
+			t.Errorf("%s: %v %d %v, want %v %d", c.name, v, id, ok, c.v, c.id)
+		}
+	}
+}
+
+func TestCoversHost(t *testing.T) {
+	for _, c := range []struct {
+		a, b             string
+		covers, overlaps bool
+	}{
+		{"github.com", "github.com:443", true, true},
+		{"github.com:443", "github.com", false, true},
+		{"*.github.com", "api.github.com", true, true},
+		{"*.github.com", "github.com", false, false},
+		{"*.github.com", "*.api.github.com", true, true},
+		{"*.api.github.com", "*.github.com", false, true},
+		{"*.github.com", "*.example.com", false, false},
+		{"*", "github.com", true, true},
+		{"10.0.0.0/8", "github.com", false, true},
+		{"github.com", "10.0.0.1", false, true},
+		{"github.com", "example.com", false, false},
+	} {
+		a, _ := ParseNet(c.a)
+		b, _ := ParseNet(c.b)
+		if got := a.CoversNet(b); got != c.covers {
+			t.Errorf("%s covers %s: %v", c.a, c.b, got)
+		}
+		if got := a.OverlapsNet(b); got != c.overlaps {
+			t.Errorf("%s overlaps %s: %v", c.a, c.b, got)
+		}
+	}
+}
+
+// TestYieldHost: a host rule never overrides the metadata deny, nor
+// matches loopback or link-local addresses (DNS rebinding).
+func TestYieldHost(t *testing.T) {
+	now := time.Now()
+	meta := netRule(t, "169.254.169.254", Deny, 1)
+	meta.Yield = true
+	rs := []Rule{meta, netRule(t, "tcp:x.evil.example:80", Allow, 2)}
+	if v, id, _ := Eval(rs, OpConnect, named(6, "169.254.169.254:80", "x.evil.example"), now); v != Deny || id != 1 {
+		t.Errorf("metadata by name: %v %d", v, id)
+	}
+	for _, a := range []string{"127.0.0.1:80", "[::1]:80", "169.254.1.1:80", "[fe80::1]:80"} {
+		if _, _, ok := Eval(rs[1:], OpConnect, named(6, a, "x.evil.example"), now); ok {
+			t.Errorf("%s: matched by name", a)
+		}
+	}
+	if v, _, _ := Eval(rs[1:], OpConnect, named(6, "192.0.2.1:80", "x.evil.example"), now); v != Allow {
+		t.Error("a public address by name")
+	}
+}
+
+func TestHostLocalhost(t *testing.T) {
+	rs := []Rule{netRule(t, "localhost:8080", Allow, 1)}
+	if v, _, _ := Eval(rs, OpConnect, named(6, "127.0.0.1:8080", "localhost"), time.Now()); v != Allow {
+		t.Error("localhost by name")
 	}
 }

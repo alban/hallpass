@@ -13,6 +13,7 @@
 package defaults
 
 import (
+	"net/netip"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -41,6 +42,8 @@ type Defaults struct {
 	// ownListeners allows connections to listeners started inside the
 	// sandbox.
 	ownListeners bool
+	// metadata denies the cloud metadata addresses (DenyMetadata).
+	metadata bool
 	// netAllow, netDeny and netAsk are network destinations
 	// (--allow-connect, --deny-connect, --ask-connect).
 	netAllow, netDeny, netAsk []rules.ObjectMatch
@@ -142,6 +145,21 @@ func (d *Defaults) ProtectedRules(set string) []rules.Rule {
 // AllowOwnListeners allows connections and sends to the loopback or unix
 // listeners started inside the sandbox, when network is mediated.
 func (d *Defaults) AllowOwnListeners() { d.ownListeners = true }
+
+// Metadata are the cloud instance metadata addresses: AWS, GCP, Azure
+// and others use the first, AWS's IPv6 one the second, Azure's
+// WireServer the third, Alibaba Cloud the fourth. What they serve
+// includes the instance's credentials.
+var Metadata = []netip.Addr{
+	netip.MustParseAddr("169.254.169.254"),
+	netip.MustParseAddr("fd00:ec2::254"),
+	netip.MustParseAddr("168.63.129.16"),
+	netip.MustParseAddr("100.100.100.200"),
+}
+
+// DenyMetadata denies the Metadata addresses, unless a rule naming one
+// of them allows or asks about it (rules.Rule.Yield).
+func (d *Defaults) DenyMetadata() { d.metadata = true }
 
 // AskPath asks about the tree under path, absolute, even when a less
 // specific allow covers it (~/.config/gh inside an allowed ~/.config); a
@@ -366,6 +384,18 @@ func (d *Defaults) Rules() []rules.Rule {
 	}
 	for _, p := range d.ask {
 		add(p, rules.Ask)
+	}
+	if d.metadata {
+		for _, a := range Metadata {
+			rs = append(rs, rules.Rule{
+				Ops:     rules.OpNet,
+				Object:  rules.ObjectMatch{Inet: &rules.InetMatch{Prefix: netip.PrefixFrom(a, a.BitLen())}},
+				Verdict: rules.Deny,
+				Label:   "cloud metadata",
+				Set:     Set,
+				Yield:   true,
+			})
+		}
 	}
 	if d.ownListeners {
 		rs = append(rs, rules.Rule{

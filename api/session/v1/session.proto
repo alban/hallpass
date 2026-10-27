@@ -166,6 +166,9 @@ message Prompt {
   // e.g. "140.82.112.4:443 (reverse DNS, unverified: lb.github.com)".
   // Never on the node (hallpass-node looks nothing up).
   string reverse_names = 17;
+  // The host names the "domain" answer allows, e.g. "*.github.com:443";
+  // empty: no such answer.
+  string domain = 18;
 }
 
 message Object {
@@ -321,6 +324,10 @@ message InetMatch {
   string prefix = 2; // e.g. "10.0.0.0/8"; empty: any address, any family
   uint32 port_lo = 3; // both 0: any port
   uint32 port_hi = 4;
+  // Set instead of prefix: the addresses that have this host name, e.g.
+  // "github.com"; with host_suffix, the names below it ("*.github.com").
+  string host = 5;
+  bool host_suffix = 6;
 }
 
 message UnixMatch {

@@ -170,7 +170,7 @@ r ccheck check connect "$DEST"
 r crel release connect "$DEST"
 r ccheck2 check connect "$DEST"
 r call connect all
-r chost connect example.com:443
+r chost check connect example.com:443
 r urel release exec "$BIN"
 r uwrel release write "$HOME/proj/**"
 r ucheck check exec "$BIN"
@@ -235,7 +235,8 @@ r ucheck check exec "$BIN"
 			requestWant("crel", 0, "released"),
 			requestWant("ccheck2", 5, "not allowed yet"),
 			requestWant("call", 6, "invalid request: DEST"),
-			requestWant("chost", 6, "invalid request: DEST"),
+			// A host name is a valid destination since host rules exist.
+			requestWant("chost", 5, "not allowed yet"),
 			requestWant("urel", 10, "no such grant"),
 			requestWant("uwrel", 10, "no such grant"),
 			requestWant("ucheck", 1, "allowed"),

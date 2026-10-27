@@ -357,6 +357,9 @@ type Context struct {
 	// OwnListeners allows connections to the listeners started inside
 	// the sandbox, when network is mediated.
 	OwnListeners bool
+	// Metadata denies the cloud metadata addresses, unless a rule names
+	// them (defaults.DenyMetadata), when network is mediated.
+	Metadata bool
 	// Execs are programs allowed to run without asking (absolute paths,
 	// exact), before the policy's: the command.
 	Execs []string
@@ -385,6 +388,9 @@ func (p Policy) Defaults(c Context) *defaults.Defaults {
 	}
 	if c.OwnListeners {
 		d.AllowOwnListeners()
+	}
+	if c.Metadata {
+		d.DenyMetadata()
 	}
 	for _, m := range p.AllowConnect {
 		d.AllowConnect(m)
