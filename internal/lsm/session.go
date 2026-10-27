@@ -29,8 +29,6 @@ type Session struct {
 	cfg   hallpassSessionCfg
 	nodes map[nodeKey]hallpassRuleVal
 	procs map[hallpassProcKey]hallpassProcVal
-	inet  map[hallpassInetKey]hallpassInetVal
-	abs   map[hallpassAbstractKey]hallpassAbstractVal
 	// The last rules given to Sync, for re-syncing in GrantOnce.
 	lastRules []Rule
 	lastProcs []ProcRule
@@ -66,8 +64,6 @@ func (l *LSM) newSession(id uint32, root int) (*Session, error) {
 		mountinfo: "/proc/self/mountinfo",
 		nodes:     map[nodeKey]hallpassRuleVal{},
 		procs:     map[hallpassProcKey]hallpassProcVal{},
-		inet:      map[hallpassInetKey]hallpassInetVal{},
-		abs:       map[hallpassAbstractKey]hallpassAbstractVal{},
 		done:      make(chan struct{}),
 	}
 	if root != 0 {
@@ -89,8 +85,6 @@ func (l *LSM) newSession(id uint32, root int) (*Session, error) {
 		s.cfg = c
 		delete(l.staleCfg, id)
 	}
-	takeStale(l.staleInet, id, &s.inet)
-	takeStale(l.staleAbs, id, &s.abs)
 	l.sessions[id] = s
 	l.nextID = max(l.nextID, id+1)
 	return s, nil
@@ -148,10 +142,8 @@ func (s *Session) Close() error {
 	errs := []error{
 		syncMap(s.l.rules, s.nodes, nil, s.ruleKey),
 		syncMap(s.l.proc, s.procs, nil, same),
-		syncMap(s.l.inet, s.inet, nil, same),
-		syncMap(s.l.abstract, s.abs, nil, same),
 	}
-	s.nodes, s.procs, s.inet, s.abs = nil, nil, nil, nil
+	s.nodes, s.procs = nil, nil
 	if err := s.l.cfgs.Delete(s.id); err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
 		errs = append(errs, err)
 	}

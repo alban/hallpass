@@ -54,6 +54,10 @@ func goHelper(mode string) int {
 		return 0
 	case "openat":
 		return openatHelper()
+	case "connect":
+		return connectHelper()
+	case "sendmmsg":
+		return sendmmsgHelper(strings.Split(os.Args[1], ","))
 	case "spawn":
 		// Many goroutines exec'ing at once, while others keep the
 		// scheduler preempting.

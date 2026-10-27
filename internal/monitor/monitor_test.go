@@ -178,7 +178,7 @@ type fakeKernel struct {
 	fail      error // next Sync fails with it
 	grants    [][]string
 	members   []int
-	net       lsm.NetRules
+	unix      lsm.UnixRules
 	netGrants []lsm.NetGrant
 }
 
@@ -209,9 +209,9 @@ func (k *fakeKernel) GrantOnce(tid int, paths []string, proc lsm.ProcRule, net l
 	return nil
 }
 
-func (k *fakeKernel) SyncNet(net lsm.NetRules) error {
+func (k *fakeKernel) SyncUnix(u lsm.UnixRules) error {
 	k.mu.Lock()
-	k.net = net
+	k.unix = u
 	k.mu.Unlock()
 	return nil
 }

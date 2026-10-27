@@ -31,7 +31,7 @@ hallpass is a proof of concept. It mediates filesystem writes and the programs r
 - A UDP socket bound inside the sandbox is not a listener: sending to it is asked.
 - Answers cover one destination; there are no answers for a subnet or a folder of sockets yet (use `--allow-net`).
 - Lite mode: the destination address is read from memory after the check (TOCTOU), and a listener inherited from outside the sandbox counts as started inside it.
-- Strict mode: listeners created before the BPF programs were loaded are not known as started inside the sandbox, and their connections are asked about. A one-shot grant holds a few destinations per thread.
+- Strict mode: a TCP listener counts as started inside the sandbox as in lite mode (racy); the kernel then lets through only the address granted. A `sendmmsg` to more than 4 addresses sends the first 4 and fails on the fifth with `EACCES`; resending the rest asks again.
 
 ## Strict mode
 

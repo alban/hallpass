@@ -28,24 +28,19 @@ The same syscalls are paused and asked about. Then the LSM hooks check the desti
 | `unix_stream_connect` | the peer of a unix stream connection |
 | `unix_may_send` | the peer of a unix datagram, at `connect` and at each send |
 | `socket_post_create` | records the session that created a unix socket |
-| `inet_listen` (fexit), `sk_free_security` | record the TCP listeners and which session started them; forget them when the socket is freed |
 
-A unix socket file is matched by the peer's inode, whatever path reached it, with the same walk as for [files](files.md#strict-mode). The question is still asked at seccomp time; a "once" answer becomes a one-shot grant for that thread.
+The kernel has no rules for IP addresses and abstract unix names: every connection or send to one that the supervisor lets through, by a rule or an answer, gets a one-shot grant of that exact destination for the thread, and the hooks deny any other. A unix socket file is matched by the peer's inode, whatever path reached it, with the same walk as for [files](files.md#strict-mode); a "once" answer for it becomes a grant too.
 
 Maps:
 
 | Map | Key → value | Relation | Written by |
 |---|---|---|---|
-| `inet_rules` | session, address prefix → up to 8 entries: port range, protocol, allow or ask (expiries) or deny | longest-prefix match; a prefix's entries include those of the shorter prefixes containing it, so one lookup finds every rule for an address | the supervisor |
-| `abstract_rules` | session, abstract name prefix → up to 8 entries: exact or prefix, allow or ask (expiries) or deny | longest-prefix match, as `inet_rules` | the supervisor |
 | `rules` | as for files, with allow, ask and deny for the unix sockets bound at that path | one entry per path component | the supervisor |
 | `sessions` | session → whether its own listeners are allowed, and the rules for every unix socket | 1:1 | the supervisor |
-| `listeners` | network namespace, address, port → the listening socket and its session, or "mixed" | 1:1; several listeners on one address (`SO_REUSEPORT`) of different sessions are mixed, never the session's own | the BPF programs |
-| `listen_sks` | listening socket → its `listeners` key | 1:1 | the BPF programs |
 | `socks` | unix socket → the session that created it, a random id, and the last peer it was allowed to reach | 1:1, socket storage | the BPF programs |
-| `grants` | thread → the destinations of a "once" answer: up to 4 addresses (`sendmmsg`), an abstract name, or a socket file's node | 1:1, per thread | the supervisor, before continuing; deleted when the syscall returns |
+| `grants` | thread → the destinations the supervisor let through: up to 4 addresses (`sendmmsg`), an abstract name, or a socket file's node | 1:1, per thread | the supervisor, before continuing; deleted when the syscall returns |
 
-A loopback TCP connection is allowed without asking when the listeners the kernel may pick (bound to that address, else to a wildcard) all belong to the session. A unix connection or datagram is allowed when the peer socket was created by the session. A unix socket remembers the last peer it was allowed to reach, so the datagrams of a connected socket, checked at each send, go through without a new grant.
+A unix connection or datagram to a socket file is allowed when the peer socket was created by the session. A unix socket remembers the last peer it was allowed to reach, so the datagrams of a connected socket, checked at each send, go through without a new grant.
 
 TOCTOU: closed for the destination: the hooks see the address the kernel copied, and the peer socket.
 

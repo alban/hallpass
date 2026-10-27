@@ -8,6 +8,7 @@ package monitor
 import (
 	"errors"
 	"net/netip"
+	"reflect"
 	"testing"
 
 	"github.com/alban/hallpass/internal/lsm"
@@ -21,16 +22,14 @@ func TestToLSMNet(t *testing.T) {
 		v      rules.Verdict
 		ops    rules.Op
 		path   *lsm.Rule
-		net    lsm.NetRules
+		unix   lsm.UnixRules
 		unsupp bool
 	}{
-		{spec: "all", v: rules.Allow, net: lsm.NetRules{Inet: []lsm.InetRule{{}}, AnyUnix: []lsm.UnixAnyRule{{}}}},
-		{spec: "tcp:10.0.0.0/8:443", v: rules.Deny, net: lsm.NetRules{Inet: []lsm.InetRule{{Prefix: netip.MustParsePrefix("10.0.0.0/8"), Proto: unix.IPPROTO_TCP, PortLo: 443, PortHi: 443, Deny: true, Depth: 424}}}},
-		{spec: "unix:@x*", v: rules.Allow, net: lsm.NetRules{Abstract: []lsm.AbstractRule{{Name: "x", Prefix: true}}}},
+		{spec: "all", v: rules.Allow, unix: lsm.UnixRules{AnyUnix: []lsm.UnixAnyRule{{}}}},
+		{spec: "tcp:10.0.0.0/8:443", v: rules.Deny},
+		{spec: "unix:@x*", v: rules.Allow},
 		{spec: "unix:/run/**", v: rules.Allow, path: &lsm.Rule{Path: "/run", Tree: true, Net: true}},
-		{spec: "1.2.3.4", v: rules.Ask, net: lsm.NetRules{Inet: []lsm.InetRule{{Prefix: netip.MustParsePrefix("1.2.3.4/32"), Ask: true, Depth: 517}}}},
-		{spec: "all", v: rules.Ask, net: lsm.NetRules{Inet: []lsm.InetRule{{Ask: true}}, AnyUnix: []lsm.UnixAnyRule{{Ask: true}}}},
-		{spec: "unix:@x", v: rules.Ask, net: lsm.NetRules{Abstract: []lsm.AbstractRule{{Name: "x", Ask: true}}}},
+		{spec: "all", v: rules.Ask, unix: lsm.UnixRules{AnyUnix: []lsm.UnixAnyRule{{Ask: true}}}},
 		{spec: "unix:/run/x", v: rules.Ask, path: &lsm.Rule{Path: "/run/x", Ask: true, Net: true}},
 		{spec: "1.2.3.4", v: rules.Allow, ops: rules.OpConnect, unsupp: true},
 	} {
@@ -38,8 +37,8 @@ func TestToLSMNet(t *testing.T) {
 		if tc.ops != 0 {
 			r.Ops = tc.ops
 		}
-		var net lsm.NetRules
-		p, _, err := toLSM(r, &net)
+		var u lsm.UnixRules
+		p, _, err := toLSM(r, &u)
 		if tc.unsupp {
 			if !errors.Is(err, ErrUnsupported) {
 				t.Errorf("%s: %v, want unsupported", tc.spec, err)
@@ -53,78 +52,64 @@ func TestToLSMNet(t *testing.T) {
 		if (p == nil) != (tc.path == nil) || p != nil && *p != *tc.path {
 			t.Errorf("%s: path rule %+v, want %+v", tc.spec, p, tc.path)
 		}
-		if !equalNet(net, tc.net) {
-			t.Errorf("%s: %+v, want %+v", tc.spec, net, tc.net)
+		if !reflect.DeepEqual(u, tc.unix) {
+			t.Errorf("%s: %+v, want %+v", tc.spec, u, tc.unix)
 		}
 	}
-	var net lsm.NetRules
-	if _, _, err := toLSM(rules.Rule{Ops: rules.OpNet, Verdict: rules.Allow, Object: rules.ObjectMatch{OwnListener: true}}, &net); err != nil || !net.OwnListeners {
-		t.Errorf("own listeners: %v %+v", err, net)
+	var u lsm.UnixRules
+	if _, _, err := toLSM(rules.Rule{Ops: rules.OpNet, Verdict: rules.Allow, Object: rules.ObjectMatch{OwnListener: true}}, &u); err != nil || !u.OwnListeners {
+		t.Errorf("own listeners: %v %+v", err, u)
 	}
-	if _, _, err := toLSM(rules.Rule{Ops: rules.OpNet, Verdict: rules.Deny, Object: rules.ObjectMatch{OwnListener: true}}, &net); !errors.Is(err, ErrUnsupported) {
+	if _, _, err := toLSM(rules.Rule{Ops: rules.OpNet, Verdict: rules.Deny, Object: rules.ObjectMatch{OwnListener: true}}, &u); !errors.Is(err, ErrUnsupported) {
 		t.Errorf("deny own listeners: %v", err)
 	}
-	if _, _, err := toLSM(rules.Rule{Ops: rules.OpNet, Verdict: rules.Ask, Object: rules.ObjectMatch{OwnListener: true}}, &net); !errors.Is(err, ErrUnsupported) {
+	if _, _, err := toLSM(rules.Rule{Ops: rules.OpNet, Verdict: rules.Ask, Object: rules.ObjectMatch{OwnListener: true}}, &u); !errors.Is(err, ErrUnsupported) {
 		t.Errorf("ask own listeners: %v", err)
 	}
 }
 
-func equalNet(a, b lsm.NetRules) bool {
-	if len(a.Inet) != len(b.Inet) || len(a.Abstract) != len(b.Abstract) || len(a.AnyUnix) != len(b.AnyUnix) || a.OwnListeners != b.OwnListeners {
-		return false
-	}
-	for i := range a.Inet {
-		if a.Inet[i] != b.Inet[i] {
-			return false
-		}
-	}
-	for i := range a.Abstract {
-		if a.Abstract[i] != b.Abstract[i] {
-			return false
-		}
-	}
-	for i := range a.AnyUnix {
-		if a.AnyUnix[i] != b.AnyUnix[i] {
-			return false
-		}
-	}
-	return true
-}
-
-// TestNetStrict: rules go to the kernel, ask rules too, and a "once"
-// answer becomes a grant of the address to the thread.
+// TestNetStrict: every inet or abstract destination the monitor lets
+// through, by a rule or a "once" answer, is granted to the thread.
 func TestNetStrict(t *testing.T) {
 	k := &fakeKernel{}
 	fx := setup(t, k, false)
-	if _, err := fx.m.Apply(rulesDecision(netRule(t, "tcp:192.0.2.0/24:443", rules.Allow))); err != nil {
+	if _, err := fx.m.Apply(rulesDecision(
+		netRule(t, "tcp:192.0.2.0/24:443", rules.Allow),
+		netRule(t, "192.0.2.5", rules.Ask),
+		netRule(t, "unix:@x", rules.Allow),
+	)); err != nil {
 		t.Fatal(err)
 	}
-	k.mu.Lock()
-	if len(k.net.Inet) != 1 || k.net.Inet[0].Prefix != netip.MustParsePrefix("192.0.2.0/24") {
-		t.Errorf("kernel rules %+v", k.net)
+	lastGrant := func() lsm.NetGrant {
+		t.Helper()
+		k.mu.Lock()
+		defer k.mu.Unlock()
+		if len(k.netGrants) == 0 {
+			t.Fatal("no grant")
+		}
+		return k.netGrants[len(k.netGrants)-1]
 	}
-	k.mu.Unlock()
-	// The ask rule goes to the kernel too, and prompts over the allow.
-	if _, err := fx.m.Apply(rulesDecision(netRule(t, "192.0.2.5", rules.Ask))); err != nil {
-		t.Fatalf("ask rule: %v", err)
-	}
-	k.mu.Lock()
-	if len(k.net.Inet) != 2 || !k.net.Inet[1].Ask || k.net.Inet[1].Depth <= k.net.Inet[0].Depth {
-		t.Errorf("kernel rules %+v", k.net)
-	}
-	k.mu.Unlock()
-
 	tcp := sock(t, unix.AF_INET, unix.SOCK_STREAM)
+	fx.f.expect(t, fx.f.connect(tcp, sockaddrInet("192.0.2.7:443")), 0)
+	want := lsm.InetDest{Addr: netip.MustParseAddrPort("192.0.2.7:443"), Proto: unix.IPPROTO_TCP}
+	if g := lastGrant(); len(g.Inet) != 1 || g.Inet[0] != want {
+		t.Errorf("grant by rule %+v", g)
+	}
+
 	id := fx.f.connect(tcp, sockaddrInet("192.0.2.5:443"))
 	req := fx.next(t, opened).Opened
 	if _, err := fx.m.Apply(Decision{Verdicts: []Verdict{{req.ID, true}}, Client: "test"}); err != nil {
 		t.Fatal(err)
 	}
 	fx.f.expect(t, id, 0)
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	want := lsm.InetDest{Addr: netip.MustParseAddrPort("192.0.2.5:443"), Proto: unix.IPPROTO_TCP}
-	if n := len(k.netGrants); n == 0 || len(k.netGrants[n-1].Inet) != 1 || k.netGrants[n-1].Inet[0] != want {
-		t.Fatalf("grants %+v", k.netGrants)
+	want.Addr = netip.MustParseAddrPort("192.0.2.5:443")
+	if g := lastGrant(); len(g.Inet) != 1 || g.Inet[0] != want {
+		t.Errorf("grant once %+v", g)
+	}
+
+	us := sock(t, unix.AF_UNIX, unix.SOCK_STREAM)
+	fx.f.expect(t, fx.f.connect(us, sockaddrUnix("@x")), 0)
+	if g := lastGrant(); g.Abstract == nil || *g.Abstract != "x" || g.Inet != nil {
+		t.Errorf("abstract grant %+v", g)
 	}
 }

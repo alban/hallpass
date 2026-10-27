@@ -25,55 +25,28 @@ type UnixDest struct {
 	Path     string
 }
 
-// NetGrant is the network part of GrantOnce.
+// NetGrant is the network part of GrantOnce. The kernel keeps the first
+// four Inet destinations: a sendmmsg to more stops at the fifth.
 type NetGrant struct {
 	Inet     []InetDest
 	Abstract *string // abstract unix name, without the leading NUL
 }
 
-// InetRule allows, asks or denies IPv4 and IPv6 destinations. The deepest
-// matching allow or ask decides, the ask on a tie: an ask stops the allows
-// of shallower rules.
-type InetRule struct {
-	Prefix         netip.Prefix // invalid (zero): any address
-	Proto          uint16       // 0: any
-	PortLo, PortHi uint16       // both 0: any port
-	Deny           bool
-	Ask            bool
-	// Depth orders allows and asks: the more specific, the deeper
-	// (rules.ObjectMatch.Depth).
-	Depth   uint16
-	Expires time.Time
-}
-
-// AbstractRule allows, asks or denies abstract unix socket names: Name,
-// or with Prefix every name starting with it. The longest name decides
-// between allows and asks, the ask on a tie.
-type AbstractRule struct {
-	Name    string
-	Prefix  bool
-	Deny    bool
-	Ask     bool
-	Expires time.Time
-}
-
-// UnixAnyRule allows, asks or denies every unix socket. Rules on an
-// address or a name beat its allows and asks.
+// UnixAnyRule allows, asks or denies every unix socket bound to a path.
+// Rules on a path beat its allows and asks.
 type UnixAnyRule struct {
 	Deny    bool
 	Ask     bool
 	Expires time.Time
 }
 
-// NetRules are a session's network rules, but for the unix sockets bound
-// to a path: Rule with Net.
-type NetRules struct {
-	Inet     []InetRule
-	Abstract []AbstractRule
-	AnyUnix  []UnixAnyRule
-	// OwnListeners allows loopback TCP connections to the listeners the
-	// session's members started, and connections and datagrams to the unix
-	// sockets they created.
+// UnixRules are a session's rules for the unix sockets bound to a path,
+// but for those of Rule with Net. Inet and abstract unix destinations
+// need a GrantOnce.
+type UnixRules struct {
+	AnyUnix []UnixAnyRule
+	// OwnListeners allows connections and datagrams to the unix sockets
+	// the session's members created.
 	OwnListeners bool
 }
 

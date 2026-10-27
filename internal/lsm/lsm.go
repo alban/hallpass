@@ -129,7 +129,6 @@ type nodeKey struct {
 // any number of sessions (see Session), each with its own members.
 type LSM struct {
 	members, protected, grants, rules, proc, events, cfgs *ebpf.Map
-	inet, abstract                                        *ebpf.Map
 	// links keep the programs attached; closing them detaches.
 	links []io.Closer
 	// linkFDs are the links' fds, for handing them to another process.
@@ -148,8 +147,6 @@ type LSM struct {
 	stale      map[uint32]map[nodeKey]hallpassRuleVal
 	staleProcs map[uint32]map[hallpassProcKey]hallpassProcVal
 	staleCfg   map[uint32]hallpassSessionCfg
-	staleInet  map[uint32]map[hallpassInetKey]hallpassInetVal
-	staleAbs   map[uint32]map[hallpassAbstractKey]hallpassAbstractVal
 	reading    bool
 }
 

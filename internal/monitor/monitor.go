@@ -27,7 +27,7 @@ import (
 type Kernel interface {
 	AddMember(pid int) error
 	Sync(rules []lsm.Rule, procs []lsm.ProcRule) error
-	SyncNet(net lsm.NetRules) error
+	SyncUnix(u lsm.UnixRules) error
 	GrantOnce(tid int, paths []string, proc lsm.ProcRule, net lsm.NetGrant) error
 	Events(fn func(lsm.Event))
 }
@@ -471,7 +471,7 @@ func (m *Monitor) check(r *rules.Rule) error {
 		r.Object.Unix = &rules.UnixMatch{Path: p, Prefix: u.Prefix}
 	}
 	if m.kernel != nil {
-		if _, _, err := toLSM(*r, &lsm.NetRules{}); err != nil {
+		if _, _, err := toLSM(*r, &lsm.UnixRules{}); err != nil {
 			return err
 		}
 	}

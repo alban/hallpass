@@ -114,9 +114,9 @@ func TestFromFDs(t *testing.T) {
 		t.Error(err)
 	}
 	l2.Close()
-	nmaps := len(l.FDs()) - len(attachOrder) - len(tracingOrder)
-	// a map as a link; two links swapped; sys_exit as LSM; fexit as sys_exit
-	for _, swap := range []int{nmaps - 1, nmaps, len(l.FDs()) - 3, len(l.FDs()) - 2} {
+	nmaps := len(l.FDs()) - len(attachOrder) - 1
+	// a map as a link; two links swapped; sys_exit as LSM
+	for _, swap := range []int{nmaps - 1, nmaps, len(l.FDs()) - 2} {
 		if l3, err := FromFDs(dup(swap)); err == nil {
 			l3.Close()
 			t.Errorf("swap at %d accepted", swap)

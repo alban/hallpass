@@ -300,9 +300,10 @@ type UnixMatch struct {
 }
 ```
 
-Network matches are what BPF can evaluate: an LPM trie for prefixes, a
-port range, inode rules for unix socket files. In strict mode a network
-rule must cover both network ops, as a file rule covers every file op.
+Network matches are evaluated by the monitor; in strict mode the kernel
+only has the rules for unix socket files (inode rules) and grants for the
+rest. A network rule must cover both network ops, as a file rule covers
+every file op.
 
 The monitor has one rule set and no persistence. `Set` lets a client
 replace a group of rules atomically (remove the set and add its new rules

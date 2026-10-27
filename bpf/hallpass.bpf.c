@@ -278,11 +278,12 @@ struct {
  */
 struct session_cfg {
 	__u32 mediate; /* HP_MEDIATE_* */
-	__u32 flags;   /* HP_OWN_LISTENERS: allow connections to the session's listeners */
-	__u64 any_unix_allow; /* expiry of an allow rule for every unix socket */
+	__u32 flags;   /* HP_OWN_LISTENERS: allow the unix sockets the session created */
+	/* Rules for every unix socket bound to a path. */
+	__u64 any_unix_allow; /* expiry */
 	__u8 any_unix_deny;
 	__u8 pad[7];
-	__u64 any_unix_ask; /* expiry of an ask rule for every unix socket */
+	__u64 any_unix_ask; /* expiry */
 };
 
 struct {
@@ -291,110 +292,6 @@ struct {
 	__type(key, __u32);
 	__type(value, struct session_cfg);
 } sessions SEC(".maps");
-
-/*
- * Inet rules: a longest-prefix match on {session, address}, IPv4 as
- * IPv4-mapped IPv6. prefixlen 32 matches any address of the session. The
- * value of a prefix holds its own rules and those of every shorter prefix
- * containing it (the supervisor copies them), so one lookup sees all the
- * rules matching an address.
- */
-#define NET_ENTRIES 8
-
-struct inet_key {
-	__u32 prefixlen;
-	__u32 session;
-	__u8 addr[16];
-};
-
-/*
- * An entry allows, asks or denies. The deepest matching allow or ask
- * decides, the ask on a tie (as the supervisor's rules); depth orders the
- * entries that way, the more specific the deeper.
- */
-struct inet_entry {
-	__u64 expiry; /* allow or ask until then; 0: none */
-	__u16 port_lo, port_hi; /* 0, 0: any port */
-	__u16 proto;		/* 0: any */
-	__u16 depth;
-	__u8 deny;
-	__u8 ask;
-	__u8 pad[6];
-};
-
-struct inet_val {
-	struct inet_entry e[NET_ENTRIES];
-};
-
-struct {
-	__uint(type, BPF_MAP_TYPE_LPM_TRIE);
-	__uint(map_flags, BPF_F_NO_PREALLOC);
-	__uint(max_entries, 16384);
-	__type(key, struct inet_key);
-	__type(value, struct inet_val);
-} inet_rules SEC(".maps");
-
-/* Abstract unix names, the same way: prefixlen 32 + 8 * bytes of name. */
-struct abstract_key {
-	__u32 prefixlen;
-	__u32 session;
-	char name[UNIX_NAME_LEN];
-};
-
-struct abstract_entry {
-	__u64 expiry;
-	__u8 deny;
-	__u8 exact; /* the name only, not longer ones */
-	__u8 len;   /* of the rule's name, its depth as for inet_entry */
-	__u8 ask;
-	__u8 pad[4];
-};
-
-struct abstract_val {
-	struct abstract_entry e[NET_ENTRIES];
-};
-
-struct {
-	__uint(type, BPF_MAP_TYPE_LPM_TRIE);
-	__uint(map_flags, BPF_F_NO_PREALLOC);
-	__uint(max_entries, 16384);
-	__type(key, struct abstract_key);
-	__type(value, struct abstract_val);
-} abstract_rules SEC(".maps");
-
-/*
- * TCP listeners, of every task: the session that started them, for the
- * loopback connections to the session's own listeners. A listener of
- * another session or of a non-member on the same address makes it mixed
- * (never own). Deleted when the socket is freed.
- */
-struct listen_key {
-	__u32 netns;
-	__u16 port;
-	__u16 pad;
-	__u8 addr[16]; /* IPv4 mapped */
-};
-
-struct listen_val {
-	__u64 sk;
-	__u32 session; /* 0: not a member */
-	__u32 mixed;
-};
-
-struct {
-	__uint(type, BPF_MAP_TYPE_HASH);
-	__uint(max_entries, 65536);
-	__type(key, struct listen_key);
-	__type(value, struct listen_val);
-} listeners SEC(".maps");
-
-/* The listeners key of each listening socket, to delete it when freed. */
-struct {
-	__uint(type, BPF_MAP_TYPE_HASH);
-	__uint(max_entries, 65536);
-	__type(key, __u64);
-	__type(value, struct listen_key);
-} listen_sks SEC(".maps");
 
 /*
  * Unix sockets: the session that created them, a random id, and for a
@@ -760,6 +657,8 @@ static __always_inline int check_two(__u32 op, const struct path *old_dir, struc
  * Network: connections and sends with a destination address, of sessions
  * that mediate the network. The supervisor asks at seccomp time and grants
  * the syscall once; here the kernel's own copy of the address is checked.
+ * Inet and abstract unix destinations need that grant, socket files are
+ * checked with the path rules.
  */
 
 struct inet_dest {
@@ -782,24 +681,6 @@ static __always_inline bool eq16(const __u8 *a, const __u8 *b)
 		if (a[i] != b[i])
 			return false;
 	return true;
-}
-
-static __always_inline bool is_mapped(const __u8 *a)
-{
-	for (int i = 0; i < 10; i++)
-		if (a[i])
-			return false;
-	return a[10] == 0xff && a[11] == 0xff;
-}
-
-static __always_inline bool is_loopback(const __u8 *a)
-{
-	if (is_mapped(a))
-		return a[12] == 127;
-	for (int i = 0; i < 15; i++)
-		if (a[i])
-			return false;
-	return a[15] == 1;
 }
 
 /*
@@ -833,109 +714,12 @@ static __always_inline bool read_inet(void *sa, int len, bool unspec_v4, struct 
 	return false;
 }
 
-static __always_inline __u32 netns_of(struct sock *sk)
-{
-	return BPF_CORE_READ(sk, __sk_common.skc_net.net, ns.inum);
-}
-
-/* MPTCP falls back to TCP: the same rules and listeners. */
+/* MPTCP falls back to TCP: the same grants. */
 static __always_inline __u16 proto_of(struct sock *sk)
 {
 	__u16 p = sk->sk_protocol;
 
 	return p == IPPROTO_MPTCP ? IPPROTO_TCP : p;
-}
-
-/*
- * Whether the listener on k belongs to session: 1 yes, 0 no listener known
- * there, -1 another one (or one that stopped listening).
- */
-static __always_inline int listener_owned(struct listen_key *k, __u32 session)
-{
-	struct listen_val *v = bpf_map_lookup_elem(&listeners, k);
-	struct sock *sk;
-
-	if (!v)
-		return 0;
-	if (v->mixed || v->session != session)
-		return -1;
-	/* Outside BPF_CORE_READ: listen_val is not a kernel type. */
-	sk = (struct sock *)v->sk;
-	if (BPF_CORE_READ(sk, __sk_common.skc_state) != TCP_LISTEN)
-		return -1;
-	return 1;
-}
-
-/*
- * A TCP connection to a loopback address whose listeners, those the kernel
- * may pick (bound to the address, else to a wildcard), all belong to session.
- */
-static __always_inline bool own_tcp_listener(struct sock *sk, struct inet_dest *d, __u32 session)
-{
-	struct listen_key k = {};
-	bool v4 = is_mapped(d->addr);
-	int r, any = 0;
-
-	k.netns = netns_of(sk);
-	k.port = d->port;
-	__builtin_memcpy(k.addr, d->addr, 16);
-	r = listener_owned(&k, session);
-	if (r)
-		return r > 0;
-	/* :: may accept IPv4 too (unless IPV6_V6ONLY) */
-	__builtin_memset(k.addr, 0, 16);
-	r = listener_owned(&k, session);
-	if (r < 0)
-		return false;
-	any |= r;
-	if (v4) {
-		map_v4(k.addr, 0);
-		r = listener_owned(&k, session);
-		if (r < 0)
-			return false;
-		any |= r;
-	}
-	return any;
-}
-
-/*
- * WALK_* bits of the deepest matching allow or ask (allow_depth and
- * ask_depth: the deepest so far, -1 for none), and of any deny.
- */
-static __always_inline int net_bits(int deny, int allow_depth, int ask_depth)
-{
-	if (allow_depth > ask_depth)
-		deny |= WALK_ALLOW;
-	else if (ask_depth >= 0)
-		deny |= WALK_ASK;
-	return deny;
-}
-
-static __always_inline int inet_rules_of(struct inet_val *v, struct inet_dest *d, __u64 now)
-{
-	int deny = 0, allow = -1, ask = -1;
-
-	if (!v)
-		return 0;
-	for (int i = 0; i < NET_ENTRIES; i++) {
-		struct inet_entry *e = &v->e[i];
-
-		if (!e->expiry && !e->deny)
-			continue;
-		if (e->proto && e->proto != d->proto)
-			continue;
-		if ((e->port_lo || e->port_hi) && (d->port < e->port_lo || d->port > e->port_hi))
-			continue;
-		if (e->deny)
-			deny = WALK_DENY;
-		else if (!live(e->expiry, now))
-			continue;
-		else if (e->ask)
-			ask = e->depth > ask ? e->depth : ask;
-		else
-			allow = e->depth > allow ? e->depth : allow;
-	}
-	return net_bits(deny, allow, ask);
 }
 
 static __always_inline bool inet_granted(struct hp_grant *g, struct inet_dest *d)
@@ -968,26 +752,11 @@ static __always_inline void net_event(struct event *e, __u32 op, int ret, __u32 
 	e->name_len = 0;
 }
 
-static __always_inline int check_inet(__u32 op, struct sock *sk, struct inet_dest *d, __u32 s)
+/* Allowed only with a grant for this exact destination. */
+static __always_inline int check_inet(__u32 op, struct inet_dest *d, __u32 s)
 {
-	struct inet_key k = {};
-	struct session_cfg *cfg = bpf_map_lookup_elem(&sessions, &s);
+	int ret = inet_granted(current_grant(), d) ? 0 : -EACCES;
 	struct event *e;
-	int bits, ret = -EACCES;
-
-	k.prefixlen = 32 + 128;
-	k.session = s;
-	__builtin_memcpy(k.addr, d->addr, 16);
-	bits = inet_rules_of(bpf_map_lookup_elem(&inet_rules, &k), d, bpf_ktime_get_ns());
-	if (inet_granted(current_grant(), d))
-		bits |= WALK_ALLOW;
-	if (bits & WALK_DENY)
-		ret = -EACCES;
-	else if (bits & WALK_ALLOW)
-		ret = 0;
-	else if (cfg && (cfg->flags & HP_OWN_LISTENERS) && op == HP_OP_CONNECT &&
-		 d->proto == IPPROTO_TCP && is_loopback(d->addr) && own_tcp_listener(sk, d, s))
-		ret = 0;
 
 	if (ret == 0 && !log_allowed)
 		return 0;
@@ -1012,48 +781,23 @@ static __always_inline struct hp_sock *sock_info(struct sock *sk)
 	return h;
 }
 
-static __always_inline int abstract_rules_of(struct abstract_val *v, __u32 len, __u64 now)
+static __always_inline bool abstract_granted(struct hp_grant *g, const __u32 *name, __u32 len)
 {
-	int deny = 0, allow = -1, ask = -1;
-
-	if (!v)
-		return 0;
-	for (int i = 0; i < NET_ENTRIES; i++) {
-		struct abstract_entry *e = &v->e[i];
-
-		if (!e->expiry && !e->deny)
-			continue;
-		if (e->exact && e->len != len)
-			continue;
-		if (e->deny)
-			deny = WALK_DENY;
-		else if (!live(e->expiry, now))
-			continue;
-		else if (e->ask)
-			ask = e->len > ask ? e->len : ask;
-		else
-			allow = e->len > allow ? e->len : allow;
-	}
-	return net_bits(deny, allow, ask);
-}
-
-static __always_inline bool abstract_granted(struct hp_grant *g, struct abstract_key *k, __u32 len)
-{
-	__u32 *a, *b;
+	const __u32 *a;
 
 	if (!g || !g->abstract_set || g->abstract_len != len)
 		return false;
-	a = (__u32 *)g->abstract;
-	b = (__u32 *)k->name;
+	a = (const __u32 *)g->abstract;
 	for (int i = 0; i < UNIX_NAME_LEN / 4; i++)
-		if (a[i] != b[i])
+		if (a[i] != name[i])
 			return false;
 	return true;
 }
 
 /*
  * A connection or a datagram from self to the unix socket peer. Unbound
- * peers (socketpair) have no address to check.
+ * peers (socketpair) have no address to check. Socket files are checked
+ * with the path rules, abstract names need a grant.
  */
 static __always_inline int check_unix(__u32 op, struct sock *self, struct sock *peer, __u32 s)
 {
@@ -1063,7 +807,7 @@ static __always_inline int check_unix(__u32 op, struct sock *self, struct sock *
 	struct session_cfg *cfg = bpf_map_lookup_elem(&sessions, &s);
 	struct hp_grant *g = current_grant();
 	struct hp_sock *me, *them;
-	struct abstract_key k = {};
+	__u32 name[UNIX_NAME_LEN / 4] = {};
 	struct event *e;
 	__u32 zero = 0, len = 0;
 	int bits = 0, ret = -EACCES;
@@ -1074,6 +818,7 @@ static __always_inline int check_unix(__u32 op, struct sock *self, struct sock *
 	them = sock_info(peer);
 	if (dentry) {
 		struct hp_scratch *r;
+		__u64 now = bpf_ktime_get_ns();
 
 		bpf_preempt_disable();
 		r = bpf_map_lookup_elem(&scratch, &zero);
@@ -1082,6 +827,12 @@ static __always_inline int check_unix(__u32 op, struct sock *self, struct sock *
 		bpf_preempt_enable();
 		if (bits < 0)
 			bits = WALK_DENY;
+		if (cfg && cfg->any_unix_deny)
+			bits |= WALK_DENY;
+		/* The shallowest rules: any path rule beats them. */
+		if (cfg && !(bits & WALK_ASK) && !live(cfg->any_unix_ask, now) &&
+		    live(cfg->any_unix_allow, now))
+			bits |= WALK_ALLOW;
 	} else {
 		int alen = BPF_CORE_READ(addr, len);
 
@@ -1091,23 +842,9 @@ static __always_inline int check_unix(__u32 op, struct sock *self, struct sock *
 			len = 0;
 		if (len > UNIX_NAME_LEN - 1)
 			len = UNIX_NAME_LEN - 1;
-		if (bpf_probe_read_kernel(k.name, len & 127, (void *)addr->name[0].sun_path + 1))
+		if (bpf_probe_read_kernel(name, len & 127, (void *)addr->name[0].sun_path + 1))
 			return -EACCES;
-		k.prefixlen = 32 + 8 * len;
-		k.session = s;
-		bits = abstract_rules_of(bpf_map_lookup_elem(&abstract_rules, &k), len,
-					 bpf_ktime_get_ns());
-		if (abstract_granted(g, &k, len))
-			bits |= WALK_ALLOW;
-	}
-	if (cfg) {
-		__u64 now = bpf_ktime_get_ns();
-
-		if (cfg->any_unix_deny)
-			bits |= WALK_DENY;
-		/* The shallowest rules: any address or name rule beats them. */
-		if (!(bits & WALK_ASK) && !live(cfg->any_unix_ask, now) &&
-		    live(cfg->any_unix_allow, now))
+		if (abstract_granted(g, name, len))
 			bits |= WALK_ALLOW;
 	}
 	if (me && them && me->allowed_peer == them->id)
@@ -1117,7 +854,7 @@ static __always_inline int check_unix(__u32 op, struct sock *self, struct sock *
 		ret = -EACCES;
 	else if (bits & WALK_ALLOW)
 		ret = 0;
-	else if (cfg && (cfg->flags & HP_OWN_LISTENERS) && them && them->creator == s)
+	else if (dentry && cfg && (cfg->flags & HP_OWN_LISTENERS) && them && them->creator == s)
 		ret = 0;
 	if (ret == 0 && me && them)
 		me->allowed_peer = them->id;
@@ -1133,7 +870,7 @@ static __always_inline int check_unix(__u32 op, struct sock *self, struct sock *
 		bpf_probe_read_kernel_str(e->name, NAME_LEN, BPF_CORE_READ(dentry, d_name.name));
 	} else {
 		e->name_len = len;
-		bpf_probe_read_kernel(e->path, len & 127, k.name);
+		bpf_probe_read_kernel(e->path, len & 127, name);
 	}
 	bpf_ringbuf_submit(e, 0);
 	return ret;
@@ -1162,7 +899,7 @@ int BPF_PROG(hp_socket_connect, struct socket *sock, struct sockaddr *address, i
 	if (!read_inet(address, addrlen, false, &d))
 		return 0;
 	d.proto = proto_of(sk);
-	return check_inet(HP_OP_CONNECT, sk, &d, s);
+	return check_inet(HP_OP_CONNECT, &d, s);
 }
 
 SEC("lsm/socket_sendmsg")
@@ -1196,7 +933,7 @@ int BPF_PROG(hp_socket_sendmsg, struct socket *sock, struct msghdr *msg, int siz
 	}
 	if (!read_inet(msg->msg_name, msg->msg_namelen, fam == AF_INET, &d))
 		return 0;
-	return check_inet(op, sk, &d, s);
+	return check_inet(op, &d, s);
 }
 
 SEC("lsm/unix_stream_connect")
@@ -1253,72 +990,6 @@ int BPF_PROG(hp_socket_post_create, struct socket *sock, int family, int type, i
 	if (!h)
 		return -ENOMEM;
 	h->creator = s;
-	return 0;
-}
-
-/*
- * Whether hp_listen is attached to __inet_listen_sk(struct sock *), which
- * MPTCP subflows go through too (Go listens with MPTCP by default), rather
- * than inet_listen(struct socket *) on older kernels.
- */
-const volatile bool listen_sk = false;
-
-/* TCP listeners, after listen() succeeded and bound the port. */
-SEC("fexit/inet_listen")
-int hp_listen(__u64 *ctx)
-{
-	struct listen_key k = {};
-	struct listen_val v = {}, *old;
-	struct sock *sk;
-	__u64 skp;
-	__u16 fam;
-
-	if ((int)ctx[2])
-		return 0;
-	if (listen_sk)
-		sk = (struct sock *)ctx[0];
-	else
-		sk = BPF_CORE_READ((struct socket *)ctx[0], sk);
-	if (!sk)
-		return 0;
-	skp = (__u64)sk;
-	fam = BPF_CORE_READ(sk, __sk_common.skc_family);
-	k.netns = netns_of(sk);
-	k.port = BPF_CORE_READ(sk, __sk_common.skc_num);
-	if (fam == AF_INET)
-		map_v4(k.addr, BPF_CORE_READ(sk, __sk_common.skc_rcv_saddr));
-	else if (fam == AF_INET6)
-		BPF_CORE_READ_INTO(&k.addr, sk, __sk_common.skc_v6_rcv_saddr);
-	else
-		return 0;
-	old = bpf_map_lookup_elem(&listeners, &k);
-	if (old) {
-		/* SO_REUSEPORT: several listeners */
-		if (old->sk != skp && old->session != current_session())
-			old->mixed = 1;
-		return 0;
-	}
-	v.sk = skp;
-	v.session = current_session();
-	if (bpf_map_update_elem(&listeners, &k, &v, BPF_NOEXIST))
-		return 0;
-	bpf_map_update_elem(&listen_sks, &skp, &k, BPF_ANY);
-	return 0;
-}
-
-SEC("lsm/sk_free_security")
-int BPF_PROG(hp_sk_free, struct sock *sk)
-{
-	__u64 skp = (__u64)sk;
-	struct listen_key *k = bpf_map_lookup_elem(&listen_sks, &skp);
-	struct listen_val *v;
-
-	if (!k)
-		return 0;
-	v = bpf_map_lookup_elem(&listeners, k);
-	if (v && v->sk == skp)
-		bpf_map_delete_elem(&listeners, k);
-	bpf_map_delete_elem(&listen_sks, &skp);
 	return 0;
 }
 

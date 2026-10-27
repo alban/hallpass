@@ -8,14 +8,13 @@ package lsm
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"slices"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -44,7 +43,7 @@ func TestMain(m *testing.M) {
 // or "fail: <error>" for each. Ops: "<kind> <dest>", with kind one of
 // connect (TCP), connect6 (TCP over IPv6), sendto, sendmsg, unspec (UDP),
 // fastopen (TCP), unix, unixgram, unixconn (connected datagram), own
-// (TCP listener of the helper), ownunix (abstract listener of the helper).
+// (TCP listener of the helper), ownunix (unix listener of the helper).
 func netHelper(ops []string) {
 	bufio.NewReader(os.Stdin).ReadString('\n')
 	for _, op := range ops {
@@ -142,18 +141,8 @@ func netOp(kind, dest string) error {
 			return err
 		}
 		return unix.Connect(fd, unixAddr(dest))
-	case "own", "ownmptcp":
-		proto := 0
-		if kind == "ownmptcp" {
-			proto = unix.IPPROTO_MPTCP
-			// Without MPTCP support, the plain TCP case again.
-			if fd, err := unix.Socket(unix.AF_INET, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, proto); err != nil {
-				proto = 0
-			} else {
-				unix.Close(fd)
-			}
-		}
-		ln, err := unix.Socket(unix.AF_INET, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, proto)
+	case "own":
+		ln, err := unix.Socket(unix.AF_INET, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
 		if err != nil {
 			return err
 		}
@@ -168,7 +157,7 @@ func netOp(kind, dest string) error {
 		if err != nil {
 			return err
 		}
-		fd, err := unix.Socket(unix.AF_INET, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, proto)
+		fd, err := unix.Socket(unix.AF_INET, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
 		if err != nil {
 			return err
 		}
@@ -237,63 +226,48 @@ func netMember(t *testing.T, s *Session, ops ...string) []string {
 }
 
 // TestEnforceNet checks the network rules of a session mediating the
-// network, against listeners of the test, outside the session.
+// network, against listeners of the test, outside the session: without a
+// grant, only unix sockets bound to a path may be allowed.
 func TestEnforceNet(t *testing.T) {
 	needRoot(t)
 	if err := Active(); err != nil {
 		skip(t, err)
 	}
 	dir := t.TempDir()
-	tcp := func() int {
-		ln, err := net.Listen("tcp4", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { ln.Close() })
-		go func() {
-			for {
-				c, err := ln.Accept()
-				if err != nil {
-					return
-				}
-				c.Close()
-			}
-		}()
-		return ln.Addr().(*net.TCPAddr).Port
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
 	}
-	unixListen := func(netw, addr string) {
-		if netw == "unixgram" {
-			c, err := net.ListenPacket(netw, addr)
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { c.Close() })
-			return
-		}
-		ln, err := net.Listen(netw, addr)
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { ln.Close() })
-	}
-	allowed, other, anyProto := tcp(), tcp(), tcp()
+	defer ln.Close()
 	udp, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer udp.Close()
-	udpPort := udp.LocalAddr().(*net.UDPAddr).Port
-	for _, d := range []string{"ok", "no"} {
-		if err := os.Mkdir(filepath.Join(dir, d), 0o755); err != nil {
+	listen := func(netw, addr string) {
+		var c io.Closer
+		var err error
+		if netw == "unixgram" {
+			c, err = net.ListenPacket(netw, addr)
+		} else {
+			c, err = net.Listen(netw, addr)
+		}
+		if err != nil {
 			t.Fatal(err)
 		}
-		unixListen("unix", filepath.Join(dir, d, "s"))
-		unixListen("unixgram", filepath.Join(dir, d, "g"))
+		t.Cleanup(func() { c.Close() })
 	}
-	abs := fmt.Sprintf("hallpass-test-%d-", os.Getpid())
-	for _, n := range []string{"ok", "okdeny", "no"} {
-		unixListen("unix", "@"+abs+n)
+	for _, d := range []string{"ok", "no", "own"} {
+		if err := os.Mkdir(filepath.Join(dir, d), 0o777); err != nil {
+			t.Fatal(err)
+		}
 	}
+	for _, d := range []string{"ok", "no"} {
+		listen("unix", filepath.Join(dir, d, "s"))
+		listen("unixgram", filepath.Join(dir, d, "g"))
+	}
+	abs := fmt.Sprintf("@hallpass-test-%d", os.Getpid())
+	listen("unix", abs)
 
 	l, err := Load(true)
 	if err != nil {
@@ -301,75 +275,45 @@ func TestEnforceNet(t *testing.T) {
 	}
 	defer l.Close()
 	s, off, all := newSession(t, l), newSession(t, l), newSession(t, l)
-	for _, x := range []*Session{s, all} {
-		if err := x.Mediate(true, false, true); err != nil {
+	for _, x := range []*Session{s, off, all} {
+		if err := x.Mediate(true, false, x != off); err != nil {
+			t.Fatal(err)
+		}
+		own := Rule{Path: dir + "/own", Tree: true}
+		if err := x.Sync([]Rule{devNull, own, {Path: dir + "/ok", Tree: true, Net: true}}, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := off.Mediate(true, false, false); err != nil {
+	if err := s.SyncUnix(UnixRules{OwnListeners: true}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Sync([]Rule{devNull, {Path: dir + "/ok", Tree: true, Net: true}}, nil); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.SyncNet(NetRules{
-		Inet: []InetRule{
-			{Prefix: netip.MustParsePrefix("127.0.0.1/32"), Proto: unix.IPPROTO_TCP, PortLo: uint16(allowed), PortHi: uint16(allowed)},
-			{Prefix: netip.MustParsePrefix("127.0.0.0/8"), Proto: unix.IPPROTO_UDP, PortLo: uint16(udpPort), PortHi: uint16(udpPort)},
-			{Prefix: netip.MustParsePrefix("127.0.0.1/32"), Proto: unix.IPPROTO_UDP, PortLo: uint16(other), PortHi: uint16(other), Expires: time.Now().Add(-time.Second)},
-			// An answer: any protocol.
-			{Prefix: netip.MustParsePrefix("127.0.0.1/32"), PortLo: uint16(anyProto), PortHi: uint16(anyProto), Expires: time.Now().Add(time.Hour)},
-			// IPv6 only: the IPv4 rules above still apply.
-			{Prefix: netip.MustParsePrefix("::/0"), Deny: true},
-		},
-		Abstract: []AbstractRule{
-			{Name: abs + "o", Prefix: true},
-			{Name: abs + "okdeny", Deny: true},
-		},
-		OwnListeners: true,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	for _, x := range []*Session{off, all} {
-		if err := x.Sync([]Rule{devNull}, nil); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := all.SyncNet(NetRules{Inet: []InetRule{{}}, AnyUnix: []UnixAnyRule{{}}}); err != nil {
+	if err := all.SyncUnix(UnixRules{AnyUnix: []UnixAnyRule{{}}}); err != nil {
 		t.Fatal(err)
 	}
 	go s.Events(func(e Event) { t.Logf("event: %+v %+v %+v", e, e.Inet, e.Unix) })
 
-	lo := func(port int) string { return "127.0.0.1:" + strconv.Itoa(port) }
+	tcp, udpAddr := ln.Addr().String(), udp.LocalAddr().String()
 	cases := []struct {
 		op    string
 		ok    bool // in s
-		allOK bool // in all and off
+		allOK bool // in all
 	}{
-		{"connect " + lo(allowed), true, true},
-		{"connect " + lo(other), false, true},
-		{"connect " + lo(anyProto), true, true},
-		{"sendto " + lo(anyProto), true, true},
-		{"connect6 [::ffff:127.0.0.1]:" + strconv.Itoa(allowed), true, true},
-		{"connect6 [::ffff:127.0.0.1]:" + strconv.Itoa(other), false, true},
-		{"fastopen " + lo(other), false, true},
-		{"sendto " + lo(udpPort), true, true},
-		{"sendmsg " + lo(udpPort), true, true},
-		{"sendto " + lo(other), false, true},
-		{"sendmsg " + lo(other), false, true},
-		{"unspec " + lo(other), false, true},
-		{"own ", true, true},
-		{"ownmptcp ", true, true},
-		{"ownunix @" + abs + "own", true, true},
+		{"connect " + tcp, false, false},
+		{"connect6 [::ffff:127.0.0.1]:" + strings.TrimPrefix(tcp, "127.0.0.1:"), false, false},
+		{"fastopen " + tcp, false, false},
+		{"sendto " + udpAddr, false, false},
+		{"sendmsg " + udpAddr, false, false},
+		{"unspec " + udpAddr, false, false},
+		{"own ", false, false},
+		{"ownunix " + abs + "-own", false, false},
+		{"ownunix " + dir + "/own/s", true, true},
 		{"unix " + dir + "/ok/s", true, true},
 		{"unix " + dir + "/no/s", false, true},
 		{"unixgram " + dir + "/ok/g", true, true},
 		{"unixgram " + dir + "/no/g", false, true},
 		{"unixconn " + dir + "/ok/g", true, true},
 		{"unixconn " + dir + "/no/g", false, true},
-		{"unix @" + abs + "ok", true, true},
-		{"unix @" + abs + "okdeny", false, true},
-		{"unix @" + abs + "no", false, true},
+		{"unix " + abs, false, false},
 	}
 	var ops []string
 	for _, c := range cases {
@@ -379,12 +323,10 @@ func TestEnforceNet(t *testing.T) {
 		name string
 		s    *Session
 	}{{"mediated", s}, {"off", off}, {"all", all}} {
+		os.Remove(dir + "/own/s")
 		got := netMember(t, x.s, ops...)
 		for i, c := range cases {
-			want := c.allOK
-			if x.s == s {
-				want = c.ok
-			}
+			want := x.s == off || x.s == s && c.ok || x.s == all && c.allOK
 			if (got[i] == "ok") != want {
 				t.Errorf("%s: %s: %s, want ok=%v", x.name, c.op, got[i], want)
 			}
@@ -393,33 +335,14 @@ func TestEnforceNet(t *testing.T) {
 	time.Sleep(100 * time.Millisecond) // let the events be logged
 }
 
-// TestEnforceNetAsk checks ask rules on network destinations: they stop
-// the allows of less specific rules, a more specific allow wins over them.
+// TestEnforceNetAsk checks ask rules on socket files: they stop the allows
+// of less specific rules, a more specific allow wins over them.
 func TestEnforceNetAsk(t *testing.T) {
 	needRoot(t)
 	if err := Active(); err != nil {
 		skip(t, err)
 	}
 	dir := t.TempDir()
-	tcp := func(addr string) string {
-		ln, err := net.Listen("tcp4", addr+":0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { ln.Close() })
-		go func() {
-			for {
-				c, err := ln.Accept()
-				if err != nil {
-					return
-				}
-				c.Close()
-			}
-		}()
-		return ln.Addr().String()
-	}
-	port := func(a string) uint16 { return netip.MustParseAddrPort(a).Port() }
-	asked, reallowed, other := tcp("127.0.0.1"), tcp("127.0.0.1"), tcp("127.0.0.2")
 	for _, d := range []string{"ok", "ask", "ask/pub"} {
 		if err := os.Mkdir(filepath.Join(dir, d), 0o755); err != nil {
 			t.Fatal(err)
@@ -430,30 +353,20 @@ func TestEnforceNetAsk(t *testing.T) {
 		}
 		t.Cleanup(func() { ln.Close() })
 	}
-	abs := fmt.Sprintf("hallpass-test-%d-", os.Getpid())
-	for _, n := range []string{"ok", "no", "noyes"} {
-		ln, err := net.Listen("unix", "@"+abs+n)
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { ln.Close() })
-	}
 
 	l, err := Load(true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer l.Close()
-	// s: rules on addresses; any: rules for every destination; tie: an
-	// ask and an allow for every unix socket.
+	// s: rules on paths; any: an allow for every unix socket; tie: an ask
+	// and an allow for every unix socket.
 	s, any, tie := newSession(t, l), newSession(t, l), newSession(t, l)
 	for _, x := range []*Session{s, any, tie} {
 		if err := x.Mediate(true, false, true); err != nil {
 			t.Fatal(err)
 		}
 	}
-	lo8, lo1 := netip.MustParsePrefix("127.0.0.0/8"), netip.MustParsePrefix("127.0.0.1/32")
-	// Depths as rules.ObjectMatch.Depth.
 	if err := s.Sync([]Rule{devNull,
 		{Path: dir, Tree: true, Net: true},
 		{Path: dir + "/ask", Tree: true, Net: true, Ask: true},
@@ -461,41 +374,16 @@ func TestEnforceNetAsk(t *testing.T) {
 	}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SyncNet(NetRules{
-		Inet: []InetRule{
-			{Prefix: lo8, Depth: 421},
-			{Prefix: lo1, Ask: true, Depth: 517},
-			{Prefix: lo1, PortLo: port(reallowed), PortHi: port(reallowed), Proto: unix.IPPROTO_TCP, Depth: 520},
-		},
-		Abstract: []AbstractRule{
-			{Name: abs, Prefix: true},
-			{Name: abs + "no", Prefix: true, Ask: true},
-			{Name: abs + "noyes"},
-		},
-	}); err != nil {
-		t.Fatal(err)
-	}
 	if err := any.Sync([]Rule{devNull, {Path: dir + "/ask", Tree: true, Net: true, Ask: true}}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := any.SyncNet(NetRules{
-		Inet: []InetRule{
-			{},
-			{Ask: true},
-			{Prefix: lo1, PortLo: port(reallowed), PortHi: port(reallowed), Depth: 519},
-		},
-		Abstract: []AbstractRule{{Name: abs + "no", Prefix: true, Ask: true}},
-		AnyUnix:  []UnixAnyRule{{}},
-	}); err != nil {
+	if err := any.SyncUnix(UnixRules{AnyUnix: []UnixAnyRule{{}}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := tie.Sync([]Rule{devNull, {Path: dir + "/ok", Tree: true, Net: true}}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := tie.SyncNet(NetRules{
-		Abstract: []AbstractRule{{Name: abs + "ok"}},
-		AnyUnix:  []UnixAnyRule{{}, {Ask: true}},
-	}); err != nil {
+	if err := tie.SyncUnix(UnixRules{AnyUnix: []UnixAnyRule{{}, {Ask: true}}}); err != nil {
 		t.Fatal(err)
 	}
 	go s.Events(func(e Event) { t.Logf("event: %+v %+v %+v", e, e.Inet, e.Unix) })
@@ -504,15 +392,9 @@ func TestEnforceNetAsk(t *testing.T) {
 		op               string
 		ok, anyOK, tieOK bool // in s, any, tie
 	}{
-		{"connect " + asked, false, false, false},
-		{"connect " + reallowed, true, true, false},
-		{"connect " + other, true, false, false},
 		{"unix " + dir + "/ok/s", true, true, true},
 		{"unix " + dir + "/ask/s", false, false, false},
 		{"unix " + dir + "/ask/pub/s", true, false, false},
-		{"unix @" + abs + "ok", true, true, true},
-		{"unix @" + abs + "no", false, false, false},
-		{"unix @" + abs + "noyes", true, false, false},
 	}
 	var ops []string
 	for _, c := range cases {
@@ -532,115 +414,5 @@ func TestEnforceNetAsk(t *testing.T) {
 				t.Errorf("session %d: %s: %s, want ok=%v", x.id, c.op, got[i], want)
 			}
 		}
-	}
-	time.Sleep(100 * time.Millisecond) // let the events be logged
-}
-
-func TestInetTrie(t *testing.T) {
-	exp := func(time.Time) uint64 { return 7 }
-	tr, err := inetTrie(3, []InetRule{
-		{},
-		{Prefix: netip.MustParsePrefix("10.0.0.0/8"), Deny: true},
-		{Prefix: netip.MustParsePrefix("10.1.0.0/16"), Proto: 6, PortLo: 80, PortHi: 80},
-		{Prefix: netip.MustParsePrefix("10.1.0.0/16"), Proto: 6, PortLo: 80, PortHi: 80},
-		{Prefix: netip.MustParsePrefix("fd00::/8")},
-	}, exp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	count := map[uint32]int{}
-	for k, v := range tr {
-		n := 0
-		for _, e := range v.E {
-			if e.Expiry != 0 || e.Deny != 0 {
-				n++
-			}
-		}
-		count[k.Prefixlen] = n
-	}
-	// any: 1; 10/8: itself and any; 10.1/16: one merged, 10/8, any;
-	// fd00::/8: itself merged with any (same ports and protocol).
-	want := map[uint32]int{32: 1, 32 + 96 + 8: 2, 32 + 96 + 16: 3, 32 + 8: 1}
-	if fmt.Sprint(count) != fmt.Sprint(want) {
-		t.Errorf("entries per prefix length: %v, want %v", count, want)
-	}
-
-	var many []InetRule
-	for i := range netEntries + 1 {
-		many = append(many, InetRule{Prefix: netip.MustParsePrefix("10.0.0.0/8"), PortLo: uint16(i + 1), PortHi: uint16(i + 1)})
-	}
-	if _, err := inetTrie(3, many, exp); err == nil {
-		t.Error("too many rules accepted")
-	}
-}
-
-// TestInetTrieV6 checks that IPv6 prefixes do not match IPv4 addresses,
-// stored as IPv4-mapped ones in the same trie.
-func TestInetTrieV6(t *testing.T) {
-	exp := func(time.Time) uint64 { return 7 }
-	tr, err := inetTrie(3, []InetRule{
-		{PortLo: 53, PortHi: 53},
-		{Prefix: netip.MustParsePrefix("::/0"), Deny: true},
-		{Prefix: netip.MustParsePrefix("10.0.0.0/8")},
-		// IPv6, as IPv4-mapped addresses: they match nothing.
-		{Prefix: netip.PrefixFrom(netip.MustParseAddr("::ffff:0:0"), 96), Deny: true},
-		{Prefix: netip.PrefixFrom(netip.MustParseAddr("::ffff:10.0.0.0"), 104), Deny: true},
-	}, exp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	type entry struct {
-		deny     bool
-		lo       uint16
-		expiring bool
-	}
-	got := map[string][]entry{}
-	for k, v := range tr {
-		p := netip.PrefixFrom(netip.AddrFrom16(k.Addr), int(k.Prefixlen)-32)
-		for _, e := range v.E {
-			if e.Expiry != 0 || e.Deny != 0 {
-				got[p.String()] = append(got[p.String()], entry{e.Deny != 0, e.PortLo, e.Expiry != 0})
-			}
-		}
-		if _, ok := got[p.String()]; !ok {
-			got[p.String()] = nil
-		}
-	}
-	slices.SortFunc(got["::/0"], func(a, b entry) int { return int(a.lo) - int(b.lo) })
-	slices.SortFunc(got["::ffff:10.0.0.0/104"], func(a, b entry) int { return int(a.lo) - int(b.lo) })
-	want := map[string][]entry{
-		"::/0":                {{deny: true}, {lo: 53, expiring: true}},
-		"::ffff:0.0.0.0/96":   {{lo: 53, expiring: true}},
-		"::ffff:10.0.0.0/104": {{expiring: true}, {lo: 53, expiring: true}},
-	}
-	if fmt.Sprint(got) != fmt.Sprint(want) {
-		t.Errorf("entries:\n%v\nwant\n%v", got, want)
-	}
-}
-
-func TestAbstractTrie(t *testing.T) {
-	exp := func(time.Time) uint64 { return 7 }
-	tr, err := abstractTrie(3, []AbstractRule{
-		{Name: "a", Prefix: true},
-		{Name: "ab"},
-		{Name: "abc", Deny: true},
-	}, exp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	count := map[uint32]int{}
-	for k, v := range tr {
-		n := 0
-		for _, e := range v.E {
-			if e.Expiry != 0 || e.Deny != 0 {
-				n++
-			}
-		}
-		count[k.Prefixlen] = n
-	}
-	// "ab" exact is not copied to "abc".
-	want := map[uint32]int{40: 1, 48: 2, 56: 2}
-	if fmt.Sprint(count) != fmt.Sprint(want) {
-		t.Errorf("entries per prefix length: %v, want %v", count, want)
 	}
 }

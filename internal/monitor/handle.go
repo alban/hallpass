@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -352,30 +353,34 @@ func (m *Monitor) open(l *listener, n seccomp.Notif, syscall string, op rules.Op
 
 // allow continues the syscall. once are the items allowed by a verdict or
 // the restart cache: in strict mode, the kernel is granted them for this
-// syscall first.
+// syscall first, and every inet and abstract unix destination, which it
+// has no rules for.
 func (m *Monitor) allow(l *listener, n seccomp.Notif, sc seccomp.Rule, op rules.Op, items []item, once []int) {
 	if m.kernel != nil {
 		m.checkMounts(l)
-		if len(once) > 0 {
-			var paths []string
-			var proc lsm.ProcRule
-			var net lsm.NetGrant
-			for _, i := range once {
-				o := items[i].obj
-				switch {
-				case o.Proc != nil:
-					proc = lsm.ProcRule{Name: o.Proc.Name, Comm: o.Proc.Target.Chain[0].Comm}
-				case o.Path != nil:
-					paths = append(paths, o.Path.Path)
-				case o.Inet != nil:
-					net.Inet = append(net.Inet, lsm.InetDest{Addr: o.Inet.Addr, Proto: o.Inet.Proto})
-				case o.Unix != nil && o.Unix.Abstract:
+		var paths []string
+		var proc lsm.ProcRule
+		var net lsm.NetGrant
+		for i, it := range items {
+			o := it.obj
+			switch {
+			case o.Inet != nil:
+				net.Inet = append(net.Inet, lsm.InetDest{Addr: o.Inet.Addr, Proto: o.Inet.Proto})
+			case o.Unix != nil && o.Unix.Abstract:
+				if net.Abstract == nil {
 					name := o.Unix.Name
 					net.Abstract = &name
-				case o.Unix != nil:
-					paths = append(paths, o.Unix.Path)
 				}
+			case !slices.Contains(once, i):
+			case o.Proc != nil:
+				proc = lsm.ProcRule{Name: o.Proc.Name, Comm: o.Proc.Target.Chain[0].Comm}
+			case o.Path != nil:
+				paths = append(paths, o.Path.Path)
+			case o.Unix != nil:
+				paths = append(paths, o.Unix.Path)
 			}
+		}
+		if paths != nil || proc.Name != "" || net.Inet != nil || net.Abstract != nil {
 			if err := m.kernel.GrantOnce(int(n.PID), paths, proc, net); err != nil {
 				m.warn("strict mode: allow once: " + err.Error())
 			}

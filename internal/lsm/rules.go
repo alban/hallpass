@@ -280,9 +280,6 @@ func (s *Session) procKey(name, comm string) hallpassProcKey {
 // thread can use it. It must be called before the syscall is continued.
 // Unix sockets bound to a path are granted with paths.
 func (s *Session) GrantOnce(tid int, paths []string, proc ProcRule, net NetGrant) error {
-	if len(net.Inet) > len(hallpassHpGrant{}.Inet) {
-		return fmt.Errorf("allow once: too many addresses (%d)", len(net.Inet))
-	}
 	if net.Abstract != nil && len(*net.Abstract) >= len(hallpassHpGrant{}.Abstract) {
 		return fmt.Errorf("allow once: abstract unix name too long")
 	}

@@ -505,3 +505,72 @@ H tc connect %[1]s
 		}
 	}
 }
+
+// mmsghdr is struct mmsghdr.
+type mmsghdr struct {
+	hdr unix.Msghdr
+	len uint32
+	_   uint32
+}
+
+// sendmmsgHelper sends a datagram to each of addrs with sendmmsg, sending
+// again what is left after a partial send, and prints the counts sent.
+func sendmmsgHelper(addrs []string) int {
+	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM, 0)
+	if err != nil {
+		fmt.Println("sendmmsg:", err)
+		return 1
+	}
+	b := []byte("x")
+	iov := unix.Iovec{Base: &b[0]}
+	iov.SetLen(1)
+	msgs := make([]mmsghdr, len(addrs))
+	for i, a := range addrs {
+		sa := sockaddr4(a)
+		msgs[i].hdr = unix.Msghdr{Name: &sa[0], Namelen: uint32(len(sa)), Iov: &iov}
+		msgs[i].hdr.SetIovlen(1)
+	}
+	var sent []string
+	for len(msgs) > 0 {
+		r, _, errno := unix.Syscall6(unix.SYS_SENDMMSG, uintptr(fd), uintptr(unsafe.Pointer(&msgs[0])), uintptr(len(msgs)), 0, 0, 0)
+		if errno != 0 {
+			sent = append(sent, unix.ErrnoName(errno))
+			break
+		}
+		sent = append(sent, fmt.Sprint(r))
+		msgs = msgs[r:]
+	}
+	fmt.Println("sent=" + strings.Join(sent, "+"))
+	return 0
+}
+
+// TestNetSendmmsg sends to more destinations than a strict grant holds,
+// which the kernel splits.
+func TestNetSendmmsg(t *testing.T) {
+	for _, mode := range modes(t) {
+		t.Run(mode, func(t *testing.T) {
+			e := newEnv(t)
+			var addrs []string
+			for range 5 {
+				c, err := net.ListenPacket("udp4", "127.0.0.1:0")
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer c.Close()
+				addrs = append(addrs, c.LocalAddr().String())
+			}
+			c := e.cmd(`HALLPASS_E2E_HELPER=sendmmsg "$HP_SELF" `+strings.Join(addrs, ","),
+				"--allow-net=udp:127.0.0.1", "--prompt=deny", "--mediate=write,exec,connect", "--mode="+mode)
+			self, err := os.Executable()
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.Env = append(c.Env, "HP_SELF="+self)
+			out, err := c.CombinedOutput()
+			want := map[string]string{"lite": "sent=5\n", "strict": "sent=4+1\n"}[mode]
+			if err != nil || !strings.Contains(string(out), want) {
+				t.Errorf("%v: output lacks %q:\n%s", err, want, out)
+			}
+		})
+	}
+}

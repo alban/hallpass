@@ -15,9 +15,10 @@ import (
 // network rule every network op, and an exec rule is for exec alone and
 // cannot ask (a program no rule allows is asked anyway). An ask rule
 // denies what it matches in the kernel, but for more specific allows and
-// the one-time grants of prompts. Network rules go to net, but for unix
-// socket paths (a Rule with Net).
-func toLSM(r rules.Rule, net *lsm.NetRules) (*lsm.Rule, *lsm.ProcRule, error) {
+// the one-time grants of prompts. Inet and abstract unix destinations
+// have no rules in the kernel: the monitor grants each syscall it lets
+// through (allow). Rules for any unix socket go to u.
+func toLSM(r rules.Rule, u *lsm.UnixRules) (*lsm.Rule, *lsm.ProcRule, error) {
 	deny, ask := r.Verdict == rules.Deny, r.Verdict == rules.Ask
 	if o := r.Object; o.IsNet() {
 		if r.Ops&rules.OpNet != rules.OpNet {
@@ -25,20 +26,14 @@ func toLSM(r rules.Rule, net *lsm.NetRules) (*lsm.Rule, *lsm.ProcRule, error) {
 		}
 		switch {
 		case o.AnyNet:
-			net.Inet = append(net.Inet, lsm.InetRule{Deny: deny, Ask: ask, Expires: r.Expires})
-			net.AnyUnix = append(net.AnyUnix, lsm.UnixAnyRule{Deny: deny, Ask: ask, Expires: r.Expires})
+			u.AnyUnix = append(u.AnyUnix, lsm.UnixAnyRule{Deny: deny, Ask: ask, Expires: r.Expires})
 		case o.OwnListener:
 			if deny || ask {
 				return nil, nil, fmt.Errorf("%w: %+v", ErrUnsupported, r)
 			}
 			// Unlike other rules, it does not expire.
-			net.OwnListeners = true
-		case o.Inet != nil:
-			net.Inet = append(net.Inet, lsm.InetRule{Prefix: o.Inet.Prefix, Proto: o.Inet.Proto, PortLo: o.Inet.PortLo, PortHi: o.Inet.PortHi,
-				Deny: deny, Ask: ask, Depth: uint16(o.Depth()), Expires: r.Expires})
-		case o.Unix.Abstract:
-			net.Abstract = append(net.Abstract, lsm.AbstractRule{Name: o.Unix.Name, Prefix: o.Unix.Prefix, Deny: deny, Ask: ask, Expires: r.Expires})
-		default:
+			u.OwnListeners = true
+		case o.Inet == nil && !o.Unix.Abstract:
 			return &lsm.Rule{Path: o.Unix.Path, Tree: o.Unix.Prefix, Deny: deny, Ask: ask, Net: true, Expires: r.Expires}, nil, nil
 		}
 		return nil, nil, nil
@@ -65,9 +60,9 @@ func toLSM(r rules.Rule, net *lsm.NetRules) (*lsm.Rule, *lsm.ProcRule, error) {
 func (m *Monitor) syncLocked(rs []rules.Rule) error {
 	var paths []lsm.Rule
 	var procs []lsm.ProcRule
-	var net lsm.NetRules
+	var u lsm.UnixRules
 	for _, r := range rs {
-		p, pr, err := toLSM(r, &net)
+		p, pr, err := toLSM(r, &u)
 		if err != nil {
 			return err
 		}
@@ -81,7 +76,7 @@ func (m *Monitor) syncLocked(rs []rules.Rule) error {
 	if err := m.kernel.Sync(paths, procs); err != nil {
 		return err
 	}
-	return m.kernel.SyncNet(net)
+	return m.kernel.SyncUnix(u)
 }
 
 // kernelEvent reports a decision of the BPF programs.

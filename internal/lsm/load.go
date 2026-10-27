@@ -23,32 +23,8 @@ var attachOrder = []string{
 	"hp_task_alloc", "hp_sb_alloc", "hp_sb_free", "hp_sb_kern_mount", "hp_task_kill", "hp_file_send_sigiotask",
 	"hp_file_open", "hp_path_mknod", "hp_path_mkdir", "hp_path_rmdir", "hp_path_unlink",
 	"hp_path_symlink", "hp_path_link", "hp_path_rename", "hp_path_truncate", "hp_bprm_check_security",
-	"hp_socket_post_create", "hp_sk_free", "hp_socket_connect", "hp_socket_sendmsg",
+	"hp_socket_post_create", "hp_socket_connect", "hp_socket_sendmsg",
 	"hp_unix_stream_connect", "hp_unix_may_send",
-}
-
-// tracingOrder lists the tracing programs, attached after attachOrder, with
-// their hook: the sys_exit tracepoint, then fexit of a kernel function
-// (listenHook: the hook depends on the kernel).
-var tracingOrder = []struct{ prog, hook string }{
-	{"hp_sys_exit", sysExitHook},
-	{"hp_listen", listenHook},
-}
-
-// listenHook stands for the function of hp_listen: __inet_listen_sk, which
-// MPTCP listeners go through too, else inet_listen on kernels before 6.7.
-const listenHook = "listen"
-
-// tracingHook returns the kernel function or tracepoint of hook.
-func tracingHook(kernel *btf.Spec, hook string) string {
-	if hook != listenHook {
-		return hook
-	}
-	var fn *btf.Func
-	if kernel.TypeByName("__inet_listen_sk", &fn) == nil {
-		return "__inet_listen_sk"
-	}
-	return "inet_listen"
 }
 
 func programsByName(p *hallpassPrograms) map[string]*ebpf.Program {
@@ -60,10 +36,9 @@ func programsByName(p *hallpassPrograms) map[string]*ebpf.Program {
 		"hp_path_rmdir": p.HpPathRmdir, "hp_path_unlink": p.HpPathUnlink,
 		"hp_path_symlink": p.HpPathSymlink, "hp_path_link": p.HpPathLink,
 		"hp_path_rename": p.HpPathRename, "hp_path_truncate": p.HpPathTruncate, "hp_bprm_check_security": p.HpBprmCheckSecurity,
-		"hp_socket_post_create": p.HpSocketPostCreate, "hp_sk_free": p.HpSkFree,
-		"hp_socket_connect": p.HpSocketConnect, "hp_socket_sendmsg": p.HpSocketSendmsg,
+		"hp_socket_post_create": p.HpSocketPostCreate,
+		"hp_socket_connect":     p.HpSocketConnect, "hp_socket_sendmsg": p.HpSocketSendmsg,
 		"hp_unix_stream_connect": p.HpUnixStreamConnect, "hp_unix_may_send": p.HpUnixMaySend,
-		"hp_sys_exit": p.HpSysExit, "hp_listen": p.HpListen,
 	}
 }
 
@@ -75,15 +50,6 @@ func Load(logAllowed bool) (*LSM, error) {
 		return nil, err
 	}
 	if err := spec.Variables["log_allowed"].Set(logAllowed); err != nil {
-		return nil, err
-	}
-	kernel, err := btf.LoadKernelSpec()
-	if err != nil {
-		return nil, fmt.Errorf("kernel BTF: %w", err)
-	}
-	listen := tracingHook(kernel, listenHook)
-	spec.Programs["hp_listen"].AttachTo = listen
-	if err := spec.Variables["listen_sk"].Set(listen != "inet_listen"); err != nil {
 		return nil, err
 	}
 	var objs hallpassObjects
@@ -100,10 +66,7 @@ func Load(logAllowed bool) (*LSM, error) {
 	m := &objs.hallpassMaps
 	l.members, l.protected, l.grants, l.rules, l.proc, l.events = m.Members, m.Protected, m.Grants, m.Rules, m.Proc, m.Events
 	l.cfgs = m.Sessions
-	l.inet, l.abstract = m.InetRules, m.AbstractRules
 	m.OwnedSbs.Close()
-	m.Listeners.Close()
-	m.ListenSks.Close()
 	m.Socks.Close()
 	m.Scratch.Close()
 	progs := programsByName(&objs.hallpassPrograms)
@@ -121,15 +84,12 @@ func Load(logAllowed bool) (*LSM, error) {
 		l.addLink(lk)
 	}
 	// hp_sys_exit removes each grant (GrantOnce) when its syscall returns.
-	for _, t := range tracingOrder {
-		prog := progs[t.prog]
-		lk, err := link.AttachTracing(link.TracingOptions{Program: prog})
-		if err != nil {
-			l.Close()
-			return nil, fmt.Errorf("attach %s: %w", prog, err)
-		}
-		l.addLink(lk)
+	lk, err := link.AttachTracing(link.TracingOptions{Program: objs.HpSysExit})
+	if err != nil {
+		l.Close()
+		return nil, fmt.Errorf("attach %s: %w", objs.HpSysExit, err)
 	}
+	l.addLink(lk)
 	if err := l.start(); err != nil {
 		l.Close()
 		return nil, err
@@ -155,7 +115,7 @@ func (l *LSM) start() error {
 const sysExitHook = "sys_exit"
 
 // hookIDs returns the kernel BTF IDs of the LSM hooks of attachOrder, then
-// of the hooks of tracingOrder.
+// of sys_exit.
 func hookIDs() ([]btf.TypeID, []string, error) {
 	spec, err := loadHallpass()
 	if err != nil {
@@ -165,8 +125,8 @@ func hookIDs() ([]btf.TypeID, []string, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("kernel BTF: %w", err)
 	}
-	ids := make([]btf.TypeID, len(attachOrder), len(attachOrder)+len(tracingOrder))
-	hooks := make([]string, len(attachOrder), len(attachOrder)+len(tracingOrder))
+	ids := make([]btf.TypeID, len(attachOrder), len(attachOrder)+1)
+	hooks := make([]string, len(attachOrder), len(attachOrder)+1)
 	for i, name := range attachOrder {
 		ps := spec.Programs[name]
 		if ps == nil {
@@ -181,37 +141,16 @@ func hookIDs() ([]btf.TypeID, []string, error) {
 		}
 		hooks[i] = ps.AttachTo
 	}
-	for _, t := range tracingOrder {
-		name := tracingHook(kernel, t.hook)
-		if t.hook == sysExitHook {
-			name = "btf_trace_" + sysExitHook
-		}
-		typ, err := kernel.AnyTypeByName(name)
-		if err != nil {
-			return nil, nil, fmt.Errorf("hook %s: %w", t.hook, err)
-		}
-		id, err := kernel.TypeID(typ)
-		if err != nil {
-			return nil, nil, err
-		}
-		ids = append(ids, id)
-		hooks = append(hooks, tracingHook(kernel, t.hook))
-	}
-	return ids, hooks, nil
+	return append(ids, 0), append(hooks, sysExitHook), nil
 }
 
-// checkLink makes sure lk attaches a BPF-LSM program to hook (BTF ID id), a
-// program to the sys_exit tracepoint, or an fexit program to function hook,
-// so a helper cannot hand over a link that enforces nothing. It only needs
-// the link fd, no privileges.
-func checkLink(lk link.Link, hook string, id btf.TypeID, fexit bool) error {
+// checkLink makes sure lk attaches a BPF-LSM program to hook (BTF ID id), or
+// a program to the sys_exit tracepoint, so a helper cannot hand over a link
+// that enforces nothing. It only needs the link fd, no privileges.
+func checkLink(lk link.Link, hook string, id btf.TypeID) error {
 	info, err := lk.Info()
 	if err != nil {
 		return fmt.Errorf("link for %s: %w", hook, err)
-	}
-	want := ebpf.AttachLSMMac
-	if fexit {
-		want = ebpf.AttachTraceFExit
 	}
 	if hook == sysExitHook {
 		if rt := info.RawTracepoint(); info.Type != link.RawTracepointType || rt == nil || rt.Name != sysExitHook {
@@ -220,7 +159,7 @@ func checkLink(lk link.Link, hook string, id btf.TypeID, fexit bool) error {
 		return nil
 	}
 	t := info.Tracing()
-	if info.Type != link.TracingType || t == nil || uint32(t.AttachType) != uint32(want) || btf.TypeID(t.TargetBtfId) != id {
+	if info.Type != link.TracingType || t == nil || uint32(t.AttachType) != uint32(ebpf.AttachLSMMac) || btf.TypeID(t.TargetBtfId) != id {
 		return fmt.Errorf("link is not attached to %s", hook)
 	}
 	return nil
@@ -228,8 +167,8 @@ func checkLink(lk link.Link, hook string, id btf.TypeID, fexit bool) error {
 
 // maps are l's maps in the order of FDs, with their types.
 func (l *LSM) maps() ([]**ebpf.Map, []ebpf.MapType) {
-	return []**ebpf.Map{&l.members, &l.protected, &l.grants, &l.rules, &l.proc, &l.events, &l.cfgs, &l.inet, &l.abstract},
-		[]ebpf.MapType{ebpf.TaskStorage, ebpf.TaskStorage, ebpf.TaskStorage, ebpf.Hash, ebpf.Hash, ebpf.RingBuf, ebpf.Hash, ebpf.LPMTrie, ebpf.LPMTrie}
+	return []**ebpf.Map{&l.members, &l.protected, &l.grants, &l.rules, &l.proc, &l.events, &l.cfgs},
+		[]ebpf.MapType{ebpf.TaskStorage, ebpf.TaskStorage, ebpf.TaskStorage, ebpf.Hash, ebpf.Hash, ebpf.RingBuf, ebpf.Hash}
 }
 
 // FDs returns the fds that make up l, in the order FromFDs expects: the
@@ -249,7 +188,7 @@ func (l *LSM) FDs() []int {
 func FromFDs(fds []int) (*LSM, error) {
 	l := newLSM()
 	maps, want := l.maps()
-	nfds := len(want) + len(attachOrder) + len(tracingOrder)
+	nfds := len(want) + len(attachOrder) + 1
 	if len(fds) != nfds {
 		for _, fd := range fds {
 			unix.Close(fd)
@@ -270,7 +209,7 @@ func FromFDs(fds []int) (*LSM, error) {
 			}
 			l.addLink(lk)
 			j := i - len(want)
-			err = checkLink(lk, hooks[j], ids[j], j > len(attachOrder))
+			err = checkLink(lk, hooks[j], ids[j])
 			continue
 		}
 		var m *ebpf.Map
@@ -327,10 +266,7 @@ func (l *LSM) adopt() error {
 	if err := sit.Err(); err != nil {
 		return fmt.Errorf("read the session settings: %w", err)
 	}
-	if err := adoptMap(l, l.inet, "inet rules", &l.staleInet, sessionOf[hallpassInetKey, hallpassInetVal]); err != nil {
-		return err
-	}
-	return adoptMap(l, l.abstract, "abstract unix rules", &l.staleAbs, sessionOf[hallpassAbstractKey, hallpassAbstractVal])
+	return nil
 }
 
 // sessionKey is a map key with the id of its session.
@@ -339,9 +275,7 @@ type sessionKey interface {
 	session() uint32
 }
 
-func (k hallpassProcKey) session() uint32     { return k.Session }
-func (k hallpassInetKey) session() uint32     { return k.Session }
-func (k hallpassAbstractKey) session() uint32 { return k.Session }
+func (k hallpassProcKey) session() uint32 { return k.Session }
 
 // sessionOf returns the session of key k, which stale maps keep as it is.
 func sessionOf[K sessionKey, V any](k K, _ V) (uint32, K) { return k.session(), k }
@@ -383,13 +317,7 @@ func (l *LSM) DropStale() {
 	for id := range l.staleCfg {
 		_ = l.cfgs.Delete(id)
 	}
-	for _, m := range l.staleInet {
-		_ = syncMap(l.inet, m, nil, same)
-	}
-	for _, m := range l.staleAbs {
-		_ = syncMap(l.abstract, m, nil, same)
-	}
-	l.stale, l.staleProcs, l.staleCfg, l.staleInet, l.staleAbs = nil, nil, nil, nil, nil
+	l.stale, l.staleProcs, l.staleCfg = nil, nil, nil
 }
 
 // Close detaches the programs: no sandbox is restricted any more.
