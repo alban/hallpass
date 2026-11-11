@@ -25,6 +25,7 @@ import (
 
 	"github.com/alban/hallpass/internal/seccomp"
 	"github.com/alban/hallpass/internal/sessionapi"
+	"github.com/alban/hallpass/internal/version"
 )
 
 const defaultFDStore = "/run/hallpass/fd-store.sock"
@@ -38,6 +39,7 @@ commands:
   pending   list the pending requests of a session
   answer    answer a pending request: once, temp, always, group, deny or never
   ready     exit 0 if the node agent is ready (its readiness probe)
+  version   print hallpass-node's version
 
 Run "hallpass-node <command> -h" for the flags of a command.
 `
@@ -61,6 +63,9 @@ func main() {
 		err = cmdAnswer(args)
 	case "ready":
 		err = cmdReady(args)
+	case "version", "--version":
+		fmt.Println("hallpass-node", version.String())
+		return
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 		return

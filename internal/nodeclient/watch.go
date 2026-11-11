@@ -29,6 +29,8 @@ type Session struct {
 // State is every session of a node agent, by id.
 type State struct {
 	Sessions []Session
+	// Version is the node agent's hallpass version, empty from older ones.
+	Version string
 }
 
 // Watch follows every session of the node agent behind c: it lists the sessions
@@ -62,7 +64,7 @@ func Watch(ctx context.Context, c pb.SessionClient, interval time.Duration, onCh
 		if err != nil {
 			return err
 		}
-		if w.sync(ctx, l.Sessions) || first {
+		if w.sync(ctx, l.GetVersion(), l.Sessions) || first {
 			w.notify()
 		}
 		first = false
@@ -80,6 +82,7 @@ type watcher struct {
 
 	mu       sync.Mutex
 	sessions map[string]*watched
+	version  string
 }
 
 type watched struct {
@@ -98,11 +101,12 @@ func (w *watcher) notify() {
 }
 
 // sync starts following the listed sessions not followed yet, and drops
-// the others. It reports whether the sessions changed.
-func (w *watcher) sync(ctx context.Context, infos []*pb.SessionInfo) bool {
+// the others. It reports whether the sessions or the version changed.
+func (w *watcher) sync(ctx context.Context, version string, infos []*pb.SessionInfo) bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	changed := false
+	changed := version != w.version
+	w.version = version
 	listed := map[string]bool{}
 	for _, info := range infos {
 		listed[info.Id] = true
@@ -186,7 +190,7 @@ func (w *watcher) follow(ctx context.Context, id string, s *watched) {
 func (w *watcher) state() State {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	var st State
+	st := State{Version: w.version}
 	for _, s := range w.sessions {
 		out := Session{Info: s.info, Rules: s.rules, Generation: s.gen}
 		for _, r := range s.pending {
@@ -211,7 +215,8 @@ func (st State) MarshalJSON() ([]byte, error) {
 	}
 	out := struct {
 		Sessions []session `json:"sessions"`
-	}{Sessions: []session{}}
+		Version  string    `json:"version"`
+	}{Sessions: []session{}, Version: st.Version}
 	for _, s := range st.Sessions {
 		js := session{Pending: []json.RawMessage{}, Rules: []json.RawMessage{}, Generation: strconv.FormatUint(s.Generation, 10)}
 		var err error

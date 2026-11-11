@@ -269,6 +269,7 @@ export function HallpassView() {
             { label: 'Pod', getter: (a: AgentState) => a.pod },
             { label: 'Status', getter: (a: AgentState) => <AgentStatus agent={a} /> },
             { label: 'Sessions', getter: (a: AgentState) => a.sessions.length },
+            { label: 'Version', getter: (a: AgentState) => a.version || 'unknown' },
           ]}
           data={hp.agents}
           emptyMessage="No agent."

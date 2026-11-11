@@ -27,6 +27,7 @@ import (
 	"github.com/alban/hallpass/internal/monitor"
 	"github.com/alban/hallpass/internal/rulepb"
 	"github.com/alban/hallpass/internal/rules"
+	"github.com/alban/hallpass/internal/version"
 )
 
 // SocketDir returns the directory holding the sessions' sockets.
@@ -202,7 +203,7 @@ func (s *service) Info(ctx context.Context, _ *pb.InfoRequest) (*pb.SessionInfo,
 }
 
 func (s *service) List(context.Context, *pb.ListRequest) (*pb.ListReply, error) {
-	return &pb.ListReply{Sessions: s.list()}, nil
+	return &pb.ListReply{Sessions: s.list(), Version: version.String()}, nil
 }
 
 func (e entry) snapshot() *pb.SnapshotReply {

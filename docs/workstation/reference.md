@@ -68,6 +68,7 @@ See [Where to answer](../answers/clients.md); `--prompt=deny` and `--prompt=allo
 ```
       --log FILE           append one JSON line per mediated syscall to FILE
       --wait WHAT          main (default): exit with the command | all: keep supervising its background processes (Linux 5.9+)
+      --version            print hallpass's version and exit
 ```
 
 ## Subcommands

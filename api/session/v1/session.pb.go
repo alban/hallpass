@@ -258,6 +258,7 @@ func (*ListRequest) Descriptor() ([]byte, []int) {
 type ListReply struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Sessions      []*SessionInfo         `protobuf:"bytes,1,rep,name=sessions,proto3" json:"sessions,omitempty"`
+	Version       string                 `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"` // the server's hallpass version (git describe); empty from older servers
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -297,6 +298,13 @@ func (x *ListReply) GetSessions() []*SessionInfo {
 		return x.Sessions
 	}
 	return nil
+}
+
+func (x *ListReply) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
 }
 
 type SessionInfo struct {
@@ -2796,9 +2804,10 @@ const file_session_proto_rawDesc = "" +
 	"\n" +
 	"\rsession.proto\x12\x13hallpass.session.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\r\n" +
 	"\vInfoRequest\"\r\n" +
-	"\vListRequest\"I\n" +
+	"\vListRequest\"c\n" +
 	"\tListReply\x12<\n" +
-	"\bsessions\x18\x01 \x03(\v2 .hallpass.session.v1.SessionInfoR\bsessions\"\xf5\x02\n" +
+	"\bsessions\x18\x01 \x03(\v2 .hallpass.session.v1.SessionInfoR\bsessions\x12\x18\n" +
+	"\aversion\x18\x02 \x01(\tR\aversion\"\xf5\x02\n" +
 	"\vSessionInfo\x12\x10\n" +
 	"\x03pid\x18\x01 \x01(\x05R\x03pid\x12\x18\n" +
 	"\acommand\x18\x02 \x03(\tR\acommand\x12\x18\n" +

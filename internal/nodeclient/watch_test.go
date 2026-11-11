@@ -32,7 +32,7 @@ type fakeNode struct {
 func (h *fakeNode) List(context.Context, *pb.ListRequest) (*pb.ListReply, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return &pb.ListReply{Sessions: h.infos}, nil
+	return &pb.ListReply{Sessions: h.infos, Version: "v1.2.3"}, nil
 }
 
 func (h *fakeNode) Snapshot(context.Context, *pb.SnapshotRequest) (*pb.SnapshotReply, error) {
@@ -124,9 +124,15 @@ func TestWatch(t *testing.T) {
 			}
 		}
 	}
-	wait("the snapshots", func(m map[string][]string) bool {
+	st := wait("the snapshots", func(m map[string][]string) bool {
 		return len(m) == 2 && len(m["a"]) == 1 && len(m["b"]) == 1
 	})
+	if st.Version != "v1.2.3" {
+		t.Errorf("version %q, want the one List returned", st.Version)
+	}
+	if b, _ := json.Marshal(st); !strings.Contains(string(b), `"version":"v1.2.3"`) {
+		t.Errorf("JSON without the version: %s", b)
+	}
 
 	h.events["a"] <- &pb.Event{Kind: &pb.Event_Opened{Opened: &pb.Request{Id: 2, Prompt: &pb.Prompt{Path: "/x"}}}}
 	h.events["a"] <- &pb.Event{Kind: &pb.Event_Closed{Closed: &pb.Closed{Id: 1}}}
@@ -138,7 +144,7 @@ func TestWatch(t *testing.T) {
 	h.rules = []*pb.Rule{{Id: 7, Label: "r", Spec: "allow write /w/**"}}
 	h.mu.Unlock()
 	h.events["b"] <- &pb.Event{Kind: &pb.Event_Rules{Rules: 2}}
-	st := wait("the rules", func(map[string][]string) bool { return true })
+	st = wait("the rules", func(map[string][]string) bool { return true })
 	for len(st.Sessions) < 2 || len(st.Sessions[1].Rules) == 0 {
 		st = wait("the rules", func(map[string][]string) bool { return true })
 	}

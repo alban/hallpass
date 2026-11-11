@@ -95,6 +95,7 @@ const state = JSON.stringify({
       pending: [{ id: '7', prompt: { op: 'write', path: '/etc/x', scope: '/etc' } }],
     },
   ],
+  version: 'v1.2.3',
 });
 
 describe('ClusterStore', () => {
@@ -117,6 +118,7 @@ describe('ClusterStore', () => {
     const a = s.getSnapshot()[0];
     expect(a.connected).toBe(true);
     expect(a.sessions[0].info.id).toBe('s1');
+    expect(a.version).toBe('v1.2.3');
     expect(pendingCount(s.getSnapshot())).toBe(1);
     expect(notified).toBeGreaterThan(1);
 
@@ -166,7 +168,9 @@ describe('ClusterStore', () => {
     f.timers[f.timers.length - 1].f();
     await tick();
     f.conns[f.conns.length - 1].cb.onState(state);
+    expect(s.getSnapshot()[0].version).toBe('v1.2.3');
     f.conns[f.conns.length - 1].cb.onClose('again');
+    expect(s.getSnapshot()[0].version).toBeUndefined();
     expect(f.timers[f.timers.length - 1].ms).toBe(1000);
   });
 

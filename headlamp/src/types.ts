@@ -71,6 +71,7 @@ export interface Session {
 
 export interface NodeState {
   sessions?: Session[];
+  version?: string; // of the agent's hallpass; empty from older agents
 }
 
 // An agent pod, one per node.
@@ -83,6 +84,7 @@ export interface AgentState extends Agent {
   connected: boolean;
   error?: string;
   sessions: Session[];
+  version?: string;
 }
 
 export type Answer = 'once' | 'temp' | 'always' | 'group' | 'deny' | 'never' | 'grant';

@@ -29,6 +29,7 @@ import (
 	"github.com/alban/hallpass/internal/sessionapi"
 	"github.com/alban/hallpass/internal/tty"
 	"github.com/alban/hallpass/internal/ui"
+	"github.com/alban/hallpass/internal/version"
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 )
@@ -54,7 +55,7 @@ var flagGroups = []struct {
 	{"Programs", []string{"allow-exec", "deny-exec", "group"}},
 	{"Network (experimental)", []string{"allow-net", "deny-net", "ask-net", "dns"}},
 	{"Prompts", []string{"prompt", "timeout"}},
-	{"Session", []string{"log", "wait"}},
+	{"Session", []string{"log", "wait", "version"}},
 }
 
 // printFlags prints fs's flags in flagGroups order, then any flag missing
@@ -203,11 +204,20 @@ func parseFlags(argv []string, printPolicy bool) (o options, code int, ok bool) 
 	fs.Var(&ruleFiles, "rules", "rule `file`: one rule per line, as `allow write ~/.cache/go-build/**`, `deny connect 169.254.169.254`, `allow exec @git`, or a group, `group @build /usr/bin/make /usr/bin/cc`; quote values with blanks (repeatable; see the docs, Rule files)")
 	var groupFlags listFlag
 	fs.Var(&groupFlags, "group", "a group of programs, as `@name=program,...`, offered in prompts and allowed by --allow-exec=@name (repeatable; programs as in --allow-exec, without groups); replaces the built-in group of the same name")
+	showVersion := fs.Bool("version", false, "print hallpass's version and exit")
 	if err := fs.Parse(argv); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return o, 0, false
 		}
 		return o, 2, false
+	}
+	if *showVersion {
+		v := version.String()
+		if v == "unknown" {
+			v += " (built without git information: use make)"
+		}
+		fmt.Println("hallpass", v)
+		return o, 0, false
 	}
 	var err error
 	spec := o.spec(allow, deny, ask, *mediate, allowNet, denyNet, askNet)

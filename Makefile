@@ -10,14 +10,19 @@ CI_KERNELS_IMAGE ?= ghcr.io/inspektor-gadget/ci-kernels:7.2.8-debug
 # grpcnotrace drops gRPC's golang.org/x/net/trace (and html/template): 4 MB.
 GO_TAGS ?= grpcnotrace
 
+# hallpass --version, hallpass-node version and the session API's List:
+# go build records no commit in a git worktree.
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null)
+VERSION_LDFLAGS = -X github.com/alban/hallpass/internal/version.version=$(VERSION)
+
 .PHONY: all
 all:
-	go build -tags '$(GO_TAGS)' -o hallpass ./cmd/hallpass
+	go build -tags '$(GO_TAGS)' -ldflags '$(VERSION_LDFLAGS)' -o hallpass ./cmd/hallpass
 
 # The Kubernetes node agent (docs/kubernetes.md), static.
 .PHONY: hallpass-node
 hallpass-node:
-	CGO_ENABLED=0 go build -tags '$(GO_TAGS)' -o hallpass-node ./cmd/hallpass-node
+	CGO_ENABLED=0 go build -tags '$(GO_TAGS)' -ldflags '$(VERSION_LDFLAGS)' -o hallpass-node ./cmd/hallpass-node
 
 # The advance request helper (docs/workstation/agents.md), static with
 # musl: with musl-gcc when installed (musl-tools), with Docker otherwise.

@@ -5,7 +5,7 @@
 Build the image and deploy it:
 
 ```
-docker build -f deploy/kubernetes/Dockerfile -t <registry>/hallpass-node:<tag> .
+docker build -f deploy/kubernetes/Dockerfile --build-arg VERSION=$(git describe --tags --always --dirty) -t <registry>/hallpass-node:<tag> .
 docker push <registry>/hallpass-node:<tag>
 (cd deploy/kubernetes && kustomize edit set image ghcr.io/alban/hallpass-node=<registry>/hallpass-node:<tag>)
 kubectl apply -k deploy/kubernetes

@@ -113,7 +113,7 @@ service Session {
   rpc Events(EventsRequest) returns (stream EventBatch); // EventOptions.Decided, optional snapshot first
   rpc Apply(Decision) returns (ApplyReply);            // generation, or ErrStale/ErrClosed/ErrUnsupported as status codes
   rpc Answer(AnswerRequest) returns (AnswerReply);     // a terminal answer (once, temp, always, never, deny)
-  rpc List(ListRequest) returns (ListReply);           // the sessions served (one on a session's socket)
+  rpc List(ListRequest) returns (ListReply);           // the sessions served (one on a session's socket), the server's version
 }
 ```
 

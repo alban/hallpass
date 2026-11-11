@@ -14,6 +14,7 @@ kubectl -n hallpass-system port-forward pod/hallpass-node-xxxxx 7323:7323 &
 hallpass-node sessions                              # sessions on that node
 hallpass-node pending agents/agent/agent            # namespace/pod/container, or a session id
 hallpass-node answer agents/agent/agent 1 once
+hallpass-node version                               # of the client binary
 ```
 
 The answers are the same as on a workstation: `once`, `temp` (5
@@ -139,10 +140,10 @@ It adds:
 
 - **hallpass** in the sidebar: the pending requests of the cluster, the
   sessions (pod, container, node, policy) and the agents' connection
-  state. Each request has the answer buttons `once`, `temp`, `always`,
-  `deny` and `never`; a request made in advance shows its folder, its
-  duration and the program's reason, marked as unverified, with `grant`
-  and `deny`.
+  state and version. Each request has the answer buttons `once`, `temp`,
+  `always`, `deny` and `never`; a request made in advance shows its
+  folder, its duration and the program's reason, marked as unverified,
+  with `grant` and `deny`.
 - A badge in the app bar with the number of pending requests, on every
   page. A blocked container waits for an answer.
 - A **hallpass** section in the details of a mediated pod: its policy,

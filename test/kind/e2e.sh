@@ -110,7 +110,7 @@ if [ -n "${HALLPASS_NODE_ARCHIVE:-}" ]; then
 	kind load image-archive --name "$CLUSTER" "$HALLPASS_NODE_ARCHIVE"
 else
 	log "building and loading $IMAGE"
-	docker build -q -f deploy/kubernetes/Dockerfile -t "$IMAGE" .
+	docker build -q -f deploy/kubernetes/Dockerfile --build-arg VERSION="$(git describe --tags --always --dirty)" -t "$IMAGE" .
 	kind load docker-image --name "$CLUSTER" "$IMAGE"
 fi
 [ -n "${HALLPASS_NODE_CLIENT:-}" ] || CGO_ENABLED=0 go build -o "$CLIENT" ./cmd/hallpass-node

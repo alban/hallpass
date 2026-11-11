@@ -156,11 +156,11 @@ class AgentConn {
       return;
     }
     this.failures = 0;
-    this.update({ connected: true, error: undefined, sessions: st.sessions || [] });
+    this.update({ connected: true, error: undefined, sessions: st.sessions || [], version: st.version });
   }
 
   private fail(error: string) {
-    this.update({ connected: false, error, sessions: [] });
+    this.update({ connected: false, error, sessions: [], version: undefined });
     const delay = Math.min(maxBackoff, 1000 * 2 ** this.failures);
     this.failures++;
     this.timer = this.store.deps.setTimeout(() => this.open(), delay);

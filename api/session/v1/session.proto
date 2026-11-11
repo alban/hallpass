@@ -53,6 +53,7 @@ message ListRequest {}
 
 message ListReply {
   repeated SessionInfo sessions = 1;
+  string version = 2;             // the server's hallpass version (git describe); empty from older servers
 }
 
 message SessionInfo {

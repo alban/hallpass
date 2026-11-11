@@ -553,7 +553,9 @@ design above:
   listener has none.
 - **Client.** `hallpass-node sessions|pending|answer --addr`, sessions
   named by id, id prefix or `namespace/pod/container`. Answers go
-  through `internal/answer`, shared with `hallpass`.
+  through `internal/answer`, shared with `hallpass`. `hallpass-node
+  version` prints the binary's version (`internal/version`, as
+  `hallpass --version`).
 - **RBAC.** Namespaces and `hallpasspolicies` (get, list, watch); pods
   are not read: the pod's labels and annotations come from NRI.
 - **kind.** `kindest/node:v1.37.0` ships containerd 2.3.4 with NRI on
@@ -598,7 +600,8 @@ Branch `headlamp`, on top of `nri`:
   connection would leak, since releasing one that JS still calls
   panics, and the plugin reconnects for as long as a page is open.
 - **UI.** The sidebar view has the pending requests, the sessions and
-  the agents' state; the app bar badge, the pod details section (policy,
+  the agents' state and version (`ListReply.version`, `unknown` from
+  older agents); the app bar badge, the pod details section (policy,
   pending requests, rules per container) and the pod list column
   (`N pending` or `mediated`) read the same store. The answers are those
   of `hallpass-node answer`, sent with client name `headlamp`. Not done:
@@ -661,7 +664,7 @@ Branch `headlamp`, on top of `nri`:
   with podman, with everything built elsewhere:
 
   ```sh
-  docker build -f deploy/kubernetes/Dockerfile -t hallpass-node:e2e .
+  docker build -f deploy/kubernetes/Dockerfile --build-arg VERSION=$(git describe --tags --always --dirty) -t hallpass-node:e2e .
   docker save -o hallpass-node.tar hallpass-node:e2e
   CGO_ENABLED=0 go build ./cmd/hallpass-node
   CGO_ENABLED=0 go build ./demos/strict/race
