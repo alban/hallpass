@@ -104,6 +104,8 @@ func decidedEntry(d *monitor.Decided, audit bool) logEntry {
 			return e
 		case "unresolvable":
 			e.Reason = "unresolvable path"
+		case "probe":
+			e.Reason = "address sorting probe: sends fail"
 		case "exec-retry":
 			asked, retried = true, true
 		case "restarted":

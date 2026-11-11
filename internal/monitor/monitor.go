@@ -173,7 +173,9 @@ type Reason struct {
 	// path, continued for BPF to decide), "unresolvable" (the path could
 	// not be resolved: denied), "exec-retry" (a verdict denied the same
 	// program to the same thread just before: execvp trying the next
-	// $PATH directory).
+	// $PATH directory), "no-proxy" (port 443 of a session whose http
+	// rules or credentials have no proxy: denied), "probe" (an address
+	// sorting probe, emulated: see probe).
 	Builtin string
 	Died    bool // the requesting task died
 }

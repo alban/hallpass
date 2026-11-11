@@ -510,7 +510,9 @@ type Reason struct {
 	// unreadable path, continued for BPF to decide), "unresolvable" (the
 	// path could not be resolved: denied), "execve" (continued: exec not
 	// mediated), "exec-retry" (a verdict denied the same program to the
-	// same thread just before: execvp trying the next $PATH directory)
+	// same thread just before: execvp trying the next $PATH directory),
+	// "no-proxy" (port 443 without the session's proxy: denied), "probe"
+	// (an address sorting probe, emulated)
 	Died bool // the requesting task died
 }
 

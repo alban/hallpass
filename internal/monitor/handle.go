@@ -272,6 +272,9 @@ func (m *Monitor) decide(l *listener, n seccomp.Notif, sc seccomp.Rule, op rules
 		m.allow(l, n, sc, op, items, nil)
 		return
 	}
+	if op == rules.OpConnect && m.probe(l, n, sc, items) {
+		return
+	}
 	key := restartKey(n, paths)
 	if op == rules.OpExec && !unknown && m.restarted(execRetryKey(n, paths)) {
 		m.deny(l, n, sc, op, objects(items), only(len(items), undecided[0], Reason{Builtin: "exec-retry"}))
