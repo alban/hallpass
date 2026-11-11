@@ -20,12 +20,14 @@ import (
 	"github.com/alban/hallpass/internal/defaults"
 	"github.com/alban/hallpass/internal/dnsnames"
 	"github.com/alban/hallpass/internal/egress"
+	"github.com/alban/hallpass/internal/egress/profiles"
 	"github.com/alban/hallpass/internal/launch"
 	"github.com/alban/hallpass/internal/lsm"
 	"github.com/alban/hallpass/internal/monitor"
 	"github.com/alban/hallpass/internal/procfs"
 	"github.com/alban/hallpass/internal/seccomp"
 	"github.com/alban/hallpass/internal/sessionapi"
+	"github.com/alban/hallpass/internal/sessionnet"
 	"github.com/alban/hallpass/internal/tty"
 	"github.com/alban/hallpass/internal/ui"
 	"golang.org/x/sys/unix"
@@ -182,21 +184,22 @@ func runSession(cfg sessionConfig) (int, error) {
 	}
 
 	environ := os.Environ()
-	if hosts := httpHosts(cfg.Defaults.Rules()); len(hosts) > 0 || len(cfg.Credentials) > 0 {
+	if len(sessionnet.Hosts(cfg.Defaults.Rules(), nil)) > 0 || len(cfg.Credentials) > 0 {
 		if mcfg.Names == nil {
 			return 0, errors.New("http rules and credentials need hallpass to name addresses (--dns=observe, and connect in --mediate)")
 		}
-		creds, err := loadCredentials(cfg.Profiles, cfg.Credentials)
+		creds, err := profiles.LoadSession(cfg.Profiles, cfg.Credentials)
 		if err != nil {
 			return 0, err
 		}
+		hosts := sessionnet.Hosts(cfg.Defaults.Rules(), creds.Credentials)
 		env, stop, err := startProxy(m, hosts, creds, s.notice)
 		if err != nil {
 			return 0, fmt.Errorf("https proxy: %w", err)
 		}
 		defer stop()
-		environ = creds.strip(environ)
-		cfg.Env = append(append(cfg.Env, env...), creds.env...)
+		environ = creds.StripEnv(environ)
+		cfg.Env = append(append(cfg.Env, env...), creds.Env...)
 	}
 
 	spec := launch.ProcSpec{

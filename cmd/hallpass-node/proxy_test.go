@@ -4,7 +4,6 @@
 package main
 
 import (
-	"context"
 	"crypto/x509"
 	"io"
 	"log/slog"
@@ -29,8 +28,13 @@ import (
 func TestTrust(t *testing.T) {
 	trustRoot = t.TempDir()
 	ts := trustStore{upstream: x509.NewCertPool()}
+	gh, err := rules.ParseHTTP("GET", "https://api.github.com/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ghRules := []rules.Rule{{Ops: rules.OpHTTP, Object: rules.ObjectMatch{HTTP: gh}, Verdict: rules.Allow}}
 	adj := &api.ContainerAdjustment{}
-	if err := ts.prepare("c1", []egress.Host{{Name: "api.github.com"}}, nil, adj); err != nil {
+	if err := ts.prepare("c1", ghRules, nil, adj); err != nil {
 		t.Fatal(err)
 	}
 	if len(adj.Mounts) != 1 || adj.Mounts[0].Destination != trustMount || adj.Mounts[0].Source != filepath.Join(trustRoot, "c1") ||
@@ -48,22 +52,21 @@ func TestTrust(t *testing.T) {
 		t.Error("a path as an id")
 	}
 	// Without DNS names, no proxy.
-	if _, err := ts.start("c1", os.Getpid(), nil, nil, nil, nil); err == nil {
+	if _, err := ts.start("c1", os.Getpid(), nil); err == nil {
 		t.Error("a proxy without names")
 	}
-	if p, err := ts.start("c2", os.Getpid(), nil, nil, nil, nil); p != nil || err != nil {
+	if p, err := ts.start("c2", os.Getpid(), nil); p != nil || err != nil {
 		t.Errorf("no CA: %v %v", p, err)
 	}
 	// With names (a dnsState of the test's own namespace), the bundle
 	// gets this process's roots.
-	if err := ts.prepare("c3", []egress.Host{{Name: "api.github.com"}}, nil, &api.ContainerAdjustment{}); err != nil {
+	if err := ts.prepare("c3", ghRules, nil, &api.ContainerAdjustment{}); err != nil {
 		t.Fatal(err)
 	}
-	decide := func(context.Context, any, egress.Request) (bool, string) { return false, "" }
 	if _, err := containerRoots(os.Getpid()); err != nil {
 		t.Skipf("no roots on this host: %v", err)
 	}
-	p, err := ts.start("c3", os.Getpid(), &dnsState{}, decide, nil, nil)
+	p, err := ts.start("c3", os.Getpid(), &dnsState{})
 	if err != nil {
 		t.Fatal(err)
 	}

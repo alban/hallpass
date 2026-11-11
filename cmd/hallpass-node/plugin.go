@@ -17,6 +17,7 @@ import (
 	"github.com/alban/hallpass/internal/egress"
 	"github.com/alban/hallpass/internal/ociseccomp"
 	"github.com/alban/hallpass/internal/seccomp"
+	"github.com/alban/hallpass/internal/sessionnet"
 )
 
 // PolicyAnnotation opts a pod in, naming its HallpassPolicy.
@@ -134,8 +135,7 @@ func (p *plugin) adjust(pod *api.PodSandbox, ctr *api.Container) (*api.Container
 	}
 	adj := &api.ContainerAdjustment{}
 	adj.SetLinuxSeccompPolicy(api.FromOCILinuxSeccomp(prof))
-	hosts := httpHosts(pol.Rules)
-	if (len(hosts) > 0 || len(pol.Credentials) > 0) && cats&seccomp.Connect != 0 && p.trust != nil {
+	if (len(sessionnet.Hosts(pol.Rules, nil)) > 0 || len(pol.Credentials) > 0) && cats&seccomp.Connect != 0 && p.trust != nil {
 		creds, err := p.brokerCredentials(pod.GetNamespace(), pol, adj)
 		if err != nil {
 			// Fail closed: a credential that injects nothing must
@@ -144,7 +144,7 @@ func (p *plugin) adjust(pod *api.PodSandbox, ctr *api.Container) (*api.Container
 		}
 		// The proxy's CA, trusted through a read-only mount and the
 		// variables of the tools.
-		if err := p.trust.prepare(ctr.GetId(), hosts, creds, adj); err != nil {
+		if err := p.trust.prepare(ctr.GetId(), pol.Rules, creds, adj); err != nil {
 			return nil, fmt.Errorf("hallpass: https proxy: %w", err)
 		}
 	}

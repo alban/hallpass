@@ -24,6 +24,7 @@ import (
 	"github.com/alban/hallpass/internal/rules"
 	"github.com/alban/hallpass/internal/seccomp"
 	"github.com/alban/hallpass/internal/sessionapi"
+	"github.com/alban/hallpass/internal/sessionnet"
 	"github.com/alban/hallpass/internal/ui"
 )
 
@@ -387,12 +388,8 @@ func (s *session) credentialLeak(owner any, r egress.Request, name string) {
 	}
 	s.leaks[key] = now
 	s.mu.Unlock()
-	who := ""
-	if subj, ok := owner.(rules.Subject); ok && len(subj.Chain) > 0 {
-		who = subj.Chain[0].Comm + " "
-	}
 	s.log.Warn("credential leak blocked", "credential", name, "host", r.Host, "method", r.Method, "path", r.Path)
-	s.event(true, reasonCredentialLeak, fmt.Sprintf("%ssent the %s credential to %s, not one of its hosts (%s %s): refused", who, name, r.Host, r.Method, r.URL()))
+	s.event(true, reasonCredentialLeak, sessionnet.LeakMessage(owner, r, name)+": refused")
 }
 
 // denyWithoutProxy denies port 443 to s, whose policy has http rules

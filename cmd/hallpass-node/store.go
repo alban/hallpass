@@ -21,6 +21,7 @@ import (
 	"github.com/alban/hallpass/internal/lsm"
 	"github.com/alban/hallpass/internal/rules"
 	"github.com/alban/hallpass/internal/seccomp"
+	"github.com/alban/hallpass/internal/sessionnet"
 )
 
 // The fd-store keeps, for each session, an entry keyed by container id:
@@ -232,7 +233,7 @@ func (a *agent) adopt(c *fdstore.Client, e fdstore.Entry) {
 	s.start = sv.Start
 	// The proxy, its CA and the DNS names are not kept across restarts.
 	s.trustID, s.trust = e.Key, a.trust
-	if len(httpHosts(pol.Rules)) > 0 {
+	if len(sessionnet.Hosts(pol.Rules, nil)) > 0 {
 		s.denyWithoutProxy()
 	}
 	a.mu.Lock()

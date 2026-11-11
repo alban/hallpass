@@ -19,6 +19,7 @@
 package profiles
 
 import (
+	"context"
 	"crypto/rand"
 	"embed"
 	"errors"
@@ -32,6 +33,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/alban/hallpass/internal/egress"
 	"github.com/alban/hallpass/internal/rules"
@@ -476,4 +478,47 @@ func (p *Profile) Broker(value string) (*Brokered, error) {
 		b.Strip = append(b.Strip, p.Source.Arg)
 	}
 	return b, nil
+}
+
+// Session is the credentials of a session, brokered: what the proxy puts
+// on the wire, and what the sandbox's environment gets instead.
+type Session struct {
+	Credentials []egress.Credential
+	Env         []string // KEY=value, set in the sandbox
+	Strip       []string // removed from the sandbox's environment
+}
+
+// LoadSession loads the profiles refs (Load, from dir) and gets their
+// values from their sources: the values stay in memory, the sandbox gets
+// placeholders.
+func LoadSession(dir string, refs []string) (*Session, error) {
+	s := &Session{}
+	for _, ref := range refs {
+		p, err := Load(dir, ref)
+		if err != nil {
+			return nil, err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		value, err := p.Source.Get(ctx)
+		cancel()
+		if err != nil {
+			return nil, fmt.Errorf("credential %s: %w", ref, err)
+		}
+		b, err := p.Broker(value)
+		if err != nil {
+			return nil, err
+		}
+		s.Credentials = append(s.Credentials, b.Credential)
+		s.Env = append(s.Env, b.Env...)
+		s.Strip = append(s.Strip, b.Strip...)
+	}
+	return s, nil
+}
+
+// StripEnv returns environ without the variables of s.Strip.
+func (s *Session) StripEnv(environ []string) []string {
+	return slices.DeleteFunc(slices.Clone(environ), func(kv string) bool {
+		k, _, _ := strings.Cut(kv, "=")
+		return slices.Contains(s.Strip, k)
+	})
 }

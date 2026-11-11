@@ -14,10 +14,8 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/containerd/nri/pkg/api"
 	"golang.org/x/sys/unix"
@@ -26,6 +24,7 @@ import (
 	"github.com/alban/hallpass/internal/egress"
 	"github.com/alban/hallpass/internal/netns"
 	"github.com/alban/hallpass/internal/rules"
+	"github.com/alban/hallpass/internal/sessionnet"
 )
 
 // trustRoot holds a directory per container with http rules, on the
@@ -35,9 +34,6 @@ var trustRoot = "/run/hallpass/trust"
 
 // trustMount is where a container finds its bundles.
 const trustMount = "/run/hallpass-trust"
-
-// caLife bounds a container CA's validity.
-const caLife = 365 * 24 * time.Hour
 
 // trustStore keeps the CAs made when the containers are created, until
 // their sessions start (CreateContainer, then agent.attach).
@@ -59,37 +55,16 @@ type pendingTrust struct {
 	creds []egress.Credential
 }
 
-// httpHosts returns the hosts of the http rules of rs.
-func httpHosts(rs []rules.Rule) []egress.Host {
-	var out []egress.Host
-	for _, r := range rs {
-		if h := r.Object.HTTP; h != nil {
-			e := egress.Host{Name: h.Host, Suffix: h.HostSuffix}
-			if !slices.Contains(out, e) {
-				out = append(out, e)
-			}
-		}
-	}
-	return out
-}
-
-// prepare makes the CA of container id for hosts and the hosts of creds,
-// and its directory, with the CA alone for now (the bundle gets the
-// container's own roots when its session starts, see start), and adds to
-// adj the read-only mount of the directory and the variables naming the
-// bundles. creds are put on the wire by the proxy.
-func (t *trustStore) prepare(id string, hosts []egress.Host, creds []egress.Credential, adj *api.ContainerAdjustment) error {
+// prepare makes the CA of container id for the hosts of rs and creds
+// (sessionnet.Hosts), and its directory, with the CA alone for now (the
+// bundle gets the container's own roots when its session starts, see
+// start), and adds to adj the read-only mount of the directory and the
+// variables naming the bundles. creds are put on the wire by the proxy.
+func (t *trustStore) prepare(id string, rs []rules.Rule, creds []egress.Credential, adj *api.ContainerAdjustment) error {
 	if id == "" || strings.ContainsAny(id, "/.") {
 		return fmt.Errorf("container id %q", id)
 	}
-	for _, c := range creds {
-		for _, h := range c.Hosts {
-			if !slices.Contains(hosts, h) {
-				hosts = append(hosts, h)
-			}
-		}
-	}
-	ca, err := egress.NewCA("hallpass container "+id, hosts, caLife)
+	ca, err := sessionnet.NewCA("hallpass container "+id, sessionnet.Hosts(rs, creds))
 	if err != nil {
 		return err
 	}
@@ -133,7 +108,7 @@ var containerBundles = []string{
 // image's own bundle, so that it trusts what it trusted, and the CA; the
 // servers are verified with t.upstream. nil without a CA (no http rules,
 // or an agent restarted since the container was created).
-func (t *trustStore) start(id string, pid int, dns *dnsState, decide egress.Decide, warn func(string), leak func(owner any, r egress.Request, name string)) (*egress.Proxy, error) {
+func (t *trustStore) start(id string, pid int, dns *dnsState) (*sessionnet.Proxy, error) {
 	t.mu.Lock()
 	pt := t.cas[id]
 	delete(t.cas, id)
@@ -155,12 +130,10 @@ func (t *trustStore) start(id string, pid int, dns *dnsState, decide egress.Deci
 	if _, err := egress.WriteTrust(filepath.Join(trustRoot, id), roots, ca); err != nil {
 		return nil, err
 	}
-	return &egress.Proxy{
+	return &sessionnet.Proxy{
 		CA:          ca,
 		Roots:       t.upstream,
-		Decide:      decide,
 		Credentials: pt.creds,
-		Leak:        leak,
 		// Servers are reached from the pod's network namespace:
 		// NetworkPolicy applies as if the container connected. A thread
 		// per dial: a slow server must not hold the DNS forwarder's.
@@ -178,7 +151,6 @@ func (t *trustStore) start(id string, pid int, dns *dnsState, decide egress.Deci
 			}
 			return c, err
 		},
-		Warn: warn,
 	}, nil
 }
 

@@ -4,7 +4,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,13 +20,13 @@ import (
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
 
-	"github.com/alban/hallpass/internal/egress"
 	"github.com/alban/hallpass/internal/fdstore"
 	"github.com/alban/hallpass/internal/lsm"
 	"github.com/alban/hallpass/internal/monitor"
 	"github.com/alban/hallpass/internal/rules"
 	"github.com/alban/hallpass/internal/seccomp"
 	"github.com/alban/hallpass/internal/sessionapi"
+	"github.com/alban/hallpass/internal/sessionnet"
 )
 
 // maxState bounds the container process state runc sends.
@@ -271,14 +270,13 @@ func (a *agent) attach(st *specs.ContainerProcessState, fd int) error {
 		return err
 	}
 	a.denyForwardersLocked(s)
-	warn := func(msg string) { a.log.Warn(msg, "container", id) }
-	proxy, err := a.trust.start(id, st.Pid, dns, func(ctx context.Context, owner any, r egress.Request) (bool, string) {
-		return s.m.DecideHTTP(ctx, owner, rules.HTTPObject{Method: r.Method, Host: r.Host, Path: r.Path})
-	}, warn, s.credentialLeak)
+	proxy, err := a.trust.start(id, st.Pid, dns)
 	switch {
 	case proxy != nil:
-		s.m.SetProxy(proxy)
-	case err != nil || len(httpHosts(pol.Rules)) > 0:
+		proxy.Warn = func(msg string) { a.log.Warn(msg, "container", id) }
+		proxy.Leak = s.credentialLeak
+		sessionnet.StartProxy(s.m, *proxy)
+	case err != nil || len(sessionnet.Hosts(pol.Rules, nil)) > 0:
 		if err == nil {
 			err = errors.New("its CA was not made when the container was created")
 		}
