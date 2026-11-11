@@ -3,8 +3,10 @@
 
 // Package sessionnet is the network side of a session, the same for
 // hallpass and hallpass-node: the HTTPS proxy of its http rules and
-// credentials, deciding with the session's monitor. The callers add
-// where the credentials come from and how the proxy's CA is trusted.
+// credentials, deciding with the session's monitor, and the DNS
+// forwarder its queries are redirected to. The callers add where the
+// credentials come from, how the proxy's CA is trusted, and the network
+// namespace.
 package sessionnet
 
 import (

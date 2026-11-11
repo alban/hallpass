@@ -152,6 +152,9 @@ func (m *Monitor) handle(l *listener, n seccomp.Notif) (ask func()) {
 		_ = l.n.Deny(n.ID, int32(unix.EPERM))
 		return
 	}
+	if sc.Name == "recvfrom" || sc.Name == "recvmsg" {
+		return m.recvFrom(l, n, sc)
+	}
 	if sc.Category() == seccomp.Connect {
 		return m.handleNet(l, n, sc)
 	}
@@ -409,6 +412,9 @@ func (m *Monitor) allow(l *listener, n seccomp.Notif, sc seccomp.Rule, op rules.
 	}
 	if op == rules.OpConnect && m.relayed(l, n, sc, items) {
 		m.report(n, sc.Name, op, objects(items), true, why)
+		return
+	}
+	if m.redirectDNS(l, n, sc, op, items, why) {
 		return
 	}
 	if op == rules.OpConnect && len(items) == 1 && items[0].proxy != nil {

@@ -85,7 +85,7 @@ func (m *Monitor) handleNet(l *listener, n seccomp.Notif, sc seccomp.Rule) (ask 
 		if m.names != nil && (sc.Name == "sendmsg" || sc.Name == "sendmmsg") {
 			// glibc's resolver connects its socket to the server,
 			// then sends without an address: the connect was decided.
-			if si, err := procfs.Socket(int(n.PID), d.fd); err == nil && si.Type == unix.SOCK_DGRAM && m.names.Server(si.Peer) {
+			if si, err := procfs.Socket(int(n.PID), d.fd); err == nil && si.Type == unix.SOCK_DGRAM && (m.names.Server(si.Peer) || m.isForwarder(si.Peer)) {
 				for _, name := range m.queryNames(n, sc) {
 					m.names.Observe(name)
 				}

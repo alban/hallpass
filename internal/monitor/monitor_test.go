@@ -35,7 +35,8 @@ func init() {
 // response is what the monitor answered to a notification.
 type response struct {
 	id    uint64
-	errno int32 // 0: continued
+	errno int32 // 0: continued, or returned val
+	val   int64 // Return's
 }
 
 // fakeNotifier hands notifications of the test process itself to the
@@ -104,7 +105,7 @@ func (f *fakeNotifier) Deny(id uint64, errno int32) error {
 
 func (f *fakeNotifier) answer(id uint64, errno int32) error {
 	f.kill(id)
-	f.out <- response{id, errno}
+	f.out <- response{id: id, errno: errno}
 	return nil
 }
 

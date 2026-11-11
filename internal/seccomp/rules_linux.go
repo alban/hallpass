@@ -53,6 +53,14 @@ func commonRules(allowUserns bool) []Rule {
 		{Nr: unix.SYS_SENDTO, Name: "sendto", Kind: NotifyIfSet, FlagsArg: 4, Op: "send", Cat: Connect},
 		{Nr: unix.SYS_SENDMSG, Name: "sendmsg", Kind: Notify, Op: "send", Cat: Connect},
 		{Nr: unix.SYS_SENDMMSG, Name: "sendmmsg", Kind: Notify, Op: "send", Cat: Connect},
+		// Receives asking for the source: a DNS reply on a socket
+		// redirected to the forwarder is given the name server as its
+		// source (monitor.recvFrom). The others are continued at once.
+		{Nr: unix.SYS_RECVFROM, Name: "recvfrom", Kind: NotifyIfSet, FlagsArg: 4, Op: "receive", Cat: Connect},
+		// musl's resolver receives with recvmsg: its msg_name is in the
+		// struct, out of the filter's reach, so every recvmsg is
+		// notified.
+		{Nr: unix.SYS_RECVMSG, Name: "recvmsg", Kind: Notify, Op: "receive", Cat: Connect},
 	}
 	if !allowUserns {
 		// Inside a private mount namespace a process could bind-mount a

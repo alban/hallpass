@@ -32,6 +32,7 @@ hallpass is a proof of concept. It mediates filesystem writes and the programs r
 - Answers cover one destination; there are no answers for a subnet or a folder of sockets yet (use `--allow-connect`).
 - Lite mode: the destination address is read from memory after the check (TOCTOU), and a listener inherited from outside the sandbox counts as started inside it.
 - Strict mode: a TCP listener counts as started inside the sandbox as in lite mode (racy); the kernel then lets through only the address granted. A `sendmmsg` to more than 4 addresses sends the first 4 and fails on the fifth with `EACCES`; resending the rest asks again.
+- [Names](network.md#names): every `recvmsg`, and every `recvfrom` with an address, is paused and continued, which slows UDP servers and other programs receiving many datagrams. A blocking DNS receive is not interrupted by a signal the sandbox catches.
 
 ## Strict mode
 

@@ -6,7 +6,7 @@ The only destination allowed without asking is a loopback or unix listener start
 
 ## Lite mode
 
-Syscalls paused: `connect`, `sendto` with an address, `sendmsg` and `sendmmsg` (their address is in a struct the filter cannot read).
+Syscalls paused: `connect`, `sendto` with an address, `sendmsg` and `sendmmsg` (their address is in a struct the filter cannot read); for [names](#names), `recvfrom` with an address and `recvmsg`, continued at once but on a socket redirected to the DNS forwarder.
 
 What the supervisor reads:
 
@@ -48,14 +48,19 @@ See [Limitations](limitations.md#network).
 
 ## Names
 
-Connect prompts name the address: `github.com (140.82.112.3:443)`. On a workstation, with `--dns=observe` (the default of `hallpass`), hallpass watches the sandbox's DNS queries; on Kubernetes, hallpass-node relays them (see [below](#names-on-kubernetes)).
+Connect prompts name the address: `github.com (140.82.112.3:443)`. On a workstation, with `--dns=observe` (the default of `hallpass`), the sandbox's DNS queries go through a forwarder of hallpass's, which reads the answers; on Kubernetes, hallpass-node relays them (see [below](#names-on-kubernetes)).
 
-- hallpass reads the names the sandbox's DNS queries ask about (A, AAAA), in the sends to port 53 it already sees: `sendto`, `sendmsg` or `sendmmsg` with the server's address (musl), and `sendmsg` or `sendmmsg` on a socket connected to port 53 (glibc's `getaddrinfo`).
+- Before the sandbox starts, hallpass starts a forwarder for each name server of the host's `/etc/resolv.conf` (read when the session starts), listening on a port the kernel picks on `127.0.0.1` (or `[::1]`). An allowed `connect`, or UDP `sendto` with an address, to port 53 of one of those servers is done by the supervisor on a copy of the sandbox's socket (`pidfd_getfd`: the same socket, whichever descriptor of it the sandbox uses next), to the forwarder instead. On such a socket, a receive that asks for the source (`recvfrom` with an address, `recvmsg`) is done by the supervisor too, with the forwarder's address replaced by the server's: resolvers check it (glibc, musl). Go's resolver reads with `read`, which needs nothing. UDP and TCP, connected or not.
+- The rules see the real name server: a sandbox denied DNS gets no forwarding. The forwarder's ports are denied to the sandbox (protected rules): it reaches them only through the redirect.
+- Not redirected: `sendmsg` and `sendmmsg` with the server's address (no resolver sends so), and TCP fast open. Such queries go to the server, and their answers name nothing.
+- The forwarder's own sockets are made in the sandbox's network namespace: queries leave as the sandbox's would. Replies are passed on byte for byte. It records only replies that answer a query it sent (same ID and question).
+- Costs: every `recvmsg` of the sandbox, and every `recvfrom` with an address, is paused, to tell whether it is on a redirected socket (see [Limitations](limitations.md#network)). A blocking receive on a redirected socket waits in the supervisor: a signal the sandbox catches does not interrupt it (its `SO_RCVTIMEO` is kept). `getpeername` on a redirected socket gives the forwarder. hallpass remembers the last 4096 redirected sockets: DNS fails on an older one still in use.
+- Needs Linux 5.14 (`SO_NETNS_COOKIE`: only the sockets of the sandbox's network namespace are redirected); without it, no names.
+- hallpass also reads the names the sandbox's DNS queries ask about (A, AAAA), in the sends to port 53 it already sees: `sendto`, `sendmsg` or `sendmmsg` with the server's address (musl), and `sendmsg` or `sendmmsg` on a socket connected to port 53 (glibc's `getaddrinfo`).
 - It then looks each name up itself, through the host's resolver, and names an address only with a name that has it: a sandbox asking about `github.com` and connecting elsewhere gets no name. A content delivery network that answers hallpass with other addresses than the sandbox leaves the address unnamed.
 - hallpass looks up only the names of queries it allowed, sent to a name server of the host's `/etc/resolv.conf` (read when the session starts), and its own lookups go only to those servers. A sandbox denied DNS, or allowed only some other server on port 53, cannot use hallpass's lookups to send data out (`<secret>.attacker.example`). This holds because the sandbox shares the host's network; Kubernetes will relay the sandbox's own queries instead.
 - A name stays on its addresses for 5 minutes, at least: programs keep answers past their TTL.
 - systemd-resolved's varlink socket (`/run/systemd/resolve/io.systemd.Resolve`), which glibc programs use instead of port 53 on Fedora and Arch (`resolve` in `nsswitch.conf`): when the sandbox's `connect` to it is allowed, hallpass connects to resolved itself and puts one end of a socket pair in place of the sandbox's socket, then passes the messages both ways. The names come from resolved's own answers, so they are the addresses the program gets; resolved sees hallpass's user, the same as the program's. Only this socket is relayed. Socket options set before the `connect` are lost, which resolved's clients do not use.
-- No name for queries sent with `write`, or `send` and `sendto` without an address (Go's resolver, glibc's single queries).
 - An address with no name from the above is shown with the names of its reverse DNS (PTR), marked unverified: `140.82.112.3:443 (reverse DNS, unverified: lb-140-82-112-3-iad.github.com)`. Whoever controls the address chooses them. hallpass makes that lookup only once the sandbox's own DNS was allowed (a query to the host's name server, or the varlink socket), through the same servers, so a sandbox denied DNS cannot use it to send data out either.
 - Host rules (`allow connect github.com:443`) match these names, in lite and strict mode: hallpass's own lookups and the relayed answers (varlink, Kubernetes), never the reverse DNS names.
 

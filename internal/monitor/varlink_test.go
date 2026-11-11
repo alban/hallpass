@@ -33,7 +33,11 @@ func (f *fakeNotifier) ReplaceFD(id uint64, fd, target int, newfdFlags uint32) e
 	return unix.Dup3(fd, target, int(newfdFlags))
 }
 
-func (f *fakeNotifier) Return(id uint64, val int64) error { return f.answer(id, 0) }
+func (f *fakeNotifier) Return(id uint64, val int64) error {
+	f.kill(id)
+	f.out <- response{id: id, val: val}
+	return nil
+}
 
 // fakeResolved answers ResolveHostname calls on a unix socket at path
 // from table, as systemd-resolved does (NUL-terminated JSON messages),

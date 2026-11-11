@@ -75,6 +75,12 @@ type Config struct {
 	// the wire. Like an http rule, they make its connections to port 443
 	// denied while it has no proxy (SetProxy) or no names to match.
 	Credentials bool
+	// DNSForward maps a name server (port 53) to the forwarder's
+	// listener for it (dnsfwd), in the network namespace of Netns: an
+	// allowed connect or send to the server is redirected there by the
+	// monitor (see redirectDNS), and replies are given the server as
+	// their source (recvFrom). nil: no redirect.
+	DNSForward map[netip.Addr]netip.AddrPort
 }
 
 var (
@@ -248,8 +254,14 @@ type Monitor struct {
 	pair     func(int) (*net.TCPConn, *net.TCPConn, error)
 	netns    uint64
 	creds    bool
-	table    []seccomp.Rule
-	now      func() time.Time
+	dnsFwd   map[netip.Addr]netip.AddrPort
+	// dnsSrc maps a forwarder's listener back to its server (recvFrom).
+	dnsSrc map[netip.AddrPort]netip.Addr
+	// redirected are the sockets redirected to the forwarder: only
+	// their receives are emulated.
+	redirected redirectSet
+	table      []seccomp.Rule
+	now        func() time.Time
 
 	// kmu serializes kernel syncs and mount checks. It is taken before mu.
 	kmu sync.Mutex
@@ -293,6 +305,13 @@ func New(cfg Config) (*Monitor, error) {
 	}
 	if m.mediate == 0 {
 		m.mediate = seccomp.AllCategories
+	}
+	if len(cfg.DNSForward) > 0 {
+		m.dnsFwd = cfg.DNSForward
+		m.dnsSrc = map[netip.AddrPort]netip.Addr{}
+		for s, l := range cfg.DNSForward {
+			m.dnsSrc[l] = s
+		}
 	}
 	m.idle = sync.NewCond(&m.mu)
 	return m, nil

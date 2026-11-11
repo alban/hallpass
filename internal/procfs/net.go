@@ -179,9 +179,9 @@ const (
 	tcpListen  = 10
 )
 
-// socketNetns returns the cookie of socket fd's network namespace, 0
+// SocketNetns returns the cookie of socket fd's network namespace, 0
 // when the kernel has none (ENOPROTOOPT, before Linux 5.14).
-func socketNetns(fd int) (uint64, error) {
+func SocketNetns(fd int) (uint64, error) {
 	c, err := unix.GetsockoptUint64(fd, unix.SOL_SOCKET, soNetnsCookie)
 	if errors.Is(err, unix.ENOPROTOOPT) {
 		return 0, nil
@@ -197,12 +197,12 @@ func Netns() (uint64, error) {
 		return 0, err
 	}
 	defer unix.Close(fd)
-	return socketNetns(fd)
+	return SocketNetns(fd)
 }
 
-// Socket returns what socket fd of thread tid is, through a copy of the
-// fd (pidfd_getfd, which needs ptrace access to tid).
-func Socket(tid int, fd int) (SocketInfo, error) {
+// GetFD returns a copy of fd of thread tid (pidfd_getfd, which needs
+// ptrace access to tid): the same open file description.
+func GetFD(tid int, fd int) (int, error) {
 	pidfd, err := unix.PidfdOpen(tid, unix.PIDFD_THREAD)
 	if err == unix.EINVAL {
 		// Before Linux 6.9: the thread group, which shares the fd
@@ -210,10 +210,41 @@ func Socket(tid int, fd int) (SocketInfo, error) {
 		pidfd, err = unix.PidfdOpen(Tgid(tid), 0)
 	}
 	if err != nil {
-		return SocketInfo{}, err
+		return -1, err
 	}
 	defer unix.Close(pidfd)
-	s, err := unix.PidfdGetfd(pidfd, fd, 0)
+	return unix.PidfdGetfd(pidfd, fd, 0)
+}
+
+// WriteMem writes b at addr in the memory of pid, with
+// process_vm_writev: unlike /proc/pid/mem, it does not write through
+// read-only mappings.
+func WriteMem(pid uint32, addr uint64, b []byte) error {
+	if len(b) == 0 {
+		return nil
+	}
+	local := []unix.Iovec{{Base: &b[0]}}
+	local[0].SetLen(len(b))
+	remote := []unix.RemoteIovec{{Base: uintptr(addr), Len: len(b)}}
+	n, err := unix.ProcessVMWritev(int(pid), local, remote, 0)
+	if err != nil {
+		return err
+	}
+	if n != len(b) {
+		return unix.EFAULT
+	}
+	return nil
+}
+
+// ReadMem reads size bytes at addr in the memory of pid.
+func ReadMem(pid uint32, addr uint64, size int) ([]byte, error) {
+	return readMem(pid, addr, size)
+}
+
+// Socket returns what socket fd of thread tid is, through a copy of the
+// fd (pidfd_getfd, which needs ptrace access to tid).
+func Socket(tid int, fd int) (SocketInfo, error) {
+	s, err := GetFD(tid, fd)
 	if err != nil {
 		return SocketInfo{}, err
 	}
@@ -241,7 +272,7 @@ func Socket(tid int, fd int) (SocketInfo, error) {
 			}
 		}
 	}
-	if si.Netns, err = socketNetns(s); err != nil {
+	if si.Netns, err = SocketNetns(s); err != nil {
 		return SocketInfo{}, err
 	}
 	return si, nil
