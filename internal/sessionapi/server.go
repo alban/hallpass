@@ -159,9 +159,6 @@ func Listen(m *monitor.Monitor, sess Session) (*Server, error) {
 	return s, nil
 }
 
-// Path returns the socket path.
-func (s *Server) Path() string { return s.path }
-
 // Close stops serving and removes the socket. The calls in progress
 // finish first: an answer that lets the command exit still gets its
 // reply. The streams (events, prompts) are ended; whatever is left after

@@ -49,7 +49,7 @@ func TestGroups(t *testing.T) {
 		}
 	}
 	got := map[string][]string{}
-	for _, g := range f.Groups(Builtin()) {
+	for _, g := range f.Groups(Merge(nil)) {
 		got[g.Name] = g.Members
 	}
 	for name, want := range map[string][]string{
@@ -97,7 +97,7 @@ func TestGroupsListing(t *testing.T) {
 		},
 	}
 	// Groups of names only: not @git's absolute directories.
-	defs := slices.DeleteFunc(Builtin(), func(d Def) bool { return d.Name == "@git" })
+	defs := slices.DeleteFunc(Merge(nil), func(d Def) bool { return d.Name == "@git" })
 	gs := f.Groups(defs)
 	// 4 listings and the symlink sh, not one per name and directory
 	// (about 4 × 250): regular files listed need none.
@@ -140,7 +140,7 @@ func TestGroupsUnlisted(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.Chmod(bin, 0o755) })
-	gs := Finder{Path: bin}.Groups(Builtin())
+	gs := Finder{Path: bin}.Groups(Merge(nil))
 	if gs[0].Name != "@shells" || !slices.Equal(gs[0].Members, []string{bin + "/dash"}) {
 		t.Errorf("got %v", gs[0])
 	}
@@ -170,7 +170,7 @@ func TestUserGroups(t *testing.T) {
 		{Name: "@tools", Members: []string{tools + "/**"}},
 		{Name: "@shells", Members: []string{dir + "/dash"}},
 	})
-	if n := len(defs); n != len(Builtin())+1 || defs[0].Name != "@shells" || defs[n-1].Name != "@tools" {
+	if n := len(defs); n != len(Merge(nil))+1 || defs[0].Name != "@shells" || defs[n-1].Name != "@tools" {
 		t.Fatalf("Merge: %v", defs)
 	}
 	f := Finder{Path: dir, Resolve: filepath.EvalSymlinks}
@@ -186,7 +186,7 @@ func TestUserGroups(t *testing.T) {
 			t.Errorf("%s: got %v, want %v", name, got[name], want)
 		}
 	}
-	if len(Builtin()[0].Members) < 2 {
+	if len(Merge(nil)[0].Members) < 2 {
 		t.Error("Merge changed the built-in groups")
 	}
 }

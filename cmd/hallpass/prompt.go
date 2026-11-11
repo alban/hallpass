@@ -20,9 +20,6 @@ import (
 // client is hallpass's name in monitor.Reason.Client.
 const client = "hallpass"
 
-// maxParents bounds the parent chain shown in prompts.
-const maxParents = 4
-
 // prompts follows the monitor's events until the workload is gone, then
 // closes gone. Requests are asked about in another goroutine, so a prompt
 // left open does not delay gone.

@@ -190,7 +190,7 @@ func TestGroups(t *testing.T) {
 		t.Fatalf("got %+v %q", p.Groups, p.AllowGroups)
 	}
 	defs := p.GroupDefs()
-	if defs[0].Name != "@shells" || !reflect.DeepEqual(defs[0].Members, []string{"/usr/bin/dash"}) || defs[len(defs)-1].Name != "@tools" || len(defs) != len(programs.Builtin())+1 {
+	if defs[0].Name != "@shells" || !reflect.DeepEqual(defs[0].Members, []string{"/usr/bin/dash"}) || defs[len(defs)-1].Name != "@tools" || len(defs) != len(programs.Merge(nil))+1 {
 		t.Errorf("GroupDefs: %+v", defs)
 	}
 }

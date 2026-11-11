@@ -51,7 +51,7 @@ func TestApplyRules(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	conn, c, err := Dial(s.Path())
+	conn, c, err := Dial(s.path)
 	if err != nil {
 		t.Fatal(err)
 	}

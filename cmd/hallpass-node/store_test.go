@@ -46,6 +46,10 @@ func TestMain(m *testing.M) {
 
 var testPolicy = &Policy{Name: "p", Policy: policy.Policy{Prompt: true, PromptTimeout: time.Hour}}
 
+type noRecorder struct{}
+
+func (noRecorder) event(metadata, bool, string, string) {}
+
 func testAgent(log *slog.Logger) *agent {
 	return newAgent(fakeCluster{policies: map[string]*Policy{"p": testPolicy}}, sessionapi.NewNode(), log, noRecorder{}, 8)
 }

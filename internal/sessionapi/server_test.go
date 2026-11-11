@@ -53,7 +53,7 @@ func listen(t *testing.T) *Server {
 
 func TestDial(t *testing.T) {
 	s := listen(t)
-	conn, c, err := Dial(s.Path())
+	conn, c, err := Dial(s.path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestCloseFinishesCalls(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	conn, c, err := Dial(s.Path())
+	conn, c, err := Dial(s.path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +202,7 @@ func TestSocketDirFallback(t *testing.T) {
 func TestDialWrongPID(t *testing.T) {
 	s := listen(t)
 	fake := filepath.Join(SocketDir(), "1.sock")
-	if err := os.Symlink(s.Path(), fake); err != nil {
+	if err := os.Symlink(s.path, fake); err != nil {
 		t.Fatal(err)
 	}
 	conn, c, err := Dial(fake)
@@ -218,7 +218,7 @@ func TestDialWrongPID(t *testing.T) {
 
 func TestListSocket(t *testing.T) {
 	s := listen(t)
-	conn, c, err := Dial(s.Path())
+	conn, c, err := Dial(s.path)
 	if err != nil {
 		t.Fatal(err)
 	}

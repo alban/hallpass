@@ -113,11 +113,6 @@ func Implicit() []string {
 	return []string{"@shells", "@coreutils", "@search", "@git"}
 }
 
-// Builtin returns the built-in groups.
-func Builtin() []Def {
-	return Merge(nil)
-}
-
 // ValidName reports whether name can name a group: "@", a lowercase
 // letter, then lowercase letters, digits or '-', 32 bytes at most.
 func ValidName(name string) bool {

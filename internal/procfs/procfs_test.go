@@ -554,7 +554,7 @@ func TestDescends(t *testing.T) {
 	}
 }
 
-func TestCmdlineAncestors(t *testing.T) {
+func TestCmdline(t *testing.T) {
 	child := exec.Command("sleep", "60")
 	if err := child.Start(); err != nil {
 		t.Fatal(err)
@@ -571,14 +571,5 @@ func TestCmdlineAncestors(t *testing.T) {
 	}
 	if !slices.Equal(got, []string{"sleep", "60"}) {
 		t.Errorf("Cmdline = %q", got)
-	}
-	if got, want := Ancestors(pid, os.Getpid(), 4), []string{Comm(os.Getpid())}; !slices.Equal(got, want) {
-		t.Errorf("Ancestors(child, self) = %q, want %q", got, want)
-	}
-	if got := Ancestors(os.Getpid(), os.Getpid(), 4); got != nil {
-		t.Errorf("Ancestors(self, self) = %q, want none", got)
-	}
-	if got := Ancestors(pid, os.Getpid(), 0); got != nil {
-		t.Errorf("Ancestors with max 0 = %q", got)
 	}
 }

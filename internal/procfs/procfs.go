@@ -556,22 +556,6 @@ func Cmdline(tid int) []string {
 	return strings.Split(strings.TrimSuffix(string(b), "\x00"), "\x00")
 }
 
-// Ancestors returns the command names of the processes above thread tid,
-// nearest first, up to and including root (or init if tid does not descend
-// from root), at most max of them. Racy like Descends: for display only.
-func Ancestors(tid, root, max int) []string {
-	var out []string
-	pid := statusField(tid, "Tgid:")
-	for len(out) < max && pid > 1 && pid != root {
-		pid = statusField(pid, "PPid:")
-		if pid <= 0 {
-			break
-		}
-		out = append(out, Comm(pid))
-	}
-	return out
-}
-
 // Tgid returns the process id of thread tid, or -1.
 func Tgid(tid int) int { return statusField(tid, "Tgid:") }
 

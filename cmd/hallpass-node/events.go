@@ -65,10 +65,6 @@ type recorder interface {
 	event(md metadata, warning bool, reason, msg string)
 }
 
-type noRecorder struct{}
-
-func (noRecorder) event(metadata, bool, string, string) {}
-
 // kubeRecorder emits Kubernetes Events. record.EventRecorder does not
 // block: it drops events when the API server cannot keep up, and merges
 // repeated ones.
