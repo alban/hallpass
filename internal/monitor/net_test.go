@@ -397,6 +397,44 @@ func TestNetCredentialSwapFailed(t *testing.T) {
 	fx.f.expect(t, fx.f.connect(tcp, sockaddrInet("192.0.2.10:443")), int32(unix.EACCES))
 }
 
+// TestNetCredentialDup: the swap replaces a descriptor, not the socket:
+// another descriptor of the socket stays on the unconnected original,
+// which sends nothing, and whose connect is decided again.
+func TestNetCredentialDup(t *testing.T) {
+	netns, err := procfs.Netns()
+	if err != nil {
+		t.Skip(err)
+	}
+	names := dnsnames.New(nil, nil)
+	names.Answer(credHost, []netip.Addr{netip.MustParseAddr("192.0.2.10")}, 0)
+	fx := setupConfig(t, Config{Names: names, Netns: netns, Pair: func(int) (*net.TCPConn, *net.TCPConn, error) { return egress.Pair() }}, false)
+	p := &credProxy{served: make(chan []string, 2)}
+	fx.m.SetProxy(p)
+	fd := sock(t, unix.AF_INET, unix.SOCK_STREAM)
+	fd2, err := unix.Dup(fd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(fd2)
+	id := fx.f.connect(fd2, sockaddrInet("192.0.2.10:443"))
+	req := fx.next(t, opened).Opened
+	if _, err := fx.m.Apply(Decision{Verdicts: []Verdict{{req.ID, true}}}); err != nil {
+		t.Fatal(err)
+	}
+	fx.f.expect(t, id, 0)
+	<-p.served
+	if err := unix.Send(fd, []byte("x"), unix.MSG_NOSIGNAL); err != unix.EPIPE {
+		// TCP's error for a socket never connected.
+		t.Errorf("send on the original: %v, want EPIPE", err)
+	}
+	id = fx.f.connect(fd, sockaddrInet("192.0.2.10:443"))
+	req = fx.next(t, opened).Opened
+	if _, err := fx.m.Apply(Decision{Verdicts: []Verdict{{req.ID, false}}}); err != nil {
+		t.Fatal(err)
+	}
+	fx.f.expect(t, id, int32(unix.EACCES))
+}
+
 // TestNetNoProxy: a session whose http rules or credentials need the
 // proxy, without the proxy or without names its rules match, is denied
 // port 443 (TCP and UDP), whatever its connect rules allow; other ports,
