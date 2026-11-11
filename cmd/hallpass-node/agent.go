@@ -276,13 +276,13 @@ func (a *agent) attach(st *specs.ContainerProcessState, fd int) error {
 		proxy.Warn = func(msg string) { a.log.Warn(msg, "container", id) }
 		proxy.Leak = s.credentialLeak
 		sessionnet.StartProxy(s.m, *proxy)
-	case err != nil || len(sessionnet.Hosts(pol.Rules, nil)) > 0:
+	case err != nil || len(sessionnet.Hosts(pol.Rules, nil)) > 0 || len(pol.Credentials) > 0:
 		if err == nil {
 			err = errors.New("its CA was not made when the container was created")
 		}
 		note = strings.TrimPrefix(note+"; ", "; ") + "no https proxy: " + err.Error()
 		a.log.Warn("no https proxy", "container", id, "err", err)
-		s.denyWithoutProxy()
+		s.warnNoProxy()
 	}
 	s.trustID = id
 	s.trust = a.trust

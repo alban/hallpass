@@ -213,6 +213,10 @@ func (m *Monitor) handleNet(l *listener, n seccomp.Notif, sc seccomp.Rule) (ask 
 		}
 	}
 	m.markOwnListeners(n, root, op, items)
+	if i := m.unproxied(items); i >= 0 {
+		m.deny(l, n, sc, op, []rules.Object{items[i].obj}, []Reason{{Builtin: "no-proxy"}})
+		return nil
+	}
 	m.nameItems(items)
 	if len(items) == 1 && items[0].obj.Inet != nil && m.toProxy(l, n, sc, op, &items[0]) {
 		return nil
@@ -386,6 +390,28 @@ func (m *Monitor) nameItems(items []item) {
 // host rule, or an http rule (its host is proxied).
 func needNames(rs []rules.Rule) bool {
 	return slices.ContainsFunc(rs, func(r rules.Rule) bool { return isHostRule(r) || r.Object.HTTP != nil })
+}
+
+// unproxied returns the index of an item to port 443 (TCP or UDP) that
+// cannot go through the proxy although it must, or -1: the http rules or
+// the credentials (Config.Credentials) of the session need its proxy and
+// names its rules match, and it lacks one of them (no proxy started,
+// names off or display only). Such a connection is denied rather than
+// decided without the http rules, or sent with a placeholder.
+func (m *Monitor) unproxied(items []item) int {
+	m.mu.Lock()
+	p := m.proxy
+	m.mu.Unlock()
+	if p != nil && m.names != nil && m.names.Matches() {
+		return -1
+	}
+	if !m.creds && !slices.ContainsFunc(m.currentRules(), func(r rules.Rule) bool { return r.Object.HTTP != nil }) {
+		return -1
+	}
+	return slices.IndexFunc(items, func(it item) bool {
+		o := it.obj.Inet
+		return o != nil && o.Addr.Port() == 443 && (o.Proto == unix.IPPROTO_TCP || o.Proto == unix.IPPROTO_UDP)
+	})
 }
 
 func isHostRule(r rules.Rule) bool {

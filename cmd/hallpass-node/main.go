@@ -143,7 +143,7 @@ func runAgent(args []string) error {
 	ag := newAgent(k, node, log, k.recorder(ctx), *maxInflight)
 	if ag.trust.upstream, err = loadRoots(*upstreamRoots); err != nil {
 		// Without roots no proxy starts, and the containers with http
-		// rules are denied port 443 (see noProxyRules).
+		// rules or credentials are denied port 443 (by their monitor).
 		log.Warn("no roots for the HTTPS proxies", "err", err)
 	}
 	if *fdStore != "" {

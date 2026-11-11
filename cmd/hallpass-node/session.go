@@ -86,7 +86,7 @@ func newSession(id string, pid int, md metadata, p *Policy, rs []rules.Rule, ks 
 		dns.close()
 		return nil, fmt.Errorf("listener metadata: %w", err)
 	}
-	cfg := monitor.Config{ProcRoot: true, Mediate: cats}
+	cfg := monitor.Config{ProcRoot: true, Mediate: cats, Credentials: len(p.Credentials) > 0}
 	if ks != nil {
 		cfg.Kernel = ks
 	}
@@ -392,12 +392,9 @@ func (s *session) credentialLeak(owner any, r egress.Request, name string) {
 	s.event(true, reasonCredentialLeak, sessionnet.LeakMessage(owner, r, name)+": refused")
 }
 
-// denyWithoutProxy denies port 443 to s, whose policy has http rules
-// that no proxy enforces (noProxyRules), and says so in a Warning Event.
-func (s *session) denyWithoutProxy() {
-	if _, err := s.m.Apply(monitor.Decision{AddRules: noProxyRules(), Client: client}); err != nil {
-		s.log.Error("deny port 443 without a proxy", "err", err)
-		return
-	}
-	s.event(true, reasonStarted, "no HTTPS proxy for the policy's http rules: port 443 denied")
+// warnNoProxy says in a Warning Event that s, whose policy has http rules
+// or credentials, has no proxy: its monitor denies port 443
+// (monitor.Config.Credentials).
+func (s *session) warnNoProxy() {
+	s.event(true, reasonStarted, "no HTTPS proxy for the policy's http rules or credentials: port 443 denied")
 }

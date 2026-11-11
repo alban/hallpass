@@ -7,7 +7,6 @@ import (
 	"crypto/x509"
 	"io"
 	"log/slog"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -275,23 +274,5 @@ env = { GH_ENTERPRISE_TOKEN = "{placeholder}" }
 	}
 	if _, err := create("config:nope", "c5"); err == nil || !strings.Contains(err.Error(), "no ConfigMap") {
 		t.Errorf("config:nope: %v", err)
-	}
-}
-
-// TestNoProxyRules: without a proxy, port 443 is denied, whatever the
-// connect rules allow, and other ports are not.
-func TestNoProxyRules(t *testing.T) {
-	all, err := rules.ParseNet("all")
-	if err != nil {
-		t.Fatal(err)
-	}
-	rs := append(noProxyRules(), rules.Rule{Ops: rules.OpNet, Object: all, Verdict: rules.Allow})
-	for addr, want := range map[string]rules.Verdict{"140.82.112.3:443": rules.Deny, "140.82.112.3:22": rules.Allow} {
-		for _, proto := range []uint16{6, 17} {
-			obj := rules.Object{Inet: &rules.InetObject{Proto: proto, Addr: netip.MustParseAddrPort(addr)}}
-			if v, _, _ := rules.Eval(rs, rules.OpConnect, obj, time.Now()); v != want {
-				t.Errorf("%d %s: %v, want %v", proto, addr, v, want)
-			}
-		}
 	}
 }

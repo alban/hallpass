@@ -396,3 +396,52 @@ func TestNetCredentialSwapFailed(t *testing.T) {
 	tcp := sock(t, unix.AF_INET, unix.SOCK_STREAM)
 	fx.f.expect(t, fx.f.connect(tcp, sockaddrInet("192.0.2.10:443")), int32(unix.EACCES))
 }
+
+// TestNetNoProxy: a session whose http rules or credentials need the
+// proxy, without the proxy or without names its rules match, is denied
+// port 443 (TCP and UDP), whatever its connect rules allow; other ports,
+// and sessions needing no proxy, are not.
+func TestNetNoProxy(t *testing.T) {
+	gh, err := rules.ParseHTTP("GET", "https://api.github.com/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpRule := rules.Rule{Ops: rules.OpHTTP, Object: rules.ObjectMatch{HTTP: gh}, Verdict: rules.Allow}
+	displayOnly := dnsnames.New(nil, nil)
+	displayOnly.SetDisplayOnly()
+	for _, tc := range []struct {
+		name   string
+		cfg    Config
+		http   bool
+		proxy  bool
+		denied bool
+	}{
+		{"credentials without proxy", Config{Names: dnsnames.New(nil, nil), Credentials: true}, false, false, true},
+		{"http rule without names", Config{}, true, true, true},
+		{"http rule with display-only names", Config{Names: displayOnly}, true, true, true},
+		{"no http rule nor credentials", Config{}, false, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := setupConfig(t, tc.cfg, false)
+			if tc.proxy {
+				fx.m.SetProxy(&credProxy{served: make(chan []string, 1)})
+			}
+			rs := []rules.Rule{netRule(t, "all", rules.Allow)}
+			if tc.http {
+				rs = append(rs, httpRule)
+			}
+			if _, err := fx.m.Apply(rulesDecision(rs...)); err != nil {
+				t.Fatal(err)
+			}
+			want := int32(0)
+			if tc.denied {
+				want = int32(unix.EACCES)
+			}
+			tcp := sock(t, unix.AF_INET, unix.SOCK_STREAM)
+			fx.f.expect(t, fx.f.connect(tcp, sockaddrInet("192.0.2.10:443")), want)
+			udp := sock(t, unix.AF_INET, unix.SOCK_DGRAM)
+			fx.f.expect(t, fx.f.sendto(udp, 0, sockaddrInet("192.0.2.10:443")), want)
+			fx.f.expect(t, fx.f.connect(tcp, sockaddrInet("192.0.2.10:22")), 0)
+		})
+	}
+}

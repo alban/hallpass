@@ -20,7 +20,6 @@ import (
 	"github.com/containerd/nri/pkg/api"
 	"golang.org/x/sys/unix"
 
-	"github.com/alban/hallpass/internal/defaults"
 	"github.com/alban/hallpass/internal/egress"
 	"github.com/alban/hallpass/internal/netns"
 	"github.com/alban/hallpass/internal/rules"
@@ -152,22 +151,6 @@ func (t *trustStore) start(id string, pid int, dns *dnsState) (*sessionnet.Proxy
 			return c, err
 		},
 	}, nil
-}
-
-// noProxyRules deny port 443 to a session whose policy has http rules
-// but which has no proxy (it could not start, or the agent restarted
-// since): its http rules would not apply, and connections to their hosts
-// would be decided by the connect rules alone. Fail closed.
-func noProxyRules() []rules.Rule {
-	var rs []rules.Rule
-	for _, n := range []string{"tcp:*:443", "udp:*:443"} {
-		m, err := rules.ParseNet(n)
-		if err != nil {
-			panic(err)
-		}
-		rs = append(rs, rules.Rule{Ops: rules.OpNet, Object: m, Verdict: rules.Deny, Label: "no HTTPS proxy", Set: defaults.Set})
-	}
-	return rs
 }
 
 // loadRoots returns the roots in PEM file, or the system's if "".

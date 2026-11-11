@@ -396,13 +396,17 @@ func (n *Names) SetDisplayOnly() {
 	n.mu.Unlock()
 }
 
+// Matches reports whether rules match n's names: not SetDisplayOnly.
+func (n *Names) Matches() bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return !n.displayOnly
+}
+
 // Match is Lookup, for the host rules: none when the names are display
 // only (SetDisplayOnly).
 func (n *Names) Match(addr netip.Addr, wait time.Duration) []string {
-	n.mu.Lock()
-	d := n.displayOnly
-	n.mu.Unlock()
-	if d {
+	if !n.Matches() {
 		return nil
 	}
 	return n.Lookup(addr, wait)

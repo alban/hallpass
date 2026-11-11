@@ -233,8 +233,8 @@ func (a *agent) adopt(c *fdstore.Client, e fdstore.Entry) {
 	s.start = sv.Start
 	// The proxy, its CA and the DNS names are not kept across restarts.
 	s.trustID, s.trust = e.Key, a.trust
-	if len(sessionnet.Hosts(pol.Rules, nil)) > 0 {
-		s.denyWithoutProxy()
+	if len(sessionnet.Hosts(pol.Rules, nil)) > 0 || len(pol.Credentials) > 0 {
+		s.warnNoProxy()
 	}
 	a.mu.Lock()
 	for i, pid := range sv.Pids {

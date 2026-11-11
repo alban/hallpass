@@ -71,6 +71,10 @@ type Config struct {
 	// session started (procfs.Netns): only its sockets are swapped. 0:
 	// unknown (before Linux 5.14), none is.
 	Netns uint64
+	// Credentials: the session has credentials for the proxy to put on
+	// the wire. Like an http rule, they make its connections to port 443
+	// denied while it has no proxy (SetProxy) or no names to match.
+	Credentials bool
 }
 
 var (
@@ -243,6 +247,7 @@ type Monitor struct {
 	proxy    Proxy // guarded by mu
 	pair     func(int) (*net.TCPConn, *net.TCPConn, error)
 	netns    uint64
+	creds    bool
 	table    []seccomp.Rule
 	now      func() time.Time
 
@@ -279,6 +284,7 @@ func New(cfg Config) (*Monitor, error) {
 		resolve:  resolveSocket(cfg),
 		pair:     cfg.Pair,
 		netns:    cfg.Netns,
+		creds:    cfg.Credentials,
 		table:    syscallTable(),
 		now:      time.Now,
 		pending:  map[uint64]*request{},

@@ -5,7 +5,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -16,6 +15,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/alban/hallpass/internal/defaults"
 	"github.com/alban/hallpass/internal/dnsnames"
@@ -30,7 +31,6 @@ import (
 	"github.com/alban/hallpass/internal/sessionnet"
 	"github.com/alban/hallpass/internal/tty"
 	"github.com/alban/hallpass/internal/ui"
-	"golang.org/x/sys/unix"
 )
 
 // sessionConfig describes one sandboxed session.
@@ -113,7 +113,7 @@ func runSession(cfg sessionConfig) (int, error) {
 		}
 		kernel = ks
 	}
-	mcfg := monitor.Config{Kernel: kernel, Mediate: cfg.Mediate}
+	mcfg := monitor.Config{Kernel: kernel, Mediate: cfg.Mediate, Credentials: len(cfg.Credentials) > 0}
 	if cfg.Mediate&seccomp.Connect != 0 {
 		// The supervisor shares the sandbox's network: the pair of a
 		// swap to the proxy is made here, and only the sockets of this
@@ -185,21 +185,24 @@ func runSession(cfg sessionConfig) (int, error) {
 
 	environ := os.Environ()
 	if len(sessionnet.Hosts(cfg.Defaults.Rules(), nil)) > 0 || len(cfg.Credentials) > 0 {
-		if mcfg.Names == nil {
-			return 0, errors.New("http rules and credentials need hallpass to name addresses (--dns=observe, and connect in --mediate)")
-		}
 		creds, err := profiles.LoadSession(cfg.Profiles, cfg.Credentials)
 		if err != nil {
 			return 0, err
 		}
-		hosts := sessionnet.Hosts(cfg.Defaults.Rules(), creds.Credentials)
-		env, stop, err := startProxy(m, hosts, creds, s.notice)
-		if err != nil {
-			return 0, fmt.Errorf("https proxy: %w", err)
+		if mcfg.Names == nil {
+			// The monitor denies port 443 (monitor.Config.Credentials).
+			s.notice("hallpass: http rules and credentials need hallpass to name addresses (--dns=observe, and connect in --mediate): port 443 denied")
+		} else {
+			hosts := sessionnet.Hosts(cfg.Defaults.Rules(), creds.Credentials)
+			env, stop, err := startProxy(m, hosts, creds, s.notice)
+			if err != nil {
+				return 0, fmt.Errorf("https proxy: %w", err)
+			}
+			defer stop()
+			cfg.Env = append(cfg.Env, env...)
 		}
-		defer stop()
 		environ = creds.StripEnv(environ)
-		cfg.Env = append(append(cfg.Env, env...), creds.Env...)
+		cfg.Env = append(cfg.Env, creds.Env...)
 	}
 
 	spec := launch.ProcSpec{
