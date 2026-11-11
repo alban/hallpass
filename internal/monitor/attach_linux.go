@@ -30,6 +30,9 @@ type listener struct {
 	root    int
 	mountFD int             // strict: /proc/<root>/mountinfo, polled for changes
 	hup     <-chan struct{} // closed when no task uses the filter
+	// turn is held by the one receiver waiting in Recv: with several
+	// waiters, the kernel's synchronous wakeup no longer applies.
+	turn chan struct{}
 }
 
 // Attach starts mediating the processes behind seccompFD. rootPID is the
@@ -71,7 +74,8 @@ func (m *Monitor) AttachJournal(seccompFD, rootPID int, j *seccomp.Journal) (don
 
 // attach is Attach for any Notifier; hup is closed when no task uses it.
 func (m *Monitor) attach(n Notifier, root int, hup <-chan struct{}, j *seccomp.Journal) (<-chan struct{}, error) {
-	l := &listener{n: n, j: j, root: root, mountFD: -1, hup: hup}
+	l := &listener{n: n, j: j, root: root, mountFD: -1, hup: hup, turn: make(chan struct{}, 1)}
+	l.turn <- struct{}{}
 	m.mu.Lock()
 	if m.closed || m.finished {
 		m.mu.Unlock()

@@ -54,7 +54,14 @@ func (m *Monitor) receiver(l *listener) {
 		if !ok {
 			return
 		}
+		select {
+		case <-l.turn:
+		case <-l.hup:
+			l.j.Release(slot)
+			return
+		}
 		n, err := l.n.Recv(l.j.Slot(slot))
+		l.turn <- struct{}{}
 		if errors.Is(err, unix.ENOENT) {
 			// The task died before the notification was received, or
 			// no task is left: then every Recv fails at once.
