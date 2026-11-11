@@ -108,34 +108,34 @@ func TestAnswers(t *testing.T) {
 }
 
 func TestAnswerMsg(t *testing.T) {
-	n := New(nil, nil)
+	n := New()
 	now := time.Unix(1000, 0)
 	n.now = func() time.Time { return now }
 	n.AnswerMsg(response(t, dnsmessage.RCodeSuccess, []dnsmessage.Question{q("objects.githubusercontent.com.", dnsmessage.TypeA)},
 		rr("objects.githubusercontent.com.", 3600, cname("github.map.fastly.net.")),
 		rr("github.map.fastly.net.", 7200, a4("185.199.108.133"))))
 	addr := netip.MustParseAddr("185.199.108.133")
-	if got := n.Lookup(addr, 0); !slices.Equal(got, []string{"objects.githubusercontent.com", "github.map.fastly.net"}) {
+	if got := n.Lookup(addr); !slices.Equal(got, []string{"objects.githubusercontent.com", "github.map.fastly.net"}) {
 		t.Errorf("names: %q", got)
 	}
 	// The TTL when longer than Floor.
 	now = now.Add(time.Hour - time.Second)
-	if got := n.Lookup(addr, 0); len(got) != 2 {
+	if got := n.Lookup(addr); len(got) != 2 {
 		t.Errorf("before the TTL: %q", got)
 	}
 	now = now.Add(time.Second)
-	if got := n.Lookup(addr, 0); got != nil {
+	if got := n.Lookup(addr); got != nil {
 		t.Errorf("after the TTL: %q", got)
 	}
 	// Names that are no host names are not kept.
 	n.Answer("evil\x1b[2J.example", []netip.Addr{addr}, 0)
-	if got := n.Lookup(addr, 0); got != nil {
+	if got := n.Lookup(addr); got != nil {
 		t.Errorf("escape kept: %q", got)
 	}
 }
 
 func TestVarlink(t *testing.T) {
-	n := New(nil, nil)
+	n := New()
 	v := NewVarlink(n)
 	gh, gh6 := netip.MustParseAddr("140.82.112.4"), netip.MustParseAddr("2001:db8::4")
 	// Pipelined: a oneway call has no reply, a "more" call several.
@@ -159,7 +159,7 @@ func TestVarlink(t *testing.T) {
 		netip.MustParseAddr("10.0.0.3"):   nil,
 		netip.MustParseAddr("140.82.0.0"): nil,
 	} {
-		if got := n.Lookup(addr, 0); !slices.Equal(got, want) {
+		if got := n.Lookup(addr); !slices.Equal(got, want) {
 			t.Errorf("%v: %q, want %q", addr, got, want)
 		}
 	}
@@ -187,7 +187,7 @@ func TestVarlink(t *testing.T) {
 	v = NewVarlink(n)
 	v.Call([]byte(`{"method":"io.systemd.Resolve.ResolveHostname","parameters":{"name":"range.example"}}`))
 	v.Reply([]byte(`{"parameters":{"addresses":[{"family":2,"address":[256,0,0,1]},{"family":2,"address":[1,0,0]}]}}`))
-	if got := n.Lookup(netip.MustParseAddr("0.0.0.1"), 0); got != nil {
+	if got := n.Lookup(netip.MustParseAddr("0.0.0.1")); got != nil {
 		t.Errorf("out of range: %q", got)
 	}
 }
@@ -195,7 +195,7 @@ func TestVarlink(t *testing.T) {
 func TestUnverified(t *testing.T) {
 	addr := netip.MustParseAddr("140.82.112.4")
 	calls := 0
-	n := New(nil, nil)
+	n := New()
 	n.SetReverse(func(ctx context.Context, a netip.Addr) ([]string, error) {
 		calls++
 		if a != addr {
@@ -219,23 +219,23 @@ func TestUnverified(t *testing.T) {
 		t.Errorf("loopback looked up: %q", got)
 	}
 	// PTR names never name an address for rules.
-	if got := n.Lookup(addr, 0); got != nil {
+	if got := n.Lookup(addr); got != nil {
 		t.Errorf("Lookup gives PTR names: %q", got)
 	}
 }
 
 func TestDisplayOnly(t *testing.T) {
-	n := New(nil, nil)
+	n := New()
 	a := netip.MustParseAddr("192.0.2.1")
 	n.Answer("api.example", []netip.Addr{a}, 0)
-	if got := n.Match(a, 0); len(got) != 1 {
+	if got := n.Match(a); len(got) != 1 {
 		t.Errorf("Match %q", got)
 	}
 	n.SetDisplayOnly()
-	if got := n.Match(a, 0); got != nil {
+	if got := n.Match(a); got != nil {
 		t.Errorf("display only, Match %q", got)
 	}
-	if got := n.Lookup(a, 0); len(got) != 1 {
+	if got := n.Lookup(a); len(got) != 1 {
 		t.Errorf("display only, Lookup %q", got)
 	}
 }
@@ -249,13 +249,13 @@ func TestVarlinkDuplicateKeys(t *testing.T) {
 		`{"method":"io.systemd.Resolve.ResolveHostname","Oneway":true,"parameters":{"name":"a.example"},"oneway":false}`,
 		`{"method":"x"} {"method":"y"}`,
 	} {
-		v := NewVarlink(New(nil, nil))
+		v := NewVarlink(New())
 		v.Call([]byte(call))
 		if !v.Done() {
 			t.Errorf("%s: still followed", call)
 		}
 	}
-	v := NewVarlink(New(nil, nil))
+	v := NewVarlink(New())
 	v.Call([]byte(`{"method":"io.systemd.Resolve.ResolveHostname","parameters":{"name":"a.example","family":0}}`))
 	if v.Done() {
 		t.Error("a plain call stopped the follower")

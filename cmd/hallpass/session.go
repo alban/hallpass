@@ -124,23 +124,23 @@ func runSession(cfg sessionConfig) (int, error) {
 	var dns *sessionnet.DNS
 	if cfg.DNS && cfg.Mediate&seccomp.Connect != 0 {
 		// The sandbox shares the host's network and resolv.conf: read
-		// once, so a later change cannot make hallpass's lookups reach
-		// a server the sandbox's queries did not.
+		// once, so a later change cannot make the forwarder or
+		// hallpass's reverse lookups reach a server the sandbox's
+		// queries did not.
 		servers, _ := dnsnames.Servers("/etc/resolv.conf")
-		names := dnsnames.New(dnsnames.HostLookup(servers), servers)
+		names := dnsnames.New()
 		names.SetReverse(dnsnames.HostReverse(servers))
-		mcfg.Names = names
-		mcfg.ResolveSocket = dnsnames.ResolveSocket
 		// The sandbox's queries to the servers go through the
 		// forwarder, which records the answers, whatever the resolver.
 		d, err := sessionnet.StartDNS(func(f func() error) error { return f() }, servers, names, func(s string) {
 			fmt.Fprintln(os.Stderr, "hallpass: dns forwarder: "+s)
 		})
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "hallpass: dns forwarder: "+err.Error())
+			fmt.Fprintln(os.Stderr, "hallpass: no DNS names: "+err.Error())
 		} else {
 			defer d.Close()
 			d.Configure(&mcfg)
+			mcfg.ResolveSocket = dnsnames.ResolveSocket
 			dns = d
 		}
 	}

@@ -114,7 +114,7 @@ func direct(f func() error) error { return f() }
 func start(t *testing.T, table map[string]string) (*Forwarder, *dnsnames.Names, netip.AddrPort) {
 	t.Helper()
 	srv := fakeServer(t, table)
-	names := dnsnames.New(nil, nil)
+	names := dnsnames.New()
 	f, err := Start(direct, []netip.AddrPort{srv}, names, func(s string) { t.Log(s) })
 	if err != nil {
 		t.Fatal(err)
@@ -156,7 +156,7 @@ func TestUDP(t *testing.T) {
 				t.Errorf("%s: reply %+v %v %v", name, h, q, err)
 			}
 			want := netip.AddrFrom4([4]byte{192, 0, 2, byte(1 + i)})
-			if got := names.Lookup(want, 0); !slices.Equal(got, []string{name[:len(name)-1]}) {
+			if got := names.Lookup(want); !slices.Equal(got, []string{name[:len(name)-1]}) {
 				t.Errorf("%s: names of %v: %q", name, want, got)
 			}
 		})
@@ -203,7 +203,7 @@ func TestTCP(t *testing.T) {
 		}
 	}
 	for a, want := range map[string]string{"192.0.2.3": "x.big", "192.0.2.4": "c.example"} {
-		if got := names.Lookup(netip.MustParseAddr(a), 0); !slices.Equal(got, []string{want}) {
+		if got := names.Lookup(netip.MustParseAddr(a)); !slices.Equal(got, []string{want}) {
 			t.Errorf("names of %s: %q", a, got)
 		}
 	}
@@ -220,7 +220,7 @@ func TestClose(t *testing.T) {
 }
 
 func TestNoServer(t *testing.T) {
-	if _, err := Start(direct, []netip.AddrPort{netip.AddrPortFrom(netip.IPv4Unspecified(), 53)}, dnsnames.New(nil, nil), nil); err == nil {
+	if _, err := Start(direct, []netip.AddrPort{netip.AddrPortFrom(netip.IPv4Unspecified(), 53)}, dnsnames.New(), nil); err == nil {
 		t.Error("started without a server")
 	}
 }
@@ -237,7 +237,7 @@ func TestForged(t *testing.T) {
 	c.Write(query(t, 9, "a.example."))
 	c.SetReadDeadline(time.Now().Add(time.Second))
 	c.Read(make([]byte, 512))
-	if got := names.Lookup(netip.MustParseAddr("192.0.2.1"), 0); got != nil {
+	if got := names.Lookup(netip.MustParseAddr("192.0.2.1")); got != nil {
 		t.Errorf("forged reply recorded: %q", got)
 	}
 }

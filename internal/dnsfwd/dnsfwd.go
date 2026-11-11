@@ -3,10 +3,11 @@
 
 // Package dnsfwd relays the DNS queries of one container to its name
 // servers, and records the answers (dnsnames.Names.AnswerMsg): the names
-// in its prompts are those of the answers it got. hallpass-node starts
-// one forwarder per mediated container, its listeners on the loopback of
-// the container's network namespace; internal/dnsredirect sends the
-// container's queries there.
+// in its prompts are those of the answers it got. A session's monitor
+// redirects its queries to the forwarder's listeners
+// (monitor.Config.DNSForward); hallpass-node starts one forwarder per
+// mediated container, its listeners on the loopback of the container's
+// network namespace.
 //
 // Upstream sockets are made in the container's network namespace too, so
 // queries leave from the pod's address: NetworkPolicy and the cluster's
@@ -50,7 +51,7 @@ const (
 // namespace (netns.Worker.Do).
 type Dialer func(f func() error) error
 
-// Listener is a server's listener: where internal/dnsredirect sends the
+// Listener is a server's listener: where the monitor redirects the
 // queries to Server, port 53.
 type Listener struct {
 	Server netip.Addr

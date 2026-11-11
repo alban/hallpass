@@ -35,7 +35,7 @@ func TestGroup(t *testing.T) {
 	}
 	var ss []sess
 	for i := range 3 {
-		d, err := StartDNS(func(f func() error) error { return f() }, []netip.Addr{netip.MustParseAddr("192.0.2.1")}, dnsnames.New(nil, nil), func(string) {})
+		d, err := StartDNS(func(f func() error) error { return f() }, []netip.Addr{netip.MustParseAddr("192.0.2.1")}, dnsnames.New(), func(string) {})
 		if err != nil {
 			t.Skip(err)
 		}

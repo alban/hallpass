@@ -400,13 +400,6 @@ func (m *Monitor) recvOnce(l *listener, r fdReplacer, n seccomp.Notif, sc seccom
 	return true
 }
 
-// isForwarder reports whether ap is a forwarder's listener: the peer of
-// a socket redirected to it.
-func (m *Monitor) isForwarder(ap netip.AddrPort) bool {
-	_, ok := m.dnsSrc[netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port())]
-	return ok
-}
-
 // rawSource returns from as the bytes of a struct sockaddr, with a
 // forwarder listener replaced by its server, in from's family.
 func (m *Monitor) rawSource(from unix.Sockaddr) []byte {

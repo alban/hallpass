@@ -282,7 +282,7 @@ func TestNetOwnListener(t *testing.T) {
 func TestNetHost(t *testing.T) {
 	for _, strict := range []bool{false, true} {
 		t.Run(fmt.Sprint("strict=", strict), func(t *testing.T) {
-			names := dnsnames.New(nil, nil)
+			names := dnsnames.New()
 			gh := netip.MustParseAddr("192.0.2.10")
 			names.Answer("github.com", []netip.Addr{gh}, 0)
 			names.Answer("evil.example", []netip.Addr{netip.MustParseAddr("192.0.2.66")}, 0)
@@ -347,7 +347,7 @@ func TestNetCredential(t *testing.T) {
 	}
 	for _, byRule := range []bool{true, false} {
 		t.Run(fmt.Sprint("byRule=", byRule), func(t *testing.T) {
-			names := dnsnames.New(nil, nil)
+			names := dnsnames.New()
 			names.Answer(credHost, []netip.Addr{netip.MustParseAddr("192.0.2.10")}, 0)
 			fx := setupConfig(t, Config{Names: names, Netns: netns, Pair: func(int) (*net.TCPConn, *net.TCPConn, error) { return egress.Pair() }}, false)
 			p := &credProxy{served: make(chan []string, 1)}
@@ -385,7 +385,7 @@ func TestNetCredentialSwapFailed(t *testing.T) {
 	if err != nil {
 		t.Skip(err)
 	}
-	names := dnsnames.New(nil, nil)
+	names := dnsnames.New()
 	names.Answer(credHost, []netip.Addr{netip.MustParseAddr("192.0.2.10")}, 0)
 	pair := func(int) (*net.TCPConn, *net.TCPConn, error) { return nil, nil, errors.New("no pair") }
 	fx := setupConfig(t, Config{Names: names, Netns: netns, Pair: pair}, false)
@@ -405,7 +405,7 @@ func TestNetCredentialDup(t *testing.T) {
 	if err != nil {
 		t.Skip(err)
 	}
-	names := dnsnames.New(nil, nil)
+	names := dnsnames.New()
 	names.Answer(credHost, []netip.Addr{netip.MustParseAddr("192.0.2.10")}, 0)
 	fx := setupConfig(t, Config{Names: names, Netns: netns, Pair: func(int) (*net.TCPConn, *net.TCPConn, error) { return egress.Pair() }}, false)
 	p := &credProxy{served: make(chan []string, 2)}
@@ -445,7 +445,7 @@ func TestNetNoProxy(t *testing.T) {
 		t.Fatal(err)
 	}
 	httpRule := rules.Rule{Ops: rules.OpHTTP, Object: rules.ObjectMatch{HTTP: gh}, Verdict: rules.Allow}
-	displayOnly := dnsnames.New(nil, nil)
+	displayOnly := dnsnames.New()
 	displayOnly.SetDisplayOnly()
 	for _, tc := range []struct {
 		name   string
@@ -454,7 +454,7 @@ func TestNetNoProxy(t *testing.T) {
 		proxy  bool
 		denied bool
 	}{
-		{"credentials without proxy", Config{Names: dnsnames.New(nil, nil), Credentials: true}, false, false, true},
+		{"credentials without proxy", Config{Names: dnsnames.New(), Credentials: true}, false, false, true},
 		{"http rule without names", Config{}, true, true, true},
 		{"http rule with display-only names", Config{Names: displayOnly}, true, true, true},
 		{"no http rule nor credentials", Config{}, false, false, false},

@@ -40,9 +40,6 @@ type item struct {
 	// allowed, the connection goes to the proxy (see toProxy).
 	proxy []string
 	why   Reason
-	// dns are the names a send to port 53 asks about: observed once the
-	// send is allowed (Config.Names).
-	dns []string
 }
 
 // receiver receives l's notifications into journal slots and decides each
@@ -404,11 +401,6 @@ func (m *Monitor) allow(l *listener, n seccomp.Notif, sc seccomp.Rule, op rules.
 	why := make([]Reason, len(items))
 	for i, it := range items {
 		why[i] = it.why
-		if m.names != nil {
-			for _, name := range it.dns {
-				m.names.Observe(name)
-			}
-		}
 	}
 	if op == rules.OpConnect && m.relayed(l, n, sc, items) {
 		m.report(n, sc.Name, op, objects(items), true, why)

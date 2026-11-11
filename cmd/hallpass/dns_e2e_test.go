@@ -21,9 +21,9 @@ import (
 
 // dnsHelper sends a DNS query for a name to port 53 of an IPv4 server, as
 // glibc does (a connected socket, then sendmmsg without an address) or as
-// musl does (sendto with the address), then connects to an address: args
-// are label, style ("connected" or "sendto"), server, name and the
-// address.
+// musl does (sendto with the address), waits for the answer, then
+// connects to an address: args are label, style ("connected" or
+// "sendto"), server, name and the address.
 func dnsHelper(args []string) int {
 	if len(args) != 5 {
 		fmt.Println("dns: want label style server name addr")
@@ -51,6 +51,10 @@ func dnsHelper(args []string) int {
 	}
 	if err != nil {
 		fmt.Printf("%s-query=%v\n", label, err)
+	} else {
+		// As a resolver, wait for the answer before connecting.
+		_ = unix.SetsockoptTimeval(fd, unix.SOL_SOCKET, unix.SO_RCVTIMEO, &unix.Timeval{Sec: 2})
+		_, _, _ = unix.Recvfrom(fd, make([]byte, 512), 0)
 	}
 	c, err := net.DialTimeout("tcp", addr, 5*time.Second)
 	switch {
@@ -85,11 +89,11 @@ func sendmmsg(fd int, b []byte) error {
 }
 
 // TestDNSNames: a connect prompt names the address after the workload's
-// DNS query for it, sent either way to the host's name server, once
-// hallpass has looked the name up itself (localhost: 127.0.0.1 from the
-// hosts file, without any network). A query hallpass denies is not looked
-// up, nor one sent to another server, even allowed: hallpass's lookup
-// would reach a server the workload did not (no name).
+// DNS query for it, sent either way to the host's name server, from the
+// answer the forwarder relayed (localhost: 127.0.0.1, which
+// systemd-resolved answers itself). A query hallpass denies gets no
+// answer, and one sent to another server, even allowed, is not relayed
+// (no name).
 func TestDNSNames(t *testing.T) {
 	servers, _ := dnsnames.Servers("/etc/resolv.conf")
 	if len(servers) == 0 || !servers[0].Is4() {

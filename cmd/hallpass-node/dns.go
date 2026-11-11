@@ -72,7 +72,7 @@ func startDNS(pid int, warn func(string)) (*dnsState, error) {
 	if err != nil {
 		return nil, err
 	}
-	names := dnsnames.New(nil, nil)
+	names := dnsnames.New()
 	d := &dnsState{rawSockets: canRawSocket(pid)}
 	if d.rawSockets {
 		// It can sniff the forwarder's queries and forge their

@@ -98,8 +98,7 @@ type InetObject struct {
 	OwnListener bool
 	// Names are the host names Addr has, as host rules match them:
 	// lowercase, without the final dot, from the session's DNS answers
-	// or hallpass's own lookups of the names it asked about (dnsnames),
-	// never from reverse DNS.
+	// (dnsnames), never from reverse DNS.
 	Names []string
 }
 

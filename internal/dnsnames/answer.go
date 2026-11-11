@@ -20,7 +20,7 @@ const maxChain = 16
 // of the chain, from the question's to the last alias, gets the
 // addresses, for the smallest TTL along the chain. Anything that is not
 // a successful response is ignored. The caller relayed msg to the session
-// from a server it may use (Observed).
+// from a server it may use.
 func (n *Names) AnswerMsg(msg []byte) {
 	for _, a := range Answers(msg) {
 		// The question's name last: most recent first.

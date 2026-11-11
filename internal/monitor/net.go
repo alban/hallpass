@@ -12,12 +12,12 @@ import (
 	"slices"
 	"time"
 
-	"github.com/alban/hallpass/internal/dnsnames"
+	"golang.org/x/sys/unix"
+
 	"github.com/alban/hallpass/internal/netdiag"
 	"github.com/alban/hallpass/internal/procfs"
 	"github.com/alban/hallpass/internal/rules"
 	"github.com/alban/hallpass/internal/seccomp"
-	"golang.org/x/sys/unix"
 )
 
 // netDest is where a network syscall sends: its fd, flags and the
@@ -82,15 +82,6 @@ func (m *Monitor) handleNet(l *listener, n seccomp.Notif, sc seccomp.Rule) (ask 
 		return
 	}
 	if len(d.addrs) == 0 {
-		if m.names != nil && (sc.Name == "sendmsg" || sc.Name == "sendmmsg") {
-			// glibc's resolver connects its socket to the server,
-			// then sends without an address: the connect was decided.
-			if si, err := procfs.Socket(int(n.PID), d.fd); err == nil && si.Type == unix.SOCK_DGRAM && (m.names.Server(si.Peer) || m.isForwarder(si.Peer)) {
-				for _, name := range m.queryNames(n, sc) {
-					m.names.Observe(name)
-				}
-			}
-		}
 		cont()
 		return
 	}
@@ -200,17 +191,6 @@ func (m *Monitor) handleNet(l *listener, n seccomp.Notif, sc seccomp.Rule) (ask 
 	if len(items) == 0 {
 		cont()
 		return
-	}
-	if m.names != nil && op == rules.OpSend && siErr == nil && si.Type == unix.SOCK_DGRAM {
-		var names []string
-		for i, it := range items {
-			if it.obj.Inet != nil && m.names.Server(it.obj.Inet.Addr) {
-				if names == nil {
-					names = m.queryNames(n, sc)
-				}
-				items[i].dns = names
-			}
-		}
 	}
 	m.markOwnListeners(n, root, op, items)
 	if i := m.unproxied(items); i >= 0 {
@@ -370,8 +350,7 @@ func (m *Monitor) swapToProxy(l *listener, n seccomp.Notif, sc seccomp.Rule, it 
 // nameItems sets the names of the inet items (InetObject.Names), for the
 // host rules and the proxy: only when a rule has a host or the proxy a
 // credential (whose host's connects it takes, whatever rule allows
-// them), waiting at most dnsWait for the lookups in progress (the
-// workload connects as soon as its own answer comes).
+// them).
 func (m *Monitor) nameItems(items []item) {
 	m.mu.Lock()
 	p := m.proxy
@@ -381,7 +360,7 @@ func (m *Monitor) nameItems(items []item) {
 	}
 	for _, it := range items {
 		if it.obj.Inet != nil {
-			it.obj.Inet.Names = m.names.Match(it.obj.Inet.Addr.Addr(), dnsWait)
+			it.obj.Inet.Names = m.names.Match(it.obj.Inet.Addr.Addr())
 		}
 	}
 }
@@ -517,39 +496,9 @@ func errnoOf(err error) unix.Errno {
 	return unix.EFAULT
 }
 
-// maxQuery bounds the bytes read of a DNS query: its question comes
-// first.
-const maxQuery = 512
-
-// dnsWait bounds how long a prompt waits for hallpass's lookups of the
-// names the workload just asked about (Names.Lookup).
+// dnsWait bounds how long a prompt waits for a reverse lookup
+// (Names.Unverified).
 const dnsWait = 500 * time.Millisecond
-
-// queryNames returns the names the DNS queries that send n carries ask
-// about (dnsnames.QueryNames). Lite mode reads them from the target's
-// memory: the workload chooses them, and they are display only.
-func (m *Monitor) queryNames(n seccomp.Notif, sc seccomp.Rule) []string {
-	var msgs [][]byte
-	switch sc.Name {
-	case "sendto":
-		if b := procfs.ReadData(n.PID, n.Args[1], int(min(n.Args[2], maxQuery))); b != nil {
-			msgs = append(msgs, b)
-		}
-	case "sendmsg":
-		msgs = procfs.ReadMsgData(n.PID, n.Args[1], 1, false, maxQuery)
-	case "sendmmsg":
-		msgs = procfs.ReadMsgData(n.PID, n.Args[1], min(int(uint32(n.Args[2])), procfs.UIOMaxIOV), true, maxQuery)
-	}
-	var out []string
-	for _, b := range msgs {
-		for _, name := range dnsnames.QueryNames(b) {
-			if !slices.Contains(out, name) {
-				out = append(out, name)
-			}
-		}
-	}
-	return out
-}
 
 // namesOf returns the names of the address of obj, an Inet object
 // (Request.Names), or else its reverse DNS names (UnverifiedNames).
@@ -557,7 +506,7 @@ func (m *Monitor) namesOf(obj rules.Object) (names, unverified []string) {
 	if m.names == nil || obj.Inet == nil {
 		return nil, nil
 	}
-	if names = m.names.Lookup(obj.Inet.Addr.Addr(), dnsWait); len(names) > 0 {
+	if names = m.names.Lookup(obj.Inet.Addr.Addr()); len(names) > 0 {
 		return names, nil
 	}
 	return nil, m.names.Unverified(obj.Inet.Addr.Addr(), dnsWait)

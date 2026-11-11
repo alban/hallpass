@@ -89,7 +89,7 @@ func TestVarlinkRelay(t *testing.T) {
 		"github.com": `{"parameters":{"addresses":[{"ifindex":2,"family":2,"address":[140,82,112,4]}],"name":"github.com","flags":1}}`,
 	})
 	fakeResolved(t, other, nil)
-	names := dnsnames.New(nil, nil)
+	names := dnsnames.New()
 	fx := setupConfig(t, Config{Mediate: seccomp.Connect, Names: names, ResolveSocket: path}, false)
 	f := fx.f
 	if _, err := fx.m.Apply(rulesDecision(
@@ -131,7 +131,7 @@ func TestVarlinkRelay(t *testing.T) {
 		t.Fatalf("reply %q %v", buf[:k], err)
 	}
 	// Recorded before the reply was passed on.
-	if got := names.Lookup(netip.MustParseAddr("140.82.112.4"), 0); !slices.Equal(got, []string{"github.com"}) {
+	if got := names.Lookup(netip.MustParseAddr("140.82.112.4")); !slices.Equal(got, []string{"github.com"}) {
 		t.Errorf("names %q", got)
 	}
 
