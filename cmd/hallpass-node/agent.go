@@ -22,8 +22,6 @@ import (
 
 	"github.com/alban/hallpass/internal/fdstore"
 	"github.com/alban/hallpass/internal/lsm"
-	"github.com/alban/hallpass/internal/monitor"
-	"github.com/alban/hallpass/internal/rules"
 	"github.com/alban/hallpass/internal/seccomp"
 	"github.com/alban/hallpass/internal/sessionapi"
 	"github.com/alban/hallpass/internal/sessionnet"
@@ -55,6 +53,8 @@ type agent struct {
 	// trust keeps the CAs of the containers with http rules, from
 	// their creation (plugin) to their session (attach).
 	trust *trustStore
+	// forwarders isolates the DNS forwarders of the sessions.
+	forwarders *sessionnet.Group
 
 	mu       sync.Mutex
 	sessions map[string]*session // by container id
@@ -65,7 +65,7 @@ type agent struct {
 }
 
 func newAgent(c cluster, node *sessionapi.Node, log *slog.Logger, rec recorder, maxInflight int) *agent {
-	return &agent{cluster: c, node: node, log: log, rec: rec, maxInflight: maxInflight, sessions: map[string]*session{}, trust: &trustStore{}}
+	return &agent{cluster: c, node: node, log: log, rec: rec, maxInflight: maxInflight, sessions: map[string]*session{}, trust: &trustStore{}, forwarders: &sessionnet.Group{Client: client}}
 }
 
 // setupStrict decides whether new sessions are in strict mode, for --mode
@@ -250,15 +250,15 @@ func (a *agent) attach(st *specs.ContainerProcessState, fd int) error {
 		}
 	}
 	// Names for the prompts: the program has not run yet (still the
-	// runtime's init), so none of its queries goes out unredirected; and
-	// with connect mediated, its first query waits for the attach below.
+	// runtime's init), so its resolv.conf is the pod's; and with connect
+	// mediated, its first query waits for the attach below.
 	var dns *dnsState
 	note := ""
 	if cats, err := md.categories(); err == nil && cats&seccomp.Connect != 0 {
 		dns, err = startDNS(st.Pid, func(msg string) { a.log.Warn(msg, "container", id) })
 		switch {
 		case err != nil:
-			note = dnsNote(err)
+			note = "no DNS names: " + err.Error()
 			a.log.Warn("no DNS names", "container", id, "err", err)
 		case dns.rawSockets:
 			note = "DNS names for display only: the container has CAP_NET_RAW, it could forge its answers (drop it for host rules)"
@@ -269,7 +269,18 @@ func (a *agent) attach(st *specs.ContainerProcessState, fd int) error {
 		a.mu.Unlock()
 		return err
 	}
-	a.denyForwardersLocked(s)
+	if dns != nil {
+		// A forwarder listens on the loopback of its network
+		// namespace, which the containers of a pod share: it must
+		// serve only its own container, through the redirect.
+		if dns.leave, err = a.forwarders.Join(dns.DNS, s.m, func(err error) {
+			a.log.Warn("deny a DNS forwarder to a neighbour", "container", id, "err", err)
+		}); err != nil {
+			a.mu.Unlock()
+			s.close()
+			return fmt.Errorf("deny the DNS forwarders: %w", err)
+		}
+	}
 	proxy, err := a.trust.start(id, st.Pid, dns)
 	switch {
 	case proxy != nil:
@@ -301,31 +312,6 @@ func (a *agent) attach(st *specs.ContainerProcessState, fd int) error {
 	s.event(false, reasonStarted, msg)
 	a.persist(s)
 	return nil
-}
-
-// denyForwardersLocked denies new session s the DNS forwarders of the
-// other mediated sessions in its network namespace, and them its own: a
-// forwarder listens on the namespace's loopback, which the containers of
-// a pod share, and must serve only its own container.
-func (a *agent) denyForwardersLocked(s *session) {
-	if s.dns == nil {
-		return
-	}
-	var mine []rules.Rule
-	for _, o := range a.sessions {
-		if o == s || o.dns == nil || o.dns.netns != s.dns.netns {
-			continue
-		}
-		mine = append(mine, o.dns.denials()...)
-		if _, err := o.m.Apply(monitor.Decision{AddRules: s.dns.denials(), Client: client}); err != nil {
-			a.log.Warn("deny the DNS forwarder of a neighbour", "container", o.id, "err", err)
-		}
-	}
-	if len(mine) > 0 {
-		if _, err := s.m.Apply(monitor.Decision{AddRules: mine, Client: client}); err != nil {
-			a.log.Warn("deny the DNS forwarders of neighbours", "container", s.id, "err", err)
-		}
-	}
 }
 
 // attachLocked attaches listener fd of process pid to s, with journal j,

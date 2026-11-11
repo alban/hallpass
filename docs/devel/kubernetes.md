@@ -277,18 +277,18 @@ the syscall with `SECCOMP_IOCTL_NOTIF_ADDFD` and
   makes runc fail to connect to `listenerPath`: that container fails to
   start.
 - Restarting a container gives a new session.
-- The DNS redirect (`internal/dnsredirect`, `internal/dnsfwd`, see
+- The DNS forwarder (`internal/sessionnet`, `internal/dnsfwd`, see
   [Names on Kubernetes](../how-it-works/network.md#names-on-kubernetes))
-  belongs to the session: its BPF links are not pinned, so they detach
-  when the agent dies, and the container's queries go straight to its
-  name servers again (no names; DNS still works). A session restored
-  from the fd-store has no names. Started in `agent.attach`, where a
-  new session gets its first listener while the process is still the
-  runtime's init: not at an NRI event, `CreateContainer` comes before
-  the container's cgroup exists. The cgroup directory is opened from a
-  cgroup2 mount of the agent's own, made from a thread in pid 1's cgroup
-  namespace: the agent's container has a cgroup namespace and a
-  `/sys/fs/cgroup` of its own.
+  belongs to the session: it dies with the agent, and the redirect with
+  the monitor; the container's queries go straight to its name servers
+  again (no names; DNS still works, a socket redirected before gets
+  `ECONNREFUSED` and resolvers make a new one). A session restored
+  from the fd-store has no names: the container's resolv.conf may have
+  changed since it started. Started in `agent.attach`, where a new
+  session gets its first listener while the process is still the
+  runtime's init, in the pod's network namespace (a `netns.Worker`
+  thread); the forwarders of a network namespace are isolated from each
+  other's containers by `sessionnet.Group`.
 
 ## fd-store
 

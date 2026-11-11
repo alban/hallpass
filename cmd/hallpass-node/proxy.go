@@ -117,7 +117,7 @@ func (t *trustStore) start(id string, pid int, dns *dnsState) (*sessionnet.Proxy
 	}
 	ca := pt.ca
 	if dns == nil {
-		return nil, errors.New("http rules need DNS names (no cgroup v2?)")
+		return nil, errors.New("http rules need DNS names")
 	}
 	if t.upstream == nil {
 		return nil, errors.New("hallpass-node has no roots to verify the servers (--upstream-roots)")

@@ -70,13 +70,12 @@ For the hosts with `http` rules, see [HTTPS requests](../workstation/usage.md#ht
 
 ### Names on Kubernetes
 
-A container that mediates `connect` has its DNS queries relayed by hallpass-node, which reads the answers:
+A container that mediates `connect` has its DNS queries redirected to a forwarder of hallpass-node's, as on a workstation (see [above](#names)), which reads the answers:
 
-- Before the container's program starts, hallpass-node starts a forwarder for each name server of the container's `/etc/resolv.conf`, listening on a port the kernel picks on `127.0.0.1` (or `[::1]`) of the pod's network namespace, and attaches cgroup BPF programs (`connect`, `sendmsg` and `recvmsg` hooks) to the container's cgroup: a query to port 53 of one of those servers goes to its forwarder, and the replies show the server as their source, so the program's resolver (glibc, musl, Go) accepts them. UDP and TCP, connected or not.
-- The rules see the real name server: seccomp and the LSM hooks run before the cgroup programs, so a container whose rules deny DNS gets no forwarding.
-- The forwarder's own sockets are made in the pod's network namespace: queries leave from the pod's address, and NetworkPolicy still applies. Replies are passed on byte for byte.
+- Before the container's program starts, hallpass-node starts a forwarder for each name server of the container's `/etc/resolv.conf`, listening on a port the kernel picks on `127.0.0.1` (or `[::1]`) of the pod's network namespace. The container's monitor redirects its queries to port 53 of those servers there.
+- The forwarder's own sockets are made in the pod's network namespace: queries leave from the pod's address, and NetworkPolicy still applies.
 - The name servers are those of `/etc/resolv.conf` when the container starts: one the container writes later is not used.
-- Other mediated containers of the same pod (or of the node, with `hostNetwork: true`) are denied the forwarder's port: they share its loopback.
-- A node with cgroup v1 has no cgroup per container to attach to: no names there (the started Event says "no DNS names: the node has no cgroup v2"); mediation is unchanged.
-- The forwarder records only replies that answer a query it sent (same ID and question). A container with `CAP_NET_RAW` (containerd's default) can still sniff the forwarder's query and forge its reply: its names are shown in prompts but never matched by host rules (the started Event says so). Drop `NET_RAW` from the container's capabilities for host rules.
+- The container is denied its forwarder's ports, and so are the other mediated containers of the same pod (or of the node, with `hostNetwork: true`): they share its loopback.
+- A container restored from the fd-store after hallpass-node restarted has no names.
+- A container with `CAP_NET_RAW` (containerd's default) can sniff the forwarder's query and forge its reply: its names are shown in prompts but never matched by host rules (the started Event says so). Drop `NET_RAW` from the container's capabilities for host rules.
 - The name servers are the container's own, which the pod's author chooses (`dnsConfig`): a host rule trusts them. Where pod authors are not trusted, prefer address rules, or the HTTPS proxy, which checks the servers' certificates.

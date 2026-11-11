@@ -91,8 +91,8 @@ func newSession(id string, pid int, md metadata, p *Policy, rs []rules.Rule, ks 
 		cfg.Kernel = ks
 	}
 	if dns != nil {
-		cfg.Names = dns.names
-		cfg.Pair, cfg.Netns = dns.pair, dns.cookie
+		dns.Configure(&cfg)
+		cfg.Pair = dns.pair
 	}
 	m, err := monitor.New(cfg)
 	if err != nil {
@@ -134,7 +134,7 @@ func (s *session) event(warning bool, reason, msg string) {
 }
 
 // close stops mediating, then deletes the kernel's rules (strict), then
-// stops the DNS redirect.
+// stops the DNS forwarder.
 func (s *session) close() {
 	s.m.Close()
 	if s.ks != nil {
