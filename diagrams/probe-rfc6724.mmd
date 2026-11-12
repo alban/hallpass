@@ -1,0 +1,28 @@
+---
+title: An address sorting probe (RFC 6724), glibc
+config:
+  sequence:
+    showSequenceNumbers: true
+    actorFontSize: 18
+    messageFontSize: 18
+    noteFontSize: 18
+---
+sequenceDiagram
+  box transparent host network namespace
+    participant app as glibc program<br/>in the sandbox
+    participant sock as its UDP socket<br/>(kernel)
+    participant mon as hallpass<br/>monitor
+  end
+
+  rect rgba(214,39,40,0.15)
+    app-)mon: connect(udp, 140.82.121.6:0) — trapped
+    Note over mon: no rule decides it,<br/>port 0:<br/>a sorting probe
+    mon->>sock: pidfd_getfd: a copy of the socket
+    mon->>sock: shutdown(SHUT_WR)
+    mon->>sock: connect(140.82.121.6:0)
+    mon--)app: emulate: connected, on the copy
+  end
+  app->>sock: getsockname()
+  sock->>app: 192.168.1.10: the source<br/>the kernel picked
+  app->>sock: send(…)
+  sock->>app: EPIPE

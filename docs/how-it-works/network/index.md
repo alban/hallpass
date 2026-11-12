@@ -4,7 +4,7 @@ With `--mediate=write,exec,connect` (or `mediate` in a [HallpassPolicy](../../ku
 
 The only destination allowed without asking is a loopback or unix listener started inside the sandbox, such as a test server.
 
-Address sorting probes are not asked about either. Resolvers sort the addresses of a name (RFC 6724) with a UDP `connect` to each, sending nothing, to read the source address the kernel picks: glibc to port 0, musl to port 65535, Go to port 53. Such a `connect` that no rule decides is done by the supervisor on a copy of the socket (`pidfd_getfd`), after shutting its sending side (`shutdown(SHUT_WR)`): `getsockname` works, and every send on the socket fails with `EPIPE`, after another `connect` too. For port 53, only to an address of the sandbox's DNS answers ([names](dns.md)) that is not a name server; other connects to port 53 are asked about. A program that connects a UDP socket to port 0 or 65535 to send gets `EPIPE` instead of a prompt: a rule allowing the destination lets it through.
+Neither are the resolvers' [address sorting probes](dns.md#address-sorting-probes).
 
 ## Lite mode
 

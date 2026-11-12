@@ -45,6 +45,15 @@ Before the sandbox starts, hallpass starts a forwarder for each name server of `
 - An address with no name from the above is shown with the names of its reverse DNS (PTR), marked unverified: `140.82.112.3:443 (reverse DNS, unverified: lb-140-82-112-3-iad.github.com)`. Whoever controls the address chooses them. hallpass makes that lookup only once the sandbox got an answer through hallpass (the forwarder or the varlink socket), through the host's name servers, so a sandbox denied DNS cannot use it to send data out.
 - Host rules (`allow connect github.com:443`) match these names, in lite and strict mode: the relayed answers, never the reverse DNS names.
 
+## Address sorting probes
+
+Once it has the answer, a resolver sorts the addresses of a name (RFC 6724) with a UDP `connect` to each, sending nothing, to read the source address the kernel picks: glibc to port 0, musl to port 65535, Go to port 53. They are not asked about. Such a `connect` that no rule decides is done by the supervisor on a copy of the socket, after shutting its sending side:
+
+![An address sorting probe: glibc's UDP connect to port 0 is trapped; no rule decides it, so the supervisor takes a copy of the socket with pidfd_getfd, shuts its sending side and connects it; getsockname then gives the source address the kernel picked, and a send fails with EPIPE.](../../assets/diagrams/probe-rfc6724.svg#only-light)
+![An address sorting probe: glibc's UDP connect to port 0 is trapped; no rule decides it, so the supervisor takes a copy of the socket with pidfd_getfd, shuts its sending side and connects it; getsockname then gives the source address the kernel picked, and a send fails with EPIPE.](../../assets/diagrams/probe-rfc6724-dark.svg#only-dark)
+
+Every send on the socket fails with `EPIPE`, after another `connect` too. For port 53, only to an address of the sandbox's DNS answers that is not a name server (so not with `--dns=off`); other connects to port 53 are asked about. glibc probes the port of the service asked for, if any (curl: 443): that `connect` is decided by the rules, or asked about. A program that connects a UDP socket to port 0 or 65535 to send gets `EPIPE` instead of a prompt: a rule allowing the destination lets it through.
+
 ## Limits
 
 - The forwarder's sockets are made in the sandbox's network namespace: queries leave as the sandbox's would.
