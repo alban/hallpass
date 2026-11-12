@@ -1,0 +1,36 @@
+---
+title: DNS with musl — workstation
+config:
+  sequence:
+    showSequenceNumbers: true
+    actorFontSize: 18
+    messageFontSize: 18
+    noteFontSize: 18
+---
+sequenceDiagram
+  box transparent host network namespace
+    participant app as musl program<br/>in the sandbox
+    participant mon as hallpass<br/>monitor
+    participant fwd as hallpass<br/>DNS forwarder<br/>127.0.0.1:P
+    participant res as systemd-resolved<br/>127.0.0.53:53
+  end
+  participant gh as api.github.com<br/>140.82.121.6
+
+  rect rgba(214,39,40,0.15)
+    app-)mon: sendto(udp, 127.0.0.53:53, query) — trapped<br/>(once for A, once for AAAA)
+    mon--)app: emulate: send to 127.0.0.1:P instead,<br/>on a copy of the socket
+  end
+  fwd->>res: queries
+  res->>fwd: answers
+  Note over fwd: record<br/>api.github.com<br/>= 140.82.121.6
+  fwd->>app: answers, from 127.0.0.1:P
+  rect rgba(214,39,40,0.15)
+    app-)mon: recvmsg(…) — trapped
+    mon--)app: emulate: receive on a copy of the socket,<br/>source 127.0.0.53:53
+  end
+  rect rgba(214,39,40,0.15)
+    app-)mon: connect(tcp, 140.82.121.6:443) — trapped
+    Note over mon: rules for<br/>api.github.com:<br/>allow
+    mon--)app: continue: the kernel connects
+  end
+  app->>gh: TLS, direct

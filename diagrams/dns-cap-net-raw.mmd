@@ -1,0 +1,31 @@
+---
+title: A container with CAP_NET_RAW could forge DNS answers — Kubernetes
+config:
+  sequence:
+    showSequenceNumbers: true
+    actorFontSize: 18
+    messageFontSize: 18
+    noteFontSize: 18
+---
+sequenceDiagram
+  box transparent node network namespace
+    participant hn as hallpass-node
+  end
+  box transparent pod network namespace
+    participant app as program<br/>in the container<br/>(CAP_NET_RAW)
+    participant fwd as hallpass-node<br/>DNS forwarder<br/>127.0.0.1:P
+  end
+  participant dns as kube-dns<br/>10.96.0.10:53
+
+  hn->>hn: read config.json
+  Note over hn: CAP_NET_RAW<br/>in a set: names<br/>for display only
+  app->>fwd: query api.github.com (redirected)
+  fwd->>dns: query, ID 1234
+  app->>app: raw socket: sniff the query
+  app->>fwd: forged answer, ID 1234,<br/>from 10.96.0.10:53:<br/>api.github.com = 203.0.113.66
+  Note over fwd: record<br/>api.github.com<br/>= 203.0.113.66
+  rect rgba(214,39,40,0.15)
+    app-)hn: connect(tcp, 203.0.113.66:443) — trapped
+    Note over hn: shown as<br/>api.github.com,<br/>host rules<br/>ignore it.<br/>Port 443 with<br/>http rules or<br/>credentials:<br/>denied
+    hn--)app: deny, or ask,<br/>or an IP rule decides
+  end

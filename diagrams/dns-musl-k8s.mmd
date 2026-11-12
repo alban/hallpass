@@ -1,0 +1,39 @@
+---
+title: DNS with musl (Alpine) — Kubernetes
+config:
+  sequence:
+    showSequenceNumbers: true
+    actorFontSize: 18
+    messageFontSize: 18
+    noteFontSize: 18
+---
+sequenceDiagram
+  box transparent node network namespace
+    participant mon as hallpass-node<br/>monitor
+  end
+  box transparent pod network namespace
+    participant app as musl program<br/>in the container
+    participant fwd as hallpass-node<br/>DNS forwarder<br/>127.0.0.1:P
+  end
+  participant dns as kube-dns<br/>10.96.0.10:53
+  participant gh as api.github.com<br/>140.82.121.6
+
+  mon->>fwd: before the program starts:<br/>listen on 127.0.0.1:P<br/>(a thread in the pod's namespace)
+  rect rgba(214,39,40,0.15)
+    app-)mon: sendto(udp, 10.96.0.10:53, query) — trapped<br/>(once for A, once for AAAA)
+    mon--)app: emulate: send to 127.0.0.1:P instead,<br/>on a copy of the socket
+  end
+  fwd->>dns: queries, from the pod's address
+  dns->>fwd: answers
+  Note over fwd: record<br/>api.github.com<br/>= 140.82.121.6
+  fwd->>app: answers, from 127.0.0.1:P
+  rect rgba(214,39,40,0.15)
+    app-)mon: recvmsg(…) — trapped
+    mon--)app: emulate: receive on a copy of the socket,<br/>source 10.96.0.10:53
+  end
+  rect rgba(214,39,40,0.15)
+    app-)mon: connect(tcp, 140.82.121.6:443) — trapped
+    Note over mon: rules for<br/>api.github.com:<br/>allow
+    mon--)app: continue: the kernel connects
+  end
+  app->>gh: TLS, direct

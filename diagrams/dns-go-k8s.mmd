@@ -1,0 +1,36 @@
+---
+title: DNS with Go's resolver — Kubernetes
+config:
+  sequence:
+    showSequenceNumbers: true
+    actorFontSize: 18
+    messageFontSize: 18
+    noteFontSize: 18
+---
+sequenceDiagram
+  box transparent node network namespace
+    participant mon as hallpass-node<br/>monitor
+  end
+  box transparent pod network namespace
+    participant app as Go program<br/>in the container
+    participant fwd as hallpass-node<br/>DNS forwarder<br/>127.0.0.1:P
+  end
+  participant dns as kube-dns<br/>10.96.0.10:53
+  participant gh as api.github.com<br/>140.82.121.6
+
+  mon->>fwd: before the program starts:<br/>listen on 127.0.0.1:P<br/>(a thread in the pod's namespace)
+  rect rgba(214,39,40,0.15)
+    app-)mon: connect(udp, 10.96.0.10:53) — trapped
+    mon--)app: emulate: connect to 127.0.0.1:P instead
+  end
+  app->>fwd: write(query)
+  fwd->>dns: query, from the pod's address
+  dns->>fwd: answer
+  Note over fwd: record<br/>api.github.com<br/>= 140.82.121.6
+  fwd->>app: read(answer)
+  rect rgba(214,39,40,0.15)
+    app-)mon: connect(tcp, 140.82.121.6:443) — trapped
+    Note over mon: rules for<br/>api.github.com:<br/>allow
+    mon--)app: continue: the kernel connects
+  end
+  app->>gh: TLS, direct

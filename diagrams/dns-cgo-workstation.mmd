@@ -1,0 +1,34 @@
+---
+title: DNS through systemd-resolved's varlink socket (glibc on Fedora, Arch) — workstation
+config:
+  sequence:
+    showSequenceNumbers: true
+    actorFontSize: 18
+    messageFontSize: 18
+    noteFontSize: 18
+---
+sequenceDiagram
+  box transparent host network namespace
+    participant app as glibc or Go (cgo)<br/>program<br/>in the sandbox
+    participant mon as hallpass<br/>monitor<br/>(relay)
+    participant res as systemd-resolved<br/>varlink socket
+  end
+  participant gh as api.github.com<br/>140.82.121.6
+
+  rect rgba(214,39,40,0.15)
+    app-)mon: connect(unix, io.systemd.Resolve) — trapped
+    Note over mon: rules: allow
+    mon->>res: connect, as hallpass
+    mon--)app: emulate: a socket pair's end<br/>in place of the program's socket
+  end
+  app->>mon: ResolveHostname(api.github.com)
+  mon->>res: ResolveHostname(api.github.com)
+  res->>mon: addresses
+  Note over mon: record<br/>api.github.com<br/>= 140.82.121.6
+  mon->>app: addresses
+  rect rgba(214,39,40,0.15)
+    app-)mon: connect(tcp, 140.82.121.6:443) — trapped
+    Note over mon: rules for<br/>api.github.com:<br/>allow
+    mon--)app: continue: the kernel connects
+  end
+  app->>gh: TLS, direct
