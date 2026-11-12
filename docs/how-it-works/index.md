@@ -40,7 +40,7 @@ The pages below give the details:
 
 - [Lite mode](lite.md): seccomp user notification, on a workstation and in Kubernetes.
 - [Strict mode](strict.md): BPF-LSM, the root loader, and why.
-- [Files](files.md), [Network](network.md) and [Programs](exec.md): for each category, what each mode pauses, reads and checks.
+- [Files](files.md), [Network](network/index.md) and [Programs](exec.md): for each category, what each mode pauses, reads and checks.
 - [Limitations](limitations.md): what hallpass does not cover yet.
 
 ## Prompts

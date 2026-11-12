@@ -12,7 +12,7 @@ Strict mode exists to close the TOCTOU race that lite mode is inherently exposed
 
 ## The LSM hooks
 
-Strict mode adds eBPF programs on the kernel's LSM hooks, which run at the moment of the action, on the real file (inode) the kernel is about to modify — after any symlink, bind mount, mount-namespace or rename trick has already been resolved. There is no second resolution to race, so the same bypasses that defeat lite mode (symlink races, bind mounts, other mount namespaces) do not apply. The hooks of each category are listed in [Files](files.md), [Network](network.md) and [Programs](exec.md).
+Strict mode adds eBPF programs on the kernel's LSM hooks, which run at the moment of the action, on the real file (inode) the kernel is about to modify — after any symlink, bind mount, mount-namespace or rename trick has already been resolved. There is no second resolution to race, so the same bypasses that defeat lite mode (symlink races, bind mounts, other mount namespaces) do not apply. The hooks of each category are listed in [Files](files.md), [Network](network/index.md) and [Programs](exec.md).
 
 The programs only check the tasks of a sandbox (its *members*), each against the rules of its session. One set of programs serves every session of the host: in Kubernetes, every mediated container of the node.
 

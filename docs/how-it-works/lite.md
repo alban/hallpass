@@ -17,7 +17,7 @@ The seccomp filter only decides which syscalls reach the supervisor; the policy 
 - Some are refused without asking: `io_uring_setup` (`EPERM`), which would perform I/O without the syscalls the filter sees, and new user and mount namespaces (`unshare`, `clone`, `setns`; `clone3` fails with `ENOSYS`, so libc falls back to `clone`), because inside a private mount namespace a process could bind-mount a protected directory at a harmless-looking path. On a workstation, `--allow-userns` lets namespaces through; strict mode always does.
 - Only the categories selected with `--mediate` (or a policy's `mediate`) are installed. `execve` is paused in every case.
 
-The syscalls of each category are listed in [Files](files.md), [Network](network.md) and [Programs](exec.md).
+The syscalls of each category are listed in [Files](files.md), [Network](network/index.md) and [Programs](exec.md).
 
 For each paused syscall, the supervisor reads the strings and structs it needs from `/proc/<pid>/mem`, resolves relative paths from `/proc/<pid>/cwd` or `/proc/<pid>/fd/<n>`, follows symlinks one component at a time, and checks with `SECCOMP_IOCTL_NOTIF_ID_VALID` that the syscall is still waiting before using what it read. While a prompt is pending, the thread only reacts to fatal signals (`SECCOMP_FILTER_FLAG_WAIT_KILLABLE_RECV`, Linux 5.19 and later).
 

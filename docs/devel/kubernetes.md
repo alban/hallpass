@@ -278,7 +278,7 @@ the syscall with `SECCOMP_IOCTL_NOTIF_ADDFD` and
   start.
 - Restarting a container gives a new session.
 - The DNS forwarder (`internal/sessionnet`, `internal/dnsfwd`, see
-  [Names on Kubernetes](../how-it-works/network.md#names-on-kubernetes))
+  [Names on Kubernetes](../how-it-works/network/dns.md#kubernetes))
   belongs to the session: it dies with the agent, and the redirect with
   the monitor; the container's queries go straight to its name servers
   again (no names; DNS still works, a socket redirected before gets

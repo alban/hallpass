@@ -62,7 +62,10 @@ nav:
       - Lite mode: how-it-works/lite.md
       - Strict mode: how-it-works/strict.md
       - Files: how-it-works/files.md
-      - Network: how-it-works/network.md
+      - Network:
+          - how-it-works/network/index.md
+          - Names (DNS): how-it-works/network/dns.md
+          - HTTPS proxy: how-it-works/network/https.md
       - Programs: how-it-works/exec.md
       - Limitations: how-it-works/limitations.md
   - Comparison: comparison.md

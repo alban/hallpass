@@ -96,7 +96,7 @@ start, as for a missing policy.
 Host names, `http` rules and credentials need the container to drop
 `NET_RAW` (`securityContext.capabilities.drop: [NET_RAW]`), which
 containerd grants by default: otherwise its names are for display only
-([Names on Kubernetes](../how-it-works/network.md#names-on-kubernetes)),
+([Names on Kubernetes](../how-it-works/network/dns.md#kubernetes)),
 and with `http` rules or credentials it is denied port 443.
 
 The other fields:
