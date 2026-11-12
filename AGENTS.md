@@ -42,7 +42,8 @@ From the cheapest to the most complete:
    6.12 or later.
 4. `make test-headlamp`, `make test-kind`, `make test-headlamp-kind`: the
    plugin and the Kubernetes e2e (docker, kind, kubectl).
-5. `mkdocs build --strict` when `docs/` changes.
+5. `mkdocs build --strict` when `docs/` changes; `make diagrams` when
+   `diagrams/` changes (diagrams/README.md).
 
 GitHub Actions (`.github/workflows/test.yml`) runs 1 and 3 on kernels
 6.1 to 7.2 on every push. Each commit of a series must build and pass

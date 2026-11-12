@@ -1,0 +1,9 @@
+{
+  "name": "hallpass-diagrams",
+  "private": true,
+  "description": "Renders the diagrams of the documentation: make diagrams",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@mermaid-js/mermaid-cli": "12.2.0"
+  }
+}

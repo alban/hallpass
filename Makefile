@@ -132,6 +132,34 @@ test-vm: all
 		$(VIMTO) -smp cpus=2 -memory $(TEST_VM_MEMORY) -sudo -kernel $(TEST_VM_KERNEL) -- \
 		go test -count=1 -timeout $(TEST_VM_TIMEOUT) $(TEST_VM_FLAGS) $(TEST_VM_PKGS)
 
+# Render the diagrams (diagrams/README.md), all committed: an SVG per
+# color scheme for the website, and a PNG per color scheme for slides.
+# Only changed sources are rendered: after updating mermaid-cli, run
+# `make -B diagrams`. Needs Node.js; npm fetches Chromium.
+DIAGRAMS := $(basename $(notdir $(wildcard diagrams/*.mmd)))
+MMDC = diagrams/node_modules/.bin/mmdc -p diagrams/puppeteer.json -q
+DIAGRAM_DARK_BG = '\#1e2129'
+
+.PHONY: diagrams
+diagrams: $(foreach d,$(DIAGRAMS),docs/assets/diagrams/$(d).svg \
+	docs/assets/diagrams/$(d)-dark.svg diagrams/png/$(d).png diagrams/png/$(d)-dark.png)
+
+diagrams/node_modules: diagrams/package.json diagrams/package-lock.json
+	cd diagrams && npm ci --no-audit --no-fund
+	touch $@
+
+docs/assets/diagrams/%-dark.svg: diagrams/%.mmd diagrams/dark.json | diagrams/node_modules
+	$(MMDC) -c diagrams/dark.json -i $< -o $@ -b transparent
+
+docs/assets/diagrams/%.svg: diagrams/%.mmd diagrams/light.json | diagrams/node_modules
+	$(MMDC) -c diagrams/light.json -i $< -o $@ -b transparent
+
+diagrams/png/%-dark.png: diagrams/%.mmd diagrams/dark.json | diagrams/node_modules
+	$(MMDC) -c diagrams/dark.json -i $< -o $@ -b $(DIAGRAM_DARK_BG) -s 4
+
+diagrams/png/%.png: diagrams/%.mmd diagrams/light.json | diagrams/node_modules
+	$(MMDC) -c diagrams/light.json -i $< -o $@ -b white -s 4
+
 # Rebuild the BPF objects (needs clang); they are committed.
 .PHONY: generate
 generate:

@@ -4,6 +4,7 @@
 
 # MkDocs build output
 /site/
+/diagrams/node_modules/
 
 # Editor files (vim/gvim swap files, backups)
 .*.sw[a-p]
