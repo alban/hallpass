@@ -220,6 +220,12 @@ r ucheck check exec "$BIN"
 		if err := c.Wait(); err != nil {
 			t.Fatalf("hallpass: %v\n%s", err, out.String())
 		}
+		// A host name is a valid destination since host rules exist, when
+		// hallpass names addresses.
+		chost := requestWant("chost", 5, "not allowed yet")
+		if !hasNameServer() {
+			chost = requestWant("chost", 6, "invalid request: DEST")
+		}
 		requestCheck(t, out.String(),
 			requestWant("echeck", 5, "not allowed yet: a request, or trying to run it"),
 			requestWant("egrant", 0, "granted"),
@@ -235,8 +241,7 @@ r ucheck check exec "$BIN"
 			requestWant("crel", 0, "released"),
 			requestWant("ccheck2", 5, "not allowed yet"),
 			requestWant("call", 6, "invalid request: DEST"),
-			// A host name is a valid destination since host rules exist.
-			requestWant("chost", 5, "not allowed yet"),
+			chost,
 			requestWant("urel", 10, "no such grant"),
 			requestWant("uwrel", 10, "no such grant"),
 			requestWant("ucheck", 1, "allowed"),
@@ -338,6 +343,7 @@ r rn connect 127.0.0.1:1
 // proxy: already allowed (1), would ask (5), denied by a rule (3), and
 // malformed (6).
 func TestRequestHTTP(t *testing.T) {
+	needNames(t)
 	advanceModes(t, func(t *testing.T, mode string) {
 		e := newEnv(t)
 		bin := requestBin(t, e)

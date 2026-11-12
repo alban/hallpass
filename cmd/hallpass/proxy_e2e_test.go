@@ -214,6 +214,21 @@ func httpsServer(t *testing.T) (caFile string, seen chan string) {
 	return caFile, seen
 }
 
+// hasNameServer reports whether hallpass can name addresses: its DNS
+// forwarder needs a name server in /etc/resolv.conf. The CI VM has none
+// (resolv.conf links to the runner's /run).
+func hasNameServer() bool {
+	servers, _ := dnsnames.Servers("/etc/resolv.conf")
+	return len(servers) > 0
+}
+
+func needNames(t *testing.T) {
+	t.Helper()
+	if !hasNameServer() {
+		t.Skip("no name server in /etc/resolv.conf: hallpass names no address")
+	}
+}
+
 func ipv4Server(t *testing.T) string {
 	t.Helper()
 	servers, _ := dnsnames.Servers("/etc/resolv.conf")

@@ -110,6 +110,7 @@ func resolvedSocket(t *testing.T) {
 // resolved's own answer, which hallpass relays. Denied the socket, it
 // gets no name, and the relay is not made.
 func TestVarlinkNames(t *testing.T) {
+	needNames(t)
 	resolvedSocket(t)
 	for _, mode := range modes(t) {
 		t.Run(mode, func(t *testing.T) {

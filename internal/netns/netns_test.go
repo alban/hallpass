@@ -50,9 +50,20 @@ func TestEnter(t *testing.T) {
 	if unix.Stat("/proc/thread-self/ns/net", &self); self.Ino == theirs.Ino {
 		t.Fatal("this thread moved")
 	}
-	// A socket made there sees that namespace: only a loopback.
+	// A socket made there sees that namespace: only a loopback, besides
+	// the fallback tunnels (sit0...) a kernel with them built in adds,
+	// down.
 	var ifs []net.Interface
-	if err := w.Do(func() (err error) { ifs, err = net.Interfaces(); return err }); err != nil || len(ifs) != 1 || ifs[0].Name != "lo" {
+	err = w.Do(func() (err error) { ifs, err = net.Interfaces(); return err })
+	lo := false
+	for _, i := range ifs {
+		lo = lo || i.Name == "lo"
+		if i.Name != "lo" && i.Flags&net.FlagUp != 0 {
+			lo = false
+			break
+		}
+	}
+	if err != nil || !lo {
 		t.Errorf("interfaces in the new namespace: %v %v", ifs, err)
 	}
 	w.Close()
