@@ -1,0 +1,32 @@
+---
+title: HTTPS through hallpass-node's proxy — Kubernetes
+config:
+  sequence:
+    showSequenceNumbers: true
+    actorFontSize: 18
+    messageFontSize: 18
+    noteFontSize: 18
+---
+sequenceDiagram
+  box transparent node network namespace
+    participant mon as hallpass-node<br/>monitor
+  end
+  box transparent pod network namespace
+    participant app as curl<br/>in the container
+    participant px as hallpass-node<br/>HTTPS proxy<br/>(its sockets)
+  end
+  participant gh as api.github.com<br/>140.82.121.6
+
+  rect rgba(214,39,40,0.15)
+    app-)mon: connect(tcp, 140.82.121.6:443) — trapped
+    Note over mon: api.github.com<br/>has http rules
+    mon->>px: a loopback TCP pair, made<br/>in the pod's namespace
+    mon--)app: emulate: one end<br/>in place of the program's socket
+  end
+  app->>px: TLS hello, SNI api.github.com
+  px->>app: certificate of the container's CA<br/>(trusted via /run/hallpass-trust/)
+  app->>px: GET /repos/alban/hallpass
+  Note over px: http rules:<br/>allow
+  px->>gh: TLS (hallpass-node's roots),<br/>from the pod's address
+  gh->>px: 200
+  px->>app: 200

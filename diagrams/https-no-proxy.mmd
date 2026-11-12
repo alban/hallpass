@@ -1,0 +1,31 @@
+---
+title: Port 443 without the proxy (no-proxy)
+config:
+  sequence:
+    showSequenceNumbers: true
+    actorFontSize: 18
+    messageFontSize: 18
+    noteFontSize: 18
+---
+sequenceDiagram
+  box transparent host network namespace
+    participant app as program<br/>in the sandbox
+    participant mon as hallpass<br/>monitor
+  end
+  participant gh as api.github.com<br/>140.82.121.6
+
+  Note over mon: http rules or<br/>credentials, but<br/>no proxy or no names<br/>(--dns=off,<br/>display only)
+  rect rgba(214,39,40,0.15)
+    app-)mon: connect(tcp, 140.82.121.6:443) — trapped
+    mon--)app: deny (no-proxy), whatever the rules
+  end
+  rect rgba(214,39,40,0.15)
+    app-)mon: sendto(udp, 140.82.121.6:443) — trapped
+    mon--)app: deny (no-proxy)
+  end
+  rect rgba(214,39,40,0.15)
+    app-)mon: connect(tcp, 140.82.121.6:22) — trapped
+    Note over mon: rules: allow
+    mon--)app: continue: the kernel connects
+  end
+  app->>gh: SSH, direct

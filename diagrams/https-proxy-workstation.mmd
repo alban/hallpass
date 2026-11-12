@@ -1,0 +1,30 @@
+---
+title: HTTPS through hallpass's proxy — workstation
+config:
+  sequence:
+    showSequenceNumbers: true
+    actorFontSize: 18
+    messageFontSize: 18
+    noteFontSize: 18
+---
+sequenceDiagram
+  box transparent host network namespace
+    participant app as curl<br/>in the sandbox
+    participant mon as hallpass<br/>monitor
+    participant px as hallpass<br/>HTTPS proxy
+  end
+  participant gh as api.github.com<br/>140.82.121.6
+
+  rect rgba(214,39,40,0.15)
+    app-)mon: connect(tcp, 140.82.121.6:443) — trapped
+    Note over mon: api.github.com<br/>has http rules
+    mon->>px: a loopback TCP pair:<br/>one end for the proxy
+    mon--)app: emulate: the other end<br/>in place of the program's socket
+  end
+  app->>px: TLS hello, SNI api.github.com
+  px->>app: certificate of the session's CA
+  app->>px: GET /repos/alban/hallpass
+  Note over px: http rules:<br/>allow
+  px->>gh: TLS (system roots)<br/>GET /repos/alban/hallpass
+  gh->>px: 200
+  px->>app: 200
