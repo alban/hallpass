@@ -89,7 +89,7 @@ func runAgent(args []string) error {
 	nsSelector := fs.String("namespace-selector", "hallpass.io/enabled=true", "label selector of the namespaces whose pods may opt in")
 	kubeconfig := fs.String("kubeconfig", "", "kubeconfig file (default: in-cluster)")
 	wk := fs.String("wait-killable", "auto", "add SECCOMP_FILTER_FLAG_WAIT_KILLABLE_RECV: auto, true or false")
-	hostRoot := fs.String("host-root", "/proc/1/root", "the host's root, to run runc features in")
+	hostRoot := fs.String("host-root", "/proc/1/root", "the host's root, to run runc features in and read the containers' OCI configs")
 	runc := fs.String("runc", "", "runc's path on the host (default: search the usual paths)")
 	pluginIdx := fs.String("plugin-index", "50", "NRI plugin index")
 	upstreamRoots := fs.String("upstream-roots", "", "PEM `file` of the roots the HTTPS proxies verify the servers with (default: the system's, /etc/ssl/certs/ca-certificates.crt in the image); never a container's")
@@ -141,6 +141,7 @@ func runAgent(args []string) error {
 	defer node.Stop()
 
 	ag := newAgent(k, node, log, k.recorder(ctx), *maxInflight)
+	ag.hostRoot = *hostRoot
 	if ag.trust.upstream, err = loadRoots(*upstreamRoots); err != nil {
 		// Without roots no proxy starts, and the containers with http
 		// rules or credentials are denied port 443 (by their monitor).

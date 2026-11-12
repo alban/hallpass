@@ -41,6 +41,9 @@ type agent struct {
 	// maxInflight is the journal size of a listener: the most
 	// notifications in flight (most waiting for an answer).
 	maxInflight int
+	// hostRoot is the host's root (--host-root): the containers' OCI
+	// bundles are in it.
+	hostRoot string
 	// lsm enforces strict mode: loaded, or adopted from a previous agent
 	// (its strict sessions keep it). Set before the agent serves.
 	lsm *lsm.LSM
@@ -255,13 +258,13 @@ func (a *agent) attach(st *specs.ContainerProcessState, fd int) error {
 	var dns *dnsState
 	note := ""
 	if cats, err := md.categories(); err == nil && cats&seccomp.Connect != 0 {
-		dns, err = startDNS(st.Pid, func(msg string) { a.log.Warn(msg, "container", id) })
+		dns, err = startDNS(st.Pid, rawSockets(a.hostRoot, st.State.Bundle), func(msg string) { a.log.Warn(msg, "container", id) })
 		switch {
 		case err != nil:
 			note = "no DNS names: " + err.Error()
 			a.log.Warn("no DNS names", "container", id, "err", err)
-		case dns.rawSockets:
-			note = "DNS names for display only: the container has CAP_NET_RAW, it could forge its answers (drop it for host rules)"
+		case dns.rawSockets != "":
+			note = "DNS names for display only: " + dns.rawSockets
 		}
 	}
 	s, err = newSession(id, st.Pid, md, pol, nil, ks, dns, a.log, a.rec)

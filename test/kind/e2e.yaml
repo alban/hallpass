@@ -114,7 +114,8 @@ spec:
 ---
 # The HTTPS proxy: GET to ghcr.io is allowed (the registry answers 401
 # to an anonymous /v2/), POST is denied by hallpass (403); curl trusts
-# the container's CA through the variables hallpass-node sets.
+# the container's CA through the variables hallpass-node sets. http rules
+# need NET_RAW dropped: with it, the names are display only.
 apiVersion: hallpass.io/v1alpha1
 kind: HallpassPolicy
 metadata:
@@ -139,6 +140,9 @@ spec:
   containers:
     - name: agent
       image: CURL
+      securityContext:
+        capabilities:
+          drop: [NET_RAW]
       command:
         - sh
         - -c
